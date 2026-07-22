@@ -1,0 +1,19 @@
+# Entornos y cache de Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Credenciales
+.env
+
+# Salidas de descarga
+output/
+*.gpkg
+data/downloads/
+
+# Cache de osmnx
+cache/
