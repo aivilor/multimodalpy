@@ -78,8 +78,12 @@ def _osm_graph_to_json(graph: object, output_path: Path) -> Path:
     return output_path
 
 
-def _gtfs_to_graph_json(stops, stop_edges, output_path: Path) -> Path:
-    """Construye un grafo NetworkX de paradas + aristas parada-a-parada y lo escribe."""
+def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
+    """Construye un grafo NetworkX de paradas + aristas parada-a-parada y lo escribe.
+
+    Incluye ``travel_time_seconds_mean`` y ``hour_band`` (si existen) como
+    atributos de arista, ademas de los ya existentes ``route_id`` / ``trip_count``.
+    """
     import networkx as nx
     from networkx.readwrite import json_graph
 
@@ -94,14 +98,17 @@ def _gtfs_to_graph_json(stops, stop_edges, output_path: Path) -> Path:
                 y=float(geom.y) if geom is not None else None,
                 stop_name=_json_safe(row.get("stop_name")),
             )
-    if stop_edges is not None and not stop_edges.empty:
-        for _, row in stop_edges.iterrows():
+    if edges is not None and not edges.empty:
+        for _, row in edges.iterrows():
             graph.add_edge(
                 str(row.get("from_stop_id")),
                 str(row.get("to_stop_id")),
                 route_id=_json_safe(row.get("route_id")),
                 route_short_name=_json_safe(row.get("route_short_name")),
                 trip_count=_json_safe(row.get("trip_count")),
+                travel_time_seconds_mean=_json_safe(row.get("travel_time_seconds_mean")),
+                hour_band=_json_safe(row.get("hour_band")),
+                days_active_mean=_json_safe(row.get("days_active_mean")),
             )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +116,50 @@ def _gtfs_to_graph_json(stops, stop_edges, output_path: Path) -> Path:
         json.dumps(json_graph.node_link_data(graph), ensure_ascii=False), encoding="utf-8"
     )
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Escritura de la tabla de horarios (opcion B, tabla plana sin geometria)
+# ---------------------------------------------------------------------------
+def _write_schedule_tables(
+    schedule_tables: dict[str, object],
+    output_dir: Path,
+    output_file_type: str,
+    *,
+    area_slug: str,
+) -> list[str]:
+    """Escribe las tablas de horario (una por dataset GTFS) junto a las capas espaciales.
+
+    - geopackage: se anaden como tablas de atributos (sin geometria) dentro del
+      mismo .gpkg, via sqlite3 (un GeoPackage es una base de datos SQLite).
+    - geojson / shapefile / networkx: no admiten tablas no espaciales de forma
+      nativa, asi que se escriben como CSV al lado de las demas capas.
+    """
+    written: list[str] = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if output_file_type == "geopackage":
+        import sqlite3
+
+        gpkg_path = output_dir / f"{area_slug}.gpkg"
+        connection = sqlite3.connect(gpkg_path)
+        try:
+            for name, schedule_df in schedule_tables.items():
+                if schedule_df is None or schedule_df.empty:
+                    continue
+                schedule_df.to_sql(name, connection, if_exists="replace", index=False)
+                written.append(f"{gpkg_path.name}::{name}")
+        finally:
+            connection.close()
+        return written
+
+    for name, schedule_df in schedule_tables.items():
+        if schedule_df is None or schedule_df.empty:
+            continue
+        path = output_dir / f"{name}.csv"
+        schedule_df.to_csv(path, index=False)
+        written.append(path.name)
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -180,8 +231,11 @@ def main(
     # Extras opcionales (no imprescindibles para el uso basico):
     area_code: str | None = None,
     travel_speed_kmh: float | None = None,
-    clean_gtfs: bool = False,
     api_key: str | None = None,
+    gtfs_hour_band_size: int = 1,
+    gtfs_hour_range: tuple[int, int] | None = None,
+    gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
+    gtfs_include_schedule_table: bool = True,
 ) -> dict:
     """Descarga y estandariza la red multimodal de un municipio.
 
@@ -202,6 +256,21 @@ def main(
         (p. ej. "EPSG:25830") si se quiere proyectar la red.
     output_file_type : str
         Formato de descarga: "geopackage", "geojson", "shapefile" o "networkx".
+    gtfs_hour_band_size : int, opcional
+        Si se indica (p.ej. 1), las aristas GTFS se calculan por franja horaria
+        de una hora (columna ``hour_band``), en vez de un unico peso agregado.
+    gtfs_hour_range : (int, int), opcional
+        Si se indica (p.ej. (7, 9)), solo se consideran los viajes GTFS cuya
+        salida cae en esa franja horaria (util para hora punta vs valle).
+    gtfs_peak_periods : dict, opcional
+        Periodos punta para el desglose por columnas de la capa de aristas
+        GTFS (opcion A). Por defecto: punta_manana 07-09, punta_tarde 17-20,
+        resto_del_dia el resto.
+    gtfs_include_schedule_table : bool
+        Si es True (por defecto), ademas de las capas espaciales se escribe
+        una tabla plana ``gtfs_{dataset}_schedule`` con el horario completo
+        viaje-a-viaje (opcion B): tabla de atributos en el .gpkg si
+        ``output_file_type="geopackage"``, o CSV en el resto de formatos.
 
     Devuelve
     --------
@@ -241,26 +310,43 @@ def main(
             layers[f"osm_{mode}_edges"] = out["edges"]
 
     # 3) GTFS (bus / tren) via NAP.
+    schedule_tables: dict[str, object] = {}
     if nap_modes:
         gtfs_results = get_area.download_gtfs_layers(
             area_name, boundary, output_dir / "gtfs_zips",
             modes=nap_modes, output_crs=crs, api_key=api_key,
+            hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
+            peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
         )
-        for dataset, out in gtfs_results.items():
-            layers[f"gtfs_{dataset}_nodes_stops"] = out["nodes_stops"]
-            layers[f"gtfs_{dataset}_edges_stop_to_stop"] = out["edges_stop_to_stop"]
-            layers[f"gtfs_{dataset}_edges_shapes_reference"] = out["edges_shapes_reference"]
+        GTFS_EDGES_COLUMNS = ["edge_id",
+            "from_stop_id", "to_stop_id", "route_id", "route_short_name", "route_long_name",
+            "trip_count", "travel_time_seconds_mean", "travel_time_seconds_median",
+            "travel_time_seconds_min", "travel_time_seconds_max", "service_count",
+            "days_active_mean", "frequency_trip_count_sum",
+            "travel_time_seconds_mean_peak_am", "travel_time_seconds_mean_peak_pm",
+            "travel_time_seconds_mean_rest_of_day",
+            "travel_time_seconds_median_peak_am", "travel_time_seconds_median_peak_pm",
+            "travel_time_seconds_median_rest_of_day",
+            "trip_count_peak_am", "trip_count_peak_pm", "trip_count_rest_of_day",
+            "hourly_travel_times", "hourly_trip_counts", "geometry",
+        ]
 
-            # 3b) Limpieza opcional de bus + tren (snap de paradas + tramos).
-            if clean_gtfs:
-                try:
-                    snapped, segments = process_gtfs.clean_gtfs_lines(
-                        out["edges_shapes_reference"], out["nodes_stops"],
-                    )
-                    layers[f"gtfs_{dataset}_stops_snapped"] = snapped.to_frame("geometry").to_crs(crs)
-                    layers[f"gtfs_{dataset}_segments"] = segments.to_crs(crs)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[aviso] Limpieza GTFS omitida para {dataset}: {exc}")
+        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
+
+        for dataset, out in gtfs_results.items():
+            nodes_gdf = out["nodes"]
+            keep_node_cols = [c for c in GTFS_NODES_COLUMNS if c in nodes_gdf.columns]
+            layers[f"gtfs_{dataset}_nodes"] = nodes_gdf[keep_node_cols]
+
+            edges_gdf = out["edges"]
+            keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
+            edges_gdf = edges_gdf[keep_cols].rename(
+                columns=lambda c: c.replace("travel_time_seconds_", "tts_")
+            )
+            layers[f"gtfs_{dataset}_edges"] = edges_gdf
+
+            if gtfs_include_schedule_table and out.get("schedule") is not None:
+                schedule_tables[f"gtfs_{dataset}_schedule"] = out["schedule"]
 
     # 4) Escritura local en el formato solicitado.
     if output_file_type == "networkx":
@@ -273,12 +359,18 @@ def main(
             written.append(path.name)
         for dataset, out in gtfs_results.items():
             path = _gtfs_to_graph_json(
-                out["nodes_stops"], out["edges_stop_to_stop"],
+                out["nodes"], out["edges"],
                 output_dir / f"gtfs_{dataset}_graph.json",
             )
             written.append(path.name)
+        written.extend(
+            _write_schedule_tables(schedule_tables, output_dir, output_file_type, area_slug=area_slug)
+        )
     else:
         written = _write_layers(layers, output_dir, output_file_type, area_slug=area_slug)
+        written.extend(
+            _write_schedule_tables(schedule_tables, output_dir, output_file_type, area_slug=area_slug)
+        )
 
     manifest = {
         "area_name": area_name,
@@ -313,6 +405,18 @@ def _cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--area-code", help="Codigo oficial del municipio (opcional).")
     parser.add_argument("--travel-speed-kmh", type=float, help="Velocidad constante para tiempo de arista.")
     parser.add_argument("--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren.")
+    parser.add_argument(
+        "--gtfs-hour-band-size", type=int, default=1,
+        help="Franja horaria (horas) para el resumen empaquetado de aristas GTFS (opcion C).",
+    )
+    parser.add_argument(
+        "--gtfs-hour-range", type=int, nargs=2, metavar=("START", "END"),
+        help="Filtra viajes GTFS por ventana horaria, p.ej. --gtfs-hour-range 7 9",
+    )
+    parser.add_argument(
+        "--no-gtfs-schedule-table", action="store_true",
+        help="No escribir la tabla de horario detallado (opcion B) para GTFS.",
+    )
     args = parser.parse_args(argv)
 
     main(
@@ -324,7 +428,9 @@ def _cli(argv: list[str] | None = None) -> None:
         output_file_type=args.output_file_type,
         area_code=args.area_code,
         travel_speed_kmh=args.travel_speed_kmh,
-        clean_gtfs=args.clean_gtfs,
+        gtfs_hour_band_size=args.gtfs_hour_band_size,
+        gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
+        gtfs_include_schedule_table=not args.no_gtfs_schedule_table,
     )
 
 

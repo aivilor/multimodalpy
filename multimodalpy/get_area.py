@@ -410,11 +410,19 @@ def download_gtfs_layers(
     output_crs: str = "EPSG:4326",
     clip_to_boundary: bool = True,
     api_key: str | None = None,
+    hour_band_size: int = 1,
+    hour_range: tuple[int, int] | None = None,
+    peak_periods: dict[str, tuple[int, int]] | None = None,
+    include_schedule_table: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Descarga GTFS del NAP y devuelve capas normalizadas por dataset.
 
-    Devuelve ``{dataset: {"nodes_stops": gdf, "edges_stop_to_stop": gdf,
-    "edges_shapes_reference": gdf}}``.
+    Devuelve ``{dataset: {"nodes_stops": gdf, "edges": gdf,
+    "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
+
+    ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
+    ``include_schedule_table`` se reenvian a ``process_gtfs.normalize_gtfs_feed``
+    (ver esa funcion para el detalle de las opciones A/B/C).
     """
     zips = download_gtfs_nap_zips(area_name, zip_dir, modes=modes, api_key=api_key)
 
@@ -426,19 +434,23 @@ def download_gtfs_layers(
     for zip_path in zips:
         dataset_name = slugify(Path(zip_path).stem)
         try:
-            stops, stop_edges, shape_edges = process_gtfs.normalize_gtfs_feed(
+            stops, stop_edges, schedule = process_gtfs.normalize_gtfs_feed(
                 zip_path,
                 dataset_name=dataset_name,
                 layer_id=dataset_name,
                 filter_geometry=filter_geometry,
                 target_crs=output_crs,
+                hour_band_size=hour_band_size,
+                hour_range=hour_range,
+                peak_periods=peak_periods,
+                include_schedule_table=include_schedule_table,
             )
         except Exception as exc:  # noqa: BLE001 - un feed corrupto no debe romper todo
             print(f"[aviso] No se pudo normalizar el feed {zip_path.name}: {exc}")
             continue
         results[dataset_name] = {
-            "nodes_stops": stops,
-            "edges_stop_to_stop": stop_edges,
-            "edges_shapes_reference": shape_edges,
+            "nodes": stops,
+            "edges": stop_edges,
+            "schedule": schedule,
         }
     return results
