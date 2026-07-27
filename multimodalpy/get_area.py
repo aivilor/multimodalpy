@@ -406,7 +406,7 @@ def download_gtfs_layers(
     boundary: "gpd.GeoDataFrame",
     zip_dir: str | Path,
     *,
-    modes: Iterable[int] = (1, 2),
+    modes: Iterable[int],
     output_crs: str = "EPSG:4326",
     clip_to_boundary: bool = True,
     api_key: str | None = None,
