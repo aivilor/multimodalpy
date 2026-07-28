@@ -15,7 +15,7 @@ pipeline con los parametros minimos que necesita la persona usuaria:
 Los modos se reparten automaticamente entre OSM y GTFS:
 
     OSM  -> "caminable", "bicicleta", "coche"
-    GTFS -> "bus_urbano", "bus_interurbano" (bus)  /  "metro", "cercanias" (tren)
+    GTFS -> "bus_urbano", "bus_interurbano" (bus)  /  "metro", "cercanias" (tren) #Ahora solo será bus y tren en genérico y descargar todo
 """
 
 from __future__ import annotations
@@ -31,11 +31,8 @@ from . import get_area, process_gtfs
 OSM_MODES = {"caminable", "bicicleta", "coche"}
 # NAP: 1 = bus, 2 = ferroviario.
 GTFS_MODE_TO_NAP = {
-    "bus_urbano": 1,
-    "bus_interurbano": 1,
-    "metro": 2,
-    "cercanias": 2,
-    "cercanías": 2,
+    "bus": 1,
+    "tren": 2,
 }
 
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
