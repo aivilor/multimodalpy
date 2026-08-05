@@ -14,7 +14,7 @@ pipeline con los parametros minimos que necesita la persona usuaria:
 
 Los modos se reparten automaticamente entre OSM y GTFS:
 
-    OSM  -> "caminable", "bicicleta", "coche"
+    OSM  -> "walking", "bike", "driving"
     GTFS -> "bus_urbano", "bus_interurbano" (bus)  /  "metro", "cercanias" (tren) #Ahora solo será bus y tren en genérico y descargar todo
 """
 
@@ -27,12 +27,15 @@ from typing import Sequence
 from . import get_area, process_gtfs
 
 
-# Reparto de modos de usuario -> backend de descarga.
-OSM_MODES = {"caminable", "bicicleta", "coche"}
+# Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
+# sinonimo reconocido por ``get_area.OSM_NETWORK_TYPES`` (p. ej. "driving",
+# "coche", "car", "drive" son equivalentes); la capa resultante siempre usa
+# la etiqueta canonica en ingles ("walking", "bike", "driving").
+OSM_MODES = set(get_area.OSM_NETWORK_TYPES)
 # NAP: 1 = bus, 2 = ferroviario.
 GTFS_MODE_TO_NAP = {
     "bus": 1,
-    "tren": 2,
+    "train": 2,
 }
 
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
@@ -219,7 +222,7 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # ---------------------------------------------------------------------------
 def main(
     area_name: str,
-    modes: Sequence[str] = ("caminable",),
+    modes: Sequence[str] = ("walking",),
     output_path: str | Path = "output",
     *,
     boundaries_path: str | Path | None = None,
@@ -227,7 +230,6 @@ def main(
     output_file_type: str = "geojson",
     # Extras opcionales (no imprescindibles para el uso basico):
     area_code: str | None = None,
-    travel_speed_kmh: float | None = None,
     api_key: str | None = None,
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
@@ -241,8 +243,10 @@ def main(
     area_name : str
         Nombre del municipio sobre el que se realiza la descarga.
     modes : list[str]
-        Modos de transporte a descargar. Opciones: "caminable", "bicicleta",
-        "coche", "bus_urbano", "bus_interurbano", "metro", "cercanias".
+        Modos de transporte a descargar. Opciones: "walking", "bike",
+        "driving", "bus_urbano", "bus_interurbano", "metro", "cercanias".
+        (tambien se aceptan sinonimos en castellano para los modos OSM, p.
+        ej. "caminable", "bicicleta", "coche").
     output_path : Path
         Carpeta local de descarga.
     boundaries_path : Path, opcional
@@ -253,6 +257,11 @@ def main(
         (p. ej. "EPSG:25830") si se quiere proyectar la red.
     output_file_type : str
         Formato de descarga: "geopackage", "geojson", "shapefile" o "networkx".
+    NOTA sobre las capas OSM (walking/bike/driving): el tiempo de viaje
+        (``tts``, en segundos) se calcula automaticamente segun el modo
+        (velocidad libre + penalizacion de parada; ver
+        ``process_osm.add_mode_travel_time``), asi que ya no se acepta un
+        parametro de velocidad constante para OSM.
     gtfs_hour_band_size : int, opcional
         Si se indica (p.ej. 1), las aristas GTFS se calculan por franja horaria
         de una hora (columna ``hour_band``), en vez de un unico peso agregado.
@@ -300,7 +309,7 @@ def main(
     # 2) OSM.
     if osm_modes:
         osm_results = get_area.download_osm_layers(
-            boundary, modes=osm_modes, output_crs=crs, travel_speed_kmh=travel_speed_kmh,
+            boundary, modes=osm_modes, output_crs=crs,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
@@ -391,7 +400,7 @@ def _cli(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description="Descarga la red multimodal de un municipio.")
     parser.add_argument("--area", required=True, help="Nombre del municipio.")
-    parser.add_argument("--modes", nargs="+", default=["caminable"], help="Modos de transporte.")
+    parser.add_argument("--modes", nargs="+", default=["walking"], help="Modos de transporte.")
     parser.add_argument("--output", default="output", help="Carpeta local de descarga.")
     parser.add_argument("--boundaries", help="Shapefile/GeoJSON de limites (opcional).")
     parser.add_argument("--crs", default="EPSG:4326", help="CRS de salida (por defecto WGS84).")
@@ -400,7 +409,6 @@ def _cli(argv: list[str] | None = None) -> None:
         choices=sorted(VALID_OUTPUT_TYPES), help="Formato de salida.",
     )
     parser.add_argument("--area-code", help="Codigo oficial del municipio (opcional).")
-    parser.add_argument("--travel-speed-kmh", type=float, help="Velocidad constante para tiempo de arista.")
     parser.add_argument("--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren.")
     parser.add_argument(
         "--gtfs-hour-band-size", type=int, default=1,
@@ -424,7 +432,6 @@ def _cli(argv: list[str] | None = None) -> None:
         crs=args.crs,
         output_file_type=args.output_file_type,
         area_code=args.area_code,
-        travel_speed_kmh=args.travel_speed_kmh,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         gtfs_include_schedule_table=not args.no_gtfs_schedule_table,

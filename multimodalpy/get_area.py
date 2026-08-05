@@ -59,11 +59,22 @@ DEFAULT_CODE_COLUMNS = (
     "codigo", "CODIGO", "cod_mun", "COD_MUN", "ine", "INE",
 )
 
-# Modos OSM soportados (caminable / bicicleta / coche).
+# Modos OSM soportados (caminando / bicicleta / coche). Se aceptan varios
+# sinonimos de entrada (castellano/ingles), pero la capa resultante y el
+# nombre de fichero siempre usan la etiqueta canonica en ingles: "walking",
+# "bike", "driving" (ver ``NETWORK_TYPE_TO_LAYER_LABEL``).
 OSM_NETWORK_TYPES = {
-    "caminable": "walk", "walk": "walk", "peatonal": "walk",
+    "caminable": "walk", "walk": "walk", "peatonal": "walk", "walking": "walk",
     "bicicleta": "bike", "bike": "bike", "bicycle": "bike",
     "coche": "drive", "car": "drive", "drive": "drive", "carretera": "drive",
+    "driving": "drive",
+}
+
+# Etiqueta canonica de capa/fichero para cada ``network_type`` de osmnx.
+NETWORK_TYPE_TO_LAYER_LABEL = {
+    "walk": "walking",
+    "bike": "bike",
+    "drive": "driving",
 }
 
 
@@ -255,12 +266,29 @@ def download_osm_layers(
     output_crs: str = "EPSG:4326",
     simplify: bool = True,
     retain_all: bool = True,
-    travel_speed_kmh: float | None = None,
-    topology_nodes: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Descarga capas de red OSM para los modos indicados y las estandariza.
 
-    Devuelve ``{modo: {"nodes": gdf, "edges": gdf, "graph": grafo_osmnx}}``.
+    Devuelve ``{modo: {"nodes": gdf, "edges": gdf, "graph": grafo_osmnx}}``,
+    donde ``modo`` es siempre la etiqueta canonica en ingles ("walking",
+    "bike", "driving"), independientemente del sinonimo usado en ``modes``
+    (p. ej. "coche", "car", "drive" y "driving" producen todos la clave
+    "driving").
+
+    ``nodes``/``edges`` ya son las capas finales listas para exportar (ver
+    :func:`multimodalpy.process_osm.build_final_osm_layers`):
+
+    - ``nodes``: ``node_id``, ``node_role``, ``geometry``.
+    - ``edges``: ``edge_id``, ``from_node_id``, ``to_node_id``, ``highway``,
+      ``lanes``, ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
+      ``tts`` (tiempo de viaje en segundos: velocidad libre + penalizacion de
+      parada segun el modo), ``geometry``.
+
+    El tiempo de viaje se calcula automaticamente segun el modo de red
+    (``walking``: 5 km/h constante sin penalizacion; ``bike``: velocidad
+    limitada a 25 km/h con penalizacion de parada reducida; ``driving``:
+    velocidad por ``maxspeed``/tipo de via con penalizacion de parada segun
+    el nodo de llegada). Ya no hace falta indicar ``travel_speed_kmh``.
     """
     try:
         import osmnx as ox
@@ -272,11 +300,12 @@ def download_osm_layers(
     results: dict[str, dict[str, object]] = {}
 
     for mode in modes:
-        layer_key = normalize_name(mode)
-        network_type = OSM_NETWORK_TYPES.get(layer_key)
+        input_key = normalize_name(mode)
+        network_type = OSM_NETWORK_TYPES.get(input_key)
         if network_type is None:
             valid = ", ".join(sorted(OSM_NETWORK_TYPES))
             raise ValueError(f"Modo OSM desconocido '{mode}'. Valores validos: {valid}")
+        layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
 
         graph = ox.graph_from_polygon(
             polygon,
@@ -284,12 +313,11 @@ def download_osm_layers(
             simplify=simplify,
             retain_all=retain_all,
         )
-        nodes, edges = process_osm.normalize_osm_graph(
+        nodes, edges = process_osm.build_final_osm_layers(
             graph,
             layer_id=layer_key,
+            mode=network_type,
             output_crs=output_crs,
-            travel_speed_kmh=travel_speed_kmh,
-            topology_nodes=topology_nodes,
         )
         results[layer_key] = {"nodes": nodes, "edges": edges, "graph": graph}
 
