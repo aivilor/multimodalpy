@@ -101,14 +101,13 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
     if edges is not None and not edges.empty:
         for _, row in edges.iterrows():
             graph.add_edge(
-                str(row.get("from_stop_id")),
-                str(row.get("to_stop_id")),
+                str(row.get("from_node_id")),
+                str(row.get("to_node_id")),
                 route_id=_json_safe(row.get("route_id")),
                 route_short_name=_json_safe(row.get("route_short_name")),
                 trip_count=_json_safe(row.get("trip_count")),
                 travel_time_seconds_mean=_json_safe(row.get("travel_time_seconds_mean")),
                 hour_band=_json_safe(row.get("hour_band")),
-                days_active_mean=_json_safe(row.get("days_active_mean")),
             )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -325,17 +324,28 @@ def main(
             peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
         )
         GTFS_EDGES_COLUMNS = ["edge_id",
-            "from_stop_id", "to_stop_id", "route_id", "route_short_name", "route_long_name",
+            "from_node_id", "to_node_id", "route_id", "route_short_name", "route_long_name",
             "trip_count", "travel_time_seconds_mean", "travel_time_seconds_median",
-            "travel_time_seconds_min", "travel_time_seconds_max", "service_count",
-            "days_active_mean", "frequency_trip_count_sum",
+            "travel_time_seconds_min", "travel_time_seconds_max", 
             "travel_time_seconds_mean_peak_am", "travel_time_seconds_mean_peak_pm",
             "travel_time_seconds_mean_rest_of_day",
             "travel_time_seconds_median_peak_am", "travel_time_seconds_median_peak_pm",
             "travel_time_seconds_median_rest_of_day",
             "trip_count_peak_am", "trip_count_peak_pm", "trip_count_rest_of_day",
+            "travel_time_seconds_mean_weekday", "trip_count_weekday",
+            "travel_time_seconds_mean_weekend", "trip_count_weekend",
+            "days_of_week_summary",
             "hourly_travel_times", "hourly_trip_counts", "geometry",
         ]
+        # Combinacion periodo x laborables/fin de semana (p.ej.
+        # "travel_time_seconds_mean_peak_am_weekday"). Solo cubre los nombres
+        # de periodo por defecto (peak_am/peak_pm/rest_of_day); si se pasa un
+        # ``gtfs_peak_periods`` propio con otros nombres, sus columnas
+        # combinadas no se filtran aqui de forma automatica.
+        for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + ["rest_of_day"]:
+            for day_type_name in ("weekday", "weekend"):
+                GTFS_EDGES_COLUMNS.append(f"travel_time_seconds_mean_{period_name}_{day_type_name}")
+                GTFS_EDGES_COLUMNS.append(f"trip_count_{period_name}_{day_type_name}")
 
         GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
 

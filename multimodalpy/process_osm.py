@@ -387,22 +387,59 @@ MODE_STOP_PENALTIES_SEC: dict[str, dict[str, float]] = {
 
 
 def _parse_maxspeed_kmh(value: object) -> float | None:
-    """Interpreta el tag ``maxspeed`` de OSM (num., texto, "30 mph", listas...)."""
+    """Interpreta el tag ``maxspeed`` de OSM (num., texto, listas, "30 mph",
+    valores ';'-separados como "30;50" o "20;walk")."""
     if value is None:
         return None
     if isinstance(value, (list, tuple, set)):
-        parsed = [p for p in (_parse_maxspeed_kmh(v) for v in value) if p is not None]
-        return min(parsed) if parsed else None
-    if isinstance(value, (int, float)):
+        parts = value
+    elif isinstance(value, (int, float)):
         return float(value)
-    text = str(value).strip().lower()
-    if not text or text in {"none", "signals", "variable", "walk"}:
+    else:
+        text = str(value).strip().lower()
+        if not text or text in {"none", "signals", "variable", "walk"}:
+            return None
+        parts = text.split(";") if ";" in text else [text]
+
+    numeric_values: list[float] = []
+    for part in parts:
+        part_text = str(part).strip().lower()
+        if not part_text or part_text in {"none", "signals", "variable", "walk"}:
+            continue
+        match = re.search(r"(\d+(\.\d+)?)", part_text)
+        if not match:
+            continue
+        number = float(match.group(1))
+        numeric_values.append(number * 1.60934 if "mph" in part_text else number)
+
+    if not numeric_values:
         return None
-    match = re.search(r"(\d+(\.\d+)?)", text)
-    if not match:
-        return None
-    number = float(match.group(1))
-    return number * 1.60934 if "mph" in text else number
+    return max(numeric_values)
+
+
+# Cualquier variante de via peatonal/paso conocida en OSM se colapsa a "footway".
+WALKING_HIGHWAY_ALIASES: set[str] = {
+    "footway", "path", "steps", "pedestrian", "living_street",
+    "track", "corridor", "elevator", "bridleway",
+}
+
+
+def _normalize_highway(highway_value: object) -> object:
+    """Normaliza tags highway compuestos (';'-separados o listas) y colapsa
+    cualquier variante peatonal conocida a 'footway'."""
+    if isinstance(highway_value, (list, tuple)):
+        tokens = [str(v) for v in highway_value if v is not None]
+    elif isinstance(highway_value, str) and ";" in highway_value:
+        tokens = highway_value.split(";")
+    elif highway_value is None:
+        return highway_value
+    else:
+        tokens = [str(highway_value)]
+
+    tokens = [t.strip() for t in tokens if t and t.strip()]
+    if any(t in WALKING_HIGHWAY_ALIASES for t in tokens):
+        return "footway"
+    return tokens[0] if tokens else highway_value
 
 
 def _hwy_free_flow_speed_kmh(highway_value: object, profile: dict) -> float:
@@ -410,10 +447,7 @@ def _hwy_free_flow_speed_kmh(highway_value: object, profile: dict) -> float:
     fallback = float(profile["fallback_speed_kmh"])
     if not hwy_speeds:
         return fallback
-    if isinstance(highway_value, str) and ";" in highway_value:
-        highway_value = highway_value.split(";")[0]
-    if isinstance(highway_value, (list, tuple)) and highway_value:
-        highway_value = highway_value[0]
+    highway_value = _normalize_highway(highway_value)
     return float(hwy_speeds.get(highway_value, fallback))
 
 
