@@ -1,0 +1,15 @@
+dataset_id,dataset_name,file_id,status,file_name,path,error
+932,ALSA autobuses,1133,downloaded,20260909_000052_BUS_ALSA.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260909_000052_BUS_ALSA.zip,
+964,Autobuses Samar,1165,downloaded,20260727_080002_BUS_Samar.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260727_080002_BUS_Samar.zip,
+1363,Autobús en Cantabria,1560,downloaded,20260909_000013_BUS_Cantabria.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260909_000013_BUS_Cantabria.zip,
+1325,Autobús interurbano Comunidad Valenciana,1526,downloaded,20260909_020031_GenValenciana_Interurbano.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260909_020031_GenValenciana_Interurbano.zip,
+965,Autobús urbano de Valencia,1166,downloaded,20260901_200004_EMT_Valencia.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260901_200004_EMT_Valencia.zip,
+929,Cercanías Renfe,2400,failed,,,404 Client Error: Not Found for url: https://nap.transportes.gob.es/api/v2/fichero/2400/descarga
+929,Cercanías Renfe,2398,failed,,,404 Client Error: Not Found for url: https://nap.transportes.gob.es/api/v2/fichero/2398/descarga
+929,Cercanías Renfe,1130,downloaded,20260909_040012_RENFE_CERCA.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260909_040012_RENFE_CERCA.zip,
+929,Cercanías Renfe,2399,failed,,,404 Client Error: Not Found for url: https://nap.transportes.gob.es/api/v2/fichero/2399/descarga
+967,Metro de Valencia,1168,downloaded,20260902_080005_Metro_Valencia.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260902_080005_Metro_Valencia.zip,
+1515,Ouigo,1766,downloaded,20260702_060101_Ouigo.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260702_060101_Ouigo.zip,
+897,"RENFE - Media, Larga Distancia y AVE",2405,failed,,,404 Client Error: Not Found for url: https://nap.transportes.gob.es/api/v2/fichero/2405/descarga
+897,"RENFE - Media, Larga Distancia y AVE",1098,downloaded,20260909_000009_RENFE_AVLD.zip,/Users/aidavillalba/Desktop/Proyectos/2026/02_Libreria_multimodal/multimodalpy/multimodalpy/data/outputs/output_Valencia/gtfs_zips/20260909_000009_RENFE_AVLD.zip,
+897,"RENFE - Media, Larga Distancia y AVE",2404,failed,,,404 Client Error: Not Found for url: https://nap.transportes.gob.es/api/v2/fichero/2404/descarga
