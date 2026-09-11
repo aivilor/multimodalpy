@@ -52,7 +52,6 @@ VALID_DAYS = {"monday", "tuesday", "wednesday", "thursday", "friday",
 COORD_TOL = 0.01       
 LENGTH_REL_TOL = 0.02  
 
-# Extensiones de archivo vectorial soportadas ademas de CSV/TSV
 VECTOR_EXTENSIONS = {".geojson", ".json", ".shp", ".gpkg"}
 
 
@@ -60,30 +59,7 @@ VECTOR_EXTENSIONS = {".geojson", ".json", ".shp", ".gpkg"}
 # I/O multi-formato: CSV (WKT) / GeoJSON / Shapefile / GeoPackage
 # ==========================================================================
 def load_table(path: Union[str, Path], layer: Optional[str] = None) -> pd.DataFrame:
-    """
-    Carga una tabla de nodos/aristas sin importar el formato de origen.
 
-    - .csv / .tsv     -> lectura plana con pandas; la columna `geometry` (si
-                          existe) queda como texto WKT y la parsea despues
-                          `_parse_geometries`.
-    - .geojson/.json  -> geopandas; la columna `geometry` queda como objetos
-                          shapely ya parseados.
-    - .shp            -> geopandas (requiere los .dbf/.shx/.prj junto al .shp).
-                          OJO: ESRI Shapefile trunca nombres de columna a 10
-                          caracteres, asi que columnas como "from_node_id"
-                          pueden llegar renombradas/perdidas. `load_table` no
-                          puede adivinar el nombre original de forma fiable
-                          (varias columnas largas de este esquema truncan al
-                          mismo prefijo de 10 caracteres), asi que si vas a
-                          usar Shapefile como origen, renombra esas columnas
-                          antes de pasar la tabla a los checks, o mejor usa
-                          GeoJSON/GeoPackage, que no tienen ese limite.
-    - .gpkg           -> geopandas; usa `layer=` para elegir la capa cuando el
-                          GeoPackage contiene varias (p. ej. nodos y aristas
-                          en el mismo .gpkg).
-
-    Devuelve un DataFrame/GeoDataFrame con una columna `geometry`.
-    """
     path = Path(path)
     suffix = path.suffix.lower()
 
@@ -111,7 +87,6 @@ def load_table(path: Union[str, Path], layer: Optional[str] = None) -> pd.DataFr
 
 def _ensure_table(obj: Union[str, Path, pd.DataFrame],
                    layer: Optional[str] = None) -> pd.DataFrame:
-    """Acepta un DataFrame ya cargado, o una ruta que se carga con load_table."""
     if isinstance(obj, (str, Path)):
         return load_table(obj, layer=layer)
     return obj
@@ -157,8 +132,7 @@ def _record(results, name, level, subset, note=""):
     results.append(r)
     _vprint(_fmt(r))
     if r.n_issues and r.issues is not None:
-        # `subset` suele ser un DataFrame (tiene .head()), pero check_schema
-        # pasa una lista simple de nombres de columna, que no lo tiene.
+
         if hasattr(r.issues, "head"):
             preview = r.issues.head(5)
             _vprint(preview.to_string() if hasattr(preview, "to_string") else preview)
@@ -192,13 +166,7 @@ def check_schema(df, expected_cols, name, results):
 
 
 def _parse_geometries(geom_series: pd.Series) -> np.ndarray:
-    """
-    Devuelve un array numpy de geometrias shapely a partir de una columna que
-    puede contener strings WKT (lectura plana de CSV) u objetos shapely ya
-    parseados (p. ej. la columna geometry de un GeoDataFrame leido desde
-    GeoJSON/Shapefile/GeoPackage). Las entradas mal formadas o vacias se
-    convierten en None.
-    """
+
     values = geom_series.to_numpy()
     is_str = np.array([isinstance(v, str) for v in values])
 
@@ -218,11 +186,7 @@ def _parse_geometries(geom_series: pd.Series) -> np.ndarray:
 
 
 def _multi_value_bad_mask(series: pd.Series, positive_only: bool) -> pd.Series:
-    """
-    Tags OSM como lanes/maxspeed pueden venir separados por ';' ("40;50", "3;2").
-    Marca la fila como mala solo si no es nula y NO todas las partes separadas
-    por ';' parsean como numeros (y, si positive_only, todas > 0).
-    """
+
     def bad(val):
         if pd.isna(val):
             return False
@@ -252,12 +216,7 @@ def _parse_hourly_string(s) -> dict:
 
 def _topology_mismatch_mask(edges: pd.DataFrame, edge_geoms: np.ndarray,
                              node_id_to_geom: dict, ok_geom: np.ndarray) -> np.ndarray:
-    """
-    Comun a OSM y GTFS: compara los extremos de cada LINESTRING de arista
-    contra las coordenadas de sus nodos from/to (dentro de COORD_TOL).
-    Las filas cuyo nodo from/to no existe en `node_id_to_geom` se omiten
-    (ya quedan cubiertas por el check de integridad referencial).
-    """
+
     mismatch_mask = np.zeros(len(edges), dtype=bool)
     from_ids = _col(edges, "from_node_id").to_numpy()
     to_ids = _col(edges, "to_node_id").to_numpy()
@@ -407,10 +366,6 @@ def check_graph_consistency_osm(nodes: pd.DataFrame, edges: pd.DataFrame, result
     orphan_nodes = nodes[~nodes["node_id"].isin(used_ids)]
     _vprint(f"[INFO] nodes not referenced by any edge: {len(orphan_nodes)}")
 
-    # Grado topologico: cuenta conexiones DISTINTAS por nodo, no filas crudas.
-    # Varias aristas pueden compartir el mismo par (from_node_id, to_node_id)
-    # (p. ej. ways bidireccionales de OSM, o el mismo segmento fisico con mas
-    # de un edge_id/ruta) y deben contar como UNA sola conexion.
     node_pairs = edges[["from_node_id", "to_node_id"]].to_numpy()
     undirected_pairs = {tuple(sorted(p)) for p in node_pairs}
     unique_edges = pd.DataFrame(undirected_pairs, columns=["a", "b"])
@@ -493,8 +448,6 @@ def check_edges_gtfs(edges: pd.DataFrame, nodes: pd.DataFrame, node_geoms: np.nd
     _record(results, "to_node_id not null", "fail", edges[to_node_id.isna()])
     _record(results, "route_id not null", "fail", edges[_col(edges, "route_id").isna()])
 
-    # `nodes` puede ser un subconjunto espacial de paradas que no incluya
-    # todas las que atraviesa una ruta que pasa por la zona -> warning, no fail.
     node_id_to_geom = dict(zip(_col(nodes, "node_id"), node_geoms))
     node_ids = set(node_id_to_geom)
     _record(results, "from_node_id exists in nodes table", "warn",
@@ -594,15 +547,7 @@ def run_all_checks_gtfs(nodes: Union[str, Path, pd.DataFrame],
                          nodes_layer: Optional[str] = None,
                          edges_layer: Optional[str] = None,
                          verbose: bool = True):
-    """
-    `nodes`/`edges` pueden ser DataFrames ya cargados, o rutas a archivos
-    .csv/.tsv/.geojson/.shp/.gpkg — se cargan automaticamente con
-    `load_table`. `nodes_layer`/`edges_layer` solo aplican a GeoPackage.
 
-    `verbose=False` silencia la linea-por-linea de cada check (el resumen
-    final se imprime siempre); usa `results_to_frame()`/`style_results()`
-    sobre el valor devuelto para revisar los resultados en tabla.
-    """
     nodes = _ensure_table(nodes, layer=nodes_layer)
     edges = _ensure_table(edges, layer=edges_layer)
 
@@ -615,16 +560,9 @@ def run_all_checks_gtfs(nodes: Union[str, Path, pd.DataFrame],
     return results
 
 
-# ==========================================================================
-# Presentacion tabular de resultados (mas facil de escanear que el log
-# linea-por-linea, sobre todo con muchos modos/formatos a la vez)
-# ==========================================================================
+
 def results_to_frame(results: list[CheckResult]) -> pd.DataFrame:
-    """
-    Convierte una lista de CheckResult en una tabla compacta: una fila por
-    check, sin los DataFrames de detalle (eso se consulta aparte con
-    `show_issues`). Pensada para mostrarse directamente en un notebook.
-    """
+
     return pd.DataFrame([
         {"check": r.name, "level": r.level, "n_issues": r.n_issues, "note": r.note}
         for r in results
@@ -632,11 +570,7 @@ def results_to_frame(results: list[CheckResult]) -> pd.DataFrame:
 
 
 def style_results(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
-    """
-    Colorea una tabla de `results_to_frame`: rojo = fail con problemas,
-    ambar = warn con problemas, verde = todo OK. Pensado para notebooks
-    (se muestra solo, sin necesidad de `print`).
-    """
+
     def _row_color(row):
         if row["n_issues"] == 0:
             color = "background-color: #d9f2d9"   # verde suave
@@ -654,15 +588,7 @@ def style_results(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
 
 
 def summary_matrix(results_by_key: dict) -> pd.DataFrame:
-    """
-    Junta los resultados de varias corridas (p. ej. una por modo, o por
-    modo+formato) en una sola matriz check x clave, con el numero de
-    problemas en cada celda. Pensada para ver TODO de un vistazo antes de
-    entrar al detalle de una celda en particular.
 
-    results_by_key: dict como {"driving": [CheckResult, ...], "walking": [...]}
-                     (las claves pueden ser tuplas, p. ej. ("geojson", "bus"))
-    """
     frames = []
     for key, results in results_by_key.items():
         s = pd.Series({r.name: r.n_issues for r in results}, name=key)
@@ -671,31 +597,25 @@ def summary_matrix(results_by_key: dict) -> pd.DataFrame:
 
 
 def style_summary_matrix(matrix: pd.DataFrame) -> "pd.io.formats.style.Styler":
-    """Colorea `summary_matrix`: 0 = verde, >0 = rojo, mas oscuro cuantos mas casos."""
     def _color(val):
         if pd.isna(val):
-            return "background-color: #eeeeee"  # check no aplicable / no corrido
+            return "background-color: #eeeeee"  
         if val == 0:
             return "background-color: #d9f2d9"
         return "background-color: #f8d7da"
     styler = matrix.style
-    # pandas >= 2.1 renombro Styler.applymap a Styler.map; soportamos ambas.
     map_fn = styler.map if hasattr(styler, "map") else styler.applymap
     return map_fn(_color).format("{:.0f}", na_rep="—")
 
 
 def show_issues(results: list[CheckResult], check_name: str, n: int = 10) -> Optional[pd.DataFrame]:
-    """
-    Muestra las primeras `n` filas problematicas de un check concreto por
-    nombre (tal como aparece en la columna `check` de `results_to_frame`).
-    Devuelve None si el check no tuvo problemas o no se encontro.
-    """
+
     for r in results:
         if r.name == check_name:
             if r.issues is None:
-                print(f"'{check_name}' no tiene filas problematicas (OK).")
+                print(f"'{check_name}' without issues in rows (OK).")
                 return None
             issues = r.issues
             return issues.head(n) if hasattr(issues, "head") else issues[:n]
-    print(f"No se encontro un check llamado '{check_name}'.")
+    print(f"No check named: '{check_name}'.")
     return None
