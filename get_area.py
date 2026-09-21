@@ -59,6 +59,27 @@ DEFAULT_CODE_COLUMNS = (
     "codigo", "CODIGO", "cod_mun", "COD_MUN", "ine", "INE",
 )
 
+# El endpoint ``/conjunto-dato/region/{id}`` del NAP solo entiende ids de
+# provincia: los codigos INE 1-52. El listado ``/region``, en cambio, devuelve
+# ~8300 entradas (municipios, CCAA y provincias) que comparten ese mismo
+# espacio de ids, asi que buscar ahi por nombre es una trampa:
+#
+# - Las entradas de municipio (``tipo=3``) llevan el codigo INE de 5 digitos,
+#   siempre fuera del rango 1-52, y el endpoint responde 404.
+# - Las entradas de CCAA (``tipo=1``) llevan el codigo de CCAA (1-19), que si
+#   cae dentro del rango provincial, asi que el endpoint devuelve en silencio
+#   los datos de OTRA provincia (p. ej. la entrada "Madrid" tiene id=13 y
+#   acaba sirviendo Ciudad Real, que es la provincia 13).
+#
+# Por eso la provincia se deduce del codigo oficial del municipio y no de una
+# comparacion de nombres.
+NAP_PROVINCE_IDS = frozenset(range(1, 53))
+
+# Columnas de las que se puede extraer el codigo de provincia, en orden de
+# preferencia. NATCODE (INSPIRE) tiene la forma
+# ``<2 pais><2 ccaa><2 provincia><5 municipio>``.
+PROVINCE_CODE_COLUMNS = ("NATCODE", "natcode", "cod_mun", "COD_MUN", "ine", "INE")
+
 # Modos OSM soportados (caminando / bicicleta / coche). Se aceptan varios
 # sinonimos de entrada (castellano/ingles), pero la capa resultante y el
 # nombre de fichero siempre usan la etiqueta canonica en ingles: "walking",
@@ -135,6 +156,43 @@ def levenshtein_similarity(left: str, right: str) -> float:
 def slugify(value: str) -> str:
     slug = normalize_name(value).replace(" ", "_")
     return slug or "area"
+
+
+def province_code_from_natcode(value: object) -> int | None:
+    """Extrae el codigo INE de provincia (1-52) de un NATCODE INSPIRE.
+
+    ``NATCODE`` tiene la forma ``<2 pais><2 ccaa><2 provincia><5 municipio>``
+    (p. ej. ``34074040136`` -> provincia 40, Segovia). Los dos digitos de
+    provincia se repiten al inicio del codigo de municipio, asi que se prueban
+    las dos posiciones y se acepta la primera que caiga en el rango valido.
+    Devuelve ``None`` si el codigo no permite deducir la provincia.
+    """
+    digits = re.sub(r"\D", "", "" if value is None else str(value))
+    if len(digits) >= 8:
+        candidates = (digits[4:6], digits[6:8])
+    elif len(digits) == 5:
+        # Codigo INE de municipio suelto (p. ej. "40136").
+        candidates = (digits[0:2],)
+    else:
+        return None
+    for candidate in candidates:
+        try:
+            code = int(candidate)
+        except ValueError:
+            continue
+        if code in NAP_PROVINCE_IDS:
+            return code
+    return None
+
+
+def _find_province_code(gdf: "gpd.GeoDataFrame") -> int | None:
+    """Busca el codigo de provincia en las columnas de codigo del boundary."""
+    for column in _existing_columns(gdf, PROVINCE_CODE_COLUMNS):
+        for raw_value in gdf[column].dropna().tolist():
+            code = province_code_from_natcode(raw_value)
+            if code is not None:
+                return code
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +307,10 @@ def find_area_boundary(
             "matched_value": matched_value,
             "matched_rows": len(rows),
             "area_code": area_code,
+            # Codigo INE de provincia (1-52); es el id de region que entiende
+            # la API del NAP. Puede ser None si el fichero de limites no trae
+            # ninguna columna de codigo reconocible.
+            "province_code": _find_province_code(rows),
             "source_path": str(boundaries_path),
         }],
         geometry=[geometry],
@@ -335,11 +397,23 @@ def download_gtfs_nap_zips(
     api_key: str | None = None,
     base_url: str = NAP_BASE_URL,
     fail_fast: bool = False,
+    province_code: int | None = None,
 ) -> list[Path]:
-    """Descarga los ZIP GTFS del NAP para la region que mejor coincide con el area.
+    """Descarga los ZIP GTFS del NAP para la provincia del area de estudio.
 
     IDs de modo del NAP: 1 bus, 2 ferroviario, 3 maritimo, 4 aereo.
     La clave se toma de ``api_key`` o de la variable de entorno ``NAP_API_KEY``.
+
+    ``province_code`` es el codigo INE de provincia (1-52), que es justo el id
+    de region que entiende la API. Es la via fiable y la que usa
+    :func:`get_network.main`, que lo obtiene del boundary. Si no se indica, se
+    recurre a comparar ``area_name`` con los nombres de las 52 entradas de
+    provincia del listado ``/region``; nunca con las de municipio o CCAA, que
+    devuelven 404 o los datos de otra provincia (ver ``NAP_PROVINCE_IDS``).
+
+    Si la provincia no tiene ningun conjunto de datos publicado, la API
+    responde 404: eso no es un error, asi que se avisa y se devuelve una lista
+    vacia en vez de lanzar una excepcion.
     """
     import pandas as pd
     import requests
@@ -355,22 +429,51 @@ def download_gtfs_nap_zips(
     output_dir.mkdir(parents=True, exist_ok=True)
     headers = {"ApiKey": api_key}
 
-    regions_response = requests.get(f"{base_url}/region", headers=headers, timeout=60)
-    regions_response.raise_for_status()
-    regions = regions_response.json().get("data", [])
-    if not regions:
-        raise ValueError("La API del NAP no devolvio ninguna region.")
+    if province_code is not None and int(province_code) not in NAP_PROVINCE_IDS:
+        raise ValueError(
+            f"province_code '{province_code}' no valido: debe ser un codigo INE "
+            "de provincia entre 1 y 52."
+        )
 
-    target = normalize_name(area_name)
-    best_region = max(
-        regions,
-        key=lambda item: difflib.SequenceMatcher(None, target, normalize_name(item.get("nombre", ""))).ratio(),
-    )
-    region_id = best_region["id"]
+    region_id = int(province_code) if province_code is not None else None
+    if region_id is None:
+        regions_response = requests.get(f"{base_url}/region", headers=headers, timeout=60)
+        regions_response.raise_for_status()
+        regions = regions_response.json().get("data", [])
+        if not regions:
+            raise ValueError("La API del NAP no devolvio ninguna region.")
+
+        # Solo las entradas de provincia (``tipo == "0"``) tienen un id que el
+        # endpoint de conjuntos de datos sepa interpretar.
+        provinces = [item for item in regions if str(item.get("tipo")) == "0"]
+        if not provinces:
+            raise ValueError(
+                "La API del NAP no devolvio ninguna region de provincia (tipo=0)."
+            )
+
+        target = normalize_name(area_name)
+        best_region = max(
+            provinces,
+            key=lambda item: difflib.SequenceMatcher(
+                None, target, normalize_name(item.get("nombre", ""))
+            ).ratio(),
+        )
+        region_id = int(best_region["id"])
+        print(
+            f"[aviso] No se pudo deducir la provincia de '{area_name}' desde el "
+            f"fichero de limites; se usa la provincia '{best_region.get('nombre')}' "
+            "por parecido de nombre, que puede no ser la correcta."
+        )
 
     datasets_response = requests.get(
         f"{base_url}/conjunto-dato/region/{region_id}", headers=headers, timeout=60,
     )
+    if datasets_response.status_code == 404:
+        print(
+            f"[aviso] El NAP no tiene conjuntos de datos publicados para la region "
+            f"{region_id}; no se descargara ningun GTFS."
+        )
+        return []
     datasets_response.raise_for_status()
     datasets = datasets_response.json().get("data", [])
     mode_set = {int(mode) for mode in modes}
@@ -442,17 +545,28 @@ def download_gtfs_layers(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_schedule_table: bool = True,
+    province_code: int | None = None,
 ) -> dict[str, dict[str, object]]:
     """Descarga GTFS del NAP y devuelve capas normalizadas por dataset.
 
     Devuelve ``{dataset: {"nodes_stops": gdf, "edges": gdf,
     "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
 
+    ``province_code`` es el codigo INE de provincia del area; si no se indica,
+    se toma de la columna ``province_code`` del ``boundary`` (la rellena
+    :func:`find_area_boundary`). Ver :func:`download_gtfs_nap_zips`.
+
     ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
     ``include_schedule_table`` se reenvian a ``process_gtfs.normalize_gtfs_feed``
     (ver esa funcion para el detalle de las opciones A/B/C).
     """
-    zips = download_gtfs_nap_zips(area_name, zip_dir, modes=modes, api_key=api_key)
+    if province_code is None and "province_code" in getattr(boundary, "columns", []):
+        value = boundary["province_code"].iloc[0]
+        province_code = None if value is None or value != value else int(value)
+
+    zips = download_gtfs_nap_zips(
+        area_name, zip_dir, modes=modes, api_key=api_key, province_code=province_code,
+    )
 
     filter_geometry = None
     if clip_to_boundary and not boundary.empty:

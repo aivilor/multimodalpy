@@ -316,13 +316,26 @@ def main(
 
     # 3) GTFS (bus / tren) via NAP.
     schedule_tables: dict[str, object] = {}
+    gtfs_error: str | None = None
     if nap_modes:
-        gtfs_results = get_area.download_gtfs_layers(
-            area_name, boundary, output_dir / "gtfs_zips",
-            modes=nap_modes, output_crs=crs, api_key=api_key,
-            hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
-            peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
-        )
+        # Un fallo aqui (404 del NAP, feed corrupto, caida de red) no debe
+        # tirar las capas OSM que ya se han construido: se avisa, se anota en
+        # el manifiesto y se escribe igualmente lo que si se pudo obtener.
+        try:
+            gtfs_results = get_area.download_gtfs_layers(
+                area_name, boundary, output_dir / "gtfs_zips",
+                modes=nap_modes, output_crs=crs, api_key=api_key,
+                hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
+                peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
+            )
+        except Exception as exc:  # noqa: BLE001 - se informa y se sigue
+            gtfs_error = f"{type(exc).__name__}: {exc}"
+            gtfs_results = {}
+            print(
+                f"[aviso] No se pudieron descargar los datos GTFS: {gtfs_error}. "
+                "Se escriben solo las capas disponibles."
+            )
+    if gtfs_results:
         GTFS_EDGES_COLUMNS = ["edge_id",
             "from_node_id", "to_node_id", "route_id", "route_short_name", "route_long_name",
             "trip_count", "travel_time_seconds_mean", "travel_time_seconds_median",
@@ -398,6 +411,9 @@ def main(
         "gtfs_datasets": list(gtfs_results),
         "files": written,
     }
+    if nap_modes and not gtfs_results:
+        # Distinguir "no hay datos publicados" de "la descarga fallo".
+        manifest["gtfs_status"] = gtfs_error or "sin conjuntos de datos publicados"
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
     return manifest
 
