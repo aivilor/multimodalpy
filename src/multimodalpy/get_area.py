@@ -25,8 +25,8 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
 
-from ... import process_gtfs
-from ... import process_osm
+from . import process_gtfs
+from . import process_osm
 
 if TYPE_CHECKING:
     import geopandas as gpd

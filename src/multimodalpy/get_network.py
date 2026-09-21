@@ -24,8 +24,8 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from ... import get_area
-from ... import process_gtfs
+from . import get_area
+from . import process_gtfs
 
 
 # Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
