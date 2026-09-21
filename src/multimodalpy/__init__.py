@@ -15,9 +15,10 @@ Modulos:
 
 from __future__ import annotations
 
-from . import get_area, get_network, process_gtfs, process_osm
+from . import get_area
 from .get_area import find_area_boundary
 from .get_network import main
+from . import get_network, process_gtfs, process_osm
 
 __version__ = "0.1.0"
 

@@ -33,24 +33,12 @@ classifiers = [
 
 dependencies = [
   "numpy>=1.26",
-  "difflib",
-  "os",
-  "re",
-  "unicodedata",
-  "pathlib",
-  "typing",
-  "json",
   "networkx",
-  "sqlite3",
-  "argparse",
   "geopandas",
   "osmnx",
   "pandas",
   "requests",
-  "zipfile",
-  "math",
   "shapely",
-  "collections"
 ]
 
 
