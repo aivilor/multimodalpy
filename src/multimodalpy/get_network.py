@@ -10,6 +10,7 @@ pipeline con los parametros minimos que necesita la persona usuaria:
         boundaries_path=None,   # Path: shapefile/geojson de limites (opcional)
         crs="EPSG:4326",        # str : CRS de salida (por defecto WGS84 universal)
         output_file_type="geojson",  # geopackage | geojson | shapefile | networkx
+                                     # (o una lista de varios de ellos)
     )
 
 Los modos se reparten automaticamente entre OSM y GTFS:
@@ -24,8 +25,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from . import get_area
-from . import process_gtfs
+from . import get_area, process_gtfs
 
 
 # Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
@@ -227,7 +227,7 @@ def main(
     *,
     boundaries_path: str | Path | None = None,
     crs: str = "EPSG:4326",
-    output_file_type: str = "geojson",
+    output_file_type: str | Sequence[str] = "geojson",
     # Extras opcionales (no imprescindibles para el uso basico):
     area_code: str | None = None,
     api_key: str | None = None,
@@ -255,8 +255,12 @@ def main(
     crs : str
         CRS de salida. Por defecto "EPSG:4326" (WGS84, universal). Indicar otro
         (p. ej. "EPSG:25830") si se quiere proyectar la red.
-    output_file_type : str
-        Formato de descarga: "geopackage", "geojson", "shapefile" o "networkx".
+    output_file_type : str | list[str]
+        Formato(s) de descarga: "geopackage", "geojson", "shapefile" o
+        "networkx". Admite una lista para escribir varios de una sola pasada
+        (p. ej. ["geojson", "shapefile", "geopackage"]): la descarga y la
+        normalizacion se hacen una unica vez y solo se repite la escritura,
+        en vez de rehacer todo el pipeline una vez por formato.
     NOTA sobre las capas OSM (walking/bike/driving): el tiempo de viaje
         (``tts``, en segundos) se calcula automaticamente segun el modo
         (velocidad libre + penalizacion de parada; ver
@@ -285,12 +289,25 @@ def main(
     """
     if isinstance(modes, str):
         modes = [modes]
-    output_file_type = output_file_type.strip().lower()
-    if output_file_type not in VALID_OUTPUT_TYPES:
-        raise ValueError(
-            f"output_file_type '{output_file_type}' no valido. "
-            f"Opciones: {', '.join(sorted(VALID_OUTPUT_TYPES))}"
-        )
+
+    # ``output_file_type`` admite una cadena ("geojson") o varias
+    # (["geojson", "shapefile"]). Con varias, los pasos 1-3 se ejecutan una
+    # sola vez y solo se repite la escritura.
+    single_output_type = isinstance(output_file_type, str)
+    requested_types = [output_file_type] if single_output_type else list(output_file_type)
+    if not requested_types:
+        raise ValueError("output_file_type no puede estar vacio.")
+
+    output_file_types: list[str] = []
+    for file_type in requested_types:
+        normalized = str(file_type).strip().lower()
+        if normalized not in VALID_OUTPUT_TYPES:
+            raise ValueError(
+                f"output_file_type '{file_type}' no valido. "
+                f"Opciones: {', '.join(sorted(VALID_OUTPUT_TYPES))}"
+            )
+        if normalized not in output_file_types:  # ignora duplicados
+            output_file_types.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
     output_dir = Path(output_path)
@@ -317,13 +334,26 @@ def main(
 
     # 3) GTFS (bus / tren) via NAP.
     schedule_tables: dict[str, object] = {}
+    gtfs_error: str | None = None
     if nap_modes:
-        gtfs_results = get_area.download_gtfs_layers(
-            area_name, boundary, output_dir / "gtfs_zips",
-            modes=nap_modes, output_crs=crs, api_key=api_key,
-            hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
-            peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
-        )
+        # Un fallo aqui (404 del NAP, feed corrupto, caida de red) no debe
+        # tirar las capas OSM que ya se han construido: se avisa, se anota en
+        # el manifiesto y se escribe igualmente lo que si se pudo obtener.
+        try:
+            gtfs_results = get_area.download_gtfs_layers(
+                area_name, boundary, output_dir / "gtfs_zips",
+                modes=nap_modes, output_crs=crs, api_key=api_key,
+                hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
+                peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
+            )
+        except Exception as exc:  # noqa: BLE001 - se informa y se sigue
+            gtfs_error = f"{type(exc).__name__}: {exc}"
+            gtfs_results = {}
+            print(
+                f"[aviso] No se pudieron descargar los datos GTFS: {gtfs_error}. "
+                "Se escriben solo las capas disponibles."
+            )
+    if gtfs_results:
         GTFS_EDGES_COLUMNS = ["edge_id",
             "from_node_id", "to_node_id", "route_id", "route_short_name", "route_long_name",
             "trip_count", "travel_time_seconds_mean", "travel_time_seconds_median",
@@ -365,40 +395,55 @@ def main(
             if gtfs_include_schedule_table and out.get("schedule") is not None:
                 schedule_tables[f"gtfs_{dataset}_schedule"] = out["schedule"]
 
-    # 4) Escritura local en el formato solicitado.
-    if output_file_type == "networkx":
-        written: list[str] = []
-        # El limite y las capas GTFS shapes se guardan como GeoJSON de apoyo.
-        boundary.to_crs(crs).to_file(output_dir / "study_area_boundary.geojson", driver="GeoJSON")
-        written.append("study_area_boundary.geojson")
-        for mode, out in osm_results.items():
-            path = _osm_graph_to_json(out["graph"], output_dir / f"osm_{mode}_graph.json")
-            written.append(path.name)
-        for dataset, out in gtfs_results.items():
-            path = _gtfs_to_graph_json(
-                out["nodes"], out["edges"],
-                output_dir / f"gtfs_{dataset}_graph.json",
+    # 4) Escritura local, una vez por formato solicitado. La descarga y la
+    #    normalizacion (pasos 1-3) ya se han hecho una sola vez, asi que pedir
+    #    varios formatos solo cuesta la escritura, no repetir todo el pipeline.
+    written: list[str] = []
+    written_by_format: dict[str, list[str]] = {}
+    for file_type in output_file_types:
+        if file_type == "networkx":
+            files_here: list[str] = []
+            # El limite y las capas GTFS shapes se guardan como GeoJSON de apoyo.
+            boundary.to_crs(crs).to_file(
+                output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
-            written.append(path.name)
-        written.extend(
-            _write_schedule_tables(schedule_tables, output_dir, output_file_type, area_slug=area_slug)
-        )
-    else:
-        written = _write_layers(layers, output_dir, output_file_type, area_slug=area_slug)
-        written.extend(
-            _write_schedule_tables(schedule_tables, output_dir, output_file_type, area_slug=area_slug)
-        )
+            files_here.append("study_area_boundary.geojson")
+            for mode, out in osm_results.items():
+                path = _osm_graph_to_json(out["graph"], output_dir / f"osm_{mode}_graph.json")
+                files_here.append(path.name)
+            for dataset, out in gtfs_results.items():
+                path = _gtfs_to_graph_json(
+                    out["nodes"], out["edges"],
+                    output_dir / f"gtfs_{dataset}_graph.json",
+                )
+                files_here.append(path.name)
+            files_here.extend(
+                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+            )
+        else:
+            files_here = _write_layers(layers, output_dir, file_type, area_slug=area_slug)
+            files_here.extend(
+                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+            )
+        written_by_format[file_type] = files_here
+        written.extend(files_here)
 
     manifest = {
         "area_name": area_name,
         "modes": list(modes),
         "crs": crs,
-        "output_file_type": output_file_type,
+        # Se devuelve tal y como se pidio: str si se paso un unico formato como
+        # cadena, lista si se pidieron varios.
+        "output_file_type": output_file_types[0] if single_output_type else output_file_types,
         "output_path": str(output_dir),
         "osm_modes": osm_modes,
         "gtfs_datasets": list(gtfs_results),
         "files": written,
+        **({} if single_output_type else {"files_by_format": written_by_format}),
     }
+    if nap_modes and not gtfs_results:
+        # Distinguir "no hay datos publicados" de "la descarga fallo".
+        manifest["gtfs_status"] = gtfs_error or "sin conjuntos de datos publicados"
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
     return manifest
 
@@ -416,8 +461,9 @@ def _cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--boundaries", help="Shapefile/GeoJSON de limites (opcional).")
     parser.add_argument("--crs", default="EPSG:4326", help="CRS de salida (por defecto WGS84).")
     parser.add_argument(
-        "--output-file-type", default="geojson",
-        choices=sorted(VALID_OUTPUT_TYPES), help="Formato de salida.",
+        "--output-file-type", default=["geojson"], nargs="+",
+        choices=sorted(VALID_OUTPUT_TYPES),
+        help="Formato(s) de salida; admite varios en una sola pasada.",
     )
     parser.add_argument("--area-code", help="Codigo oficial del municipio (opcional).")
     parser.add_argument("--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren.")
