@@ -42,19 +42,44 @@ DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
 # ---------------------------------------------------------------------------
 # Lectura de tablas GTFS
 # ---------------------------------------------------------------------------
+def _strip_gtfs_whitespace(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Quita el relleno de espacios de cabeceras y valores de una tabla GTFS.
+
+    Algunos feeds oficiales publican los CSV con las columnas alineadas a un
+    ancho fijo (p. ej. el de Cercanias de RENFE, cuya cabecera literal es
+    ``"stop_sequence            ..."`` y cuyos valores son ``"005        ..."``).
+    Sin recortar, cualquier acceso por nombre de columna revienta con KeyError
+    y los identificadores no casan entre tablas.
+    """
+    from pandas.api.types import is_object_dtype, is_string_dtype
+
+    df.columns = [str(column).strip() for column in df.columns]
+    for column in df.columns:
+        series = df[column]
+        # Las tablas se leen con dtype=str, pero el dtype concreto depende de
+        # la version de pandas ("object" hasta 2.x, "str" desde 3.0).
+        if is_string_dtype(series) or is_object_dtype(series):
+            df[column] = series.str.strip()
+    return df
+
+
 def read_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame":
     """Lee una tabla GTFS desde un ZIP o desde una carpeta GTFS extraida."""
     import pandas as pd
 
     feed_path = Path(feed_path)
     if feed_path.is_dir():
-        return pd.read_csv(feed_path / table_name, dtype=str, low_memory=False)
+        return _strip_gtfs_whitespace(
+            pd.read_csv(feed_path / table_name, dtype=str, low_memory=False)
+        )
 
     with ZipFile(feed_path) as zf:
         if table_name not in zf.namelist():
             raise FileNotFoundError(f"{table_name} no se encuentra en {feed_path}")
         with zf.open(table_name) as file:
-            return pd.read_csv(file, dtype=str, low_memory=False)
+            return _strip_gtfs_whitespace(
+                pd.read_csv(file, dtype=str, low_memory=False)
+            )
 
 
 def _read_optional_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame | None":
