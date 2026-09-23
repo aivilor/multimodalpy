@@ -19,6 +19,7 @@ la variable de entorno ``NAP_API_KEY`` (o de un fichero ``.env`` local).
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import re
 import unicodedata
@@ -30,6 +31,8 @@ from . import process_gtfs, process_osm
 if TYPE_CHECKING:
     import geopandas as gpd
 
+
+logger = logging.getLogger(__name__)
 
 NAP_BASE_URL = "https://nap.transportes.gob.es/api/v2"
 
@@ -459,19 +462,19 @@ def download_gtfs_nap_zips(
             ).ratio(),
         )
         region_id = int(best_region["id"])
-        print(
-            f"[aviso] No se pudo deducir la provincia de '{area_name}' desde el "
-            f"fichero de limites; se usa la provincia '{best_region.get('nombre')}' "
-            "por parecido de nombre, que puede no ser la correcta."
+        logger.warning(
+            "No se pudo deducir la provincia de '%s' desde el fichero de limites; "
+            "se usa la provincia '%s' por parecido de nombre, que puede no ser la correcta.",
+            area_name, best_region.get("nombre"),
         )
 
     datasets_response = requests.get(
         f"{base_url}/conjunto-dato/region/{region_id}", headers=headers, timeout=60,
     )
     if datasets_response.status_code == 404:
-        print(
-            f"[aviso] El NAP no tiene conjuntos de datos publicados para la region "
-            f"{region_id}; no se descargara ningun GTFS."
+        logger.info(
+            "El NAP no tiene conjuntos de datos publicados para la region %s; "
+            "no se descargara ningun GTFS.", region_id,
         )
         return []
     datasets_response.raise_for_status()
@@ -588,7 +591,7 @@ def download_gtfs_layers(
                 include_schedule_table=include_schedule_table,
             )
         except Exception as exc:  # noqa: BLE001 - un feed corrupto no debe romper todo
-            print(f"[aviso] No se pudo normalizar el feed {zip_path.name}: {exc}")
+            logger.warning("No se pudo normalizar el feed %s: %s", zip_path.name, exc)
             continue
         results[dataset_name] = {
             "nodes": stops,

@@ -22,10 +22,13 @@ Los modos se reparten automaticamente entre OSM y GTFS:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Sequence
 
 from . import get_area, process_gtfs
+
+logger = logging.getLogger(__name__)
 
 
 # Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
@@ -349,9 +352,9 @@ def main(
         except Exception as exc:  # noqa: BLE001 - se informa y se sigue
             gtfs_error = f"{type(exc).__name__}: {exc}"
             gtfs_results = {}
-            print(
-                f"[aviso] No se pudieron descargar los datos GTFS: {gtfs_error}. "
-                "Se escriben solo las capas disponibles."
+            logger.warning(
+                "No se pudieron descargar los datos GTFS: %s. "
+                "Se escriben solo las capas disponibles.", gtfs_error,
             )
     if gtfs_results:
         GTFS_EDGES_COLUMNS = ["edge_id",
@@ -444,7 +447,6 @@ def main(
     if nap_modes and not gtfs_results:
         # Distinguir "no hay datos publicados" de "la descarga fallo".
         manifest["gtfs_status"] = gtfs_error or "sin conjuntos de datos publicados"
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
     return manifest
 
 
