@@ -98,6 +98,36 @@ def _first_if_list(value: object) -> object:
     return value
 
 
+def _primary_highway(value: object) -> object:
+    """Devuelve una unica etiqueta ``highway`` valida de OSM.
+
+    Cuando osmnx simplifica el grafo y fusiona varias 'ways' con etiquetas
+    distintas en una sola arista, guarda una lista que ``_flatten_to_string``
+    une con ';' (p. ej. ``"footway;steps"``). Ese valor no existe en el
+    vocabulario de OSM, asi que aqui se resuelve quedandose con la primera
+    etiqueta, que si es real. El valor completo se conserva aparte en
+    ``hwy_raw``, de modo que no se pierde informacion.
+
+    Un valor simple se devuelve tal cual. Esto lo diferencia de
+    :func:`_normalize_highway`, que agrupa por velocidad y colapsa cualquier
+    via transitable a pie a ``"footway"``: eso sirve para elegir una velocidad
+    libre, pero no para etiquetar, porque convertiria ``track`` o ``path`` en
+    ``footway`` y se perderia el tipo de via real.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if ";" not in text:
+        return text
+    for token in text.split(";"):
+        token = token.strip()
+        if token:
+            return token
+    return None
+
+
 def derive_topology_nodes_from_edges(
     nodes: "gpd.GeoDataFrame",
     edges: "gpd.GeoDataFrame",
@@ -601,8 +631,9 @@ def normalize_osm_graph(
 # Pipeline completo: grafo OSMnx -> capas finales de nodos / aristas
 # ---------------------------------------------------------------------------
 FINAL_EDGE_COLUMNS = [
-    "osmid", "from_node_id", "to_node_id", "highway", "lanes", "maxspeed",
-    "name", "oneway", "reversed", "length", "tts", "geometry",
+    "osmid", "from_node_id", "to_node_id", "highway", "hwy_raw", "lanes",
+    "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
+    "geometry",
 ]
 FINAL_EDGE_RENAME = {"osmid": "edge_id"}
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
@@ -654,6 +685,17 @@ def build_final_osm_layers(
             edges[col] = edges[col].map(_first_if_list)
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
+
+    # Tras calcular el tiempo de viaje, se dejan ``highway`` y ``maxspeed`` con
+    # un unico valor utilizable y se guarda el tag original de OSM al lado.
+    # Se hace despues de ``add_mode_travel_time`` para que el calculo siga
+    # viendo exactamente los mismos valores que antes.
+    if "highway" in edges.columns:
+        edges["hwy_raw"] = edges["highway"]
+        edges["highway"] = edges["highway"].map(_primary_highway)
+    if "maxspeed" in edges.columns:
+        edges["spd_raw"] = edges["maxspeed"]
+        edges["maxspeed"] = edges["maxspeed"].map(_parse_maxspeed_kmh)
 
     edge_cols = [c for c in FINAL_EDGE_COLUMNS if c in edges.columns]
     edges_final = _clean_for_file(edges[edge_cols]).rename(columns=FINAL_EDGE_RENAME)
