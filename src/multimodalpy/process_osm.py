@@ -101,31 +101,20 @@ def _first_if_list(value: object) -> object:
 def _primary_highway(value: object) -> object:
     """Devuelve una unica etiqueta ``highway`` valida de OSM.
 
-    Cuando osmnx simplifica el grafo y fusiona varias 'ways' con etiquetas
-    distintas en una sola arista, guarda una lista que ``_flatten_to_string``
-    une con ';' (p. ej. ``"footway;steps"``). Ese valor no existe en el
-    vocabulario de OSM, asi que aqui se resuelve quedandose con la primera
-    etiqueta, que si es real. El valor completo se conserva aparte en
-    ``hwy_raw``, de modo que no se pierde informacion.
+    Al simplificar el grafo, osmnx fusiona varias 'ways' en una arista y
+    ``_flatten_to_string`` une sus etiquetas con ';' (``"footway;steps"``), un
+    valor que no existe en OSM. Aqui se resuelve quedandose con la primera; el
+    original se conserva en ``hwy_raw``.
 
-    Un valor simple se devuelve tal cual. Esto lo diferencia de
-    :func:`_normalize_highway`, que agrupa por velocidad y colapsa cualquier
-    via transitable a pie a ``"footway"``: eso sirve para elegir una velocidad
-    libre, pero no para etiquetar, porque convertiria ``track`` o ``path`` en
-    ``footway`` y se perderia el tipo de via real.
+    No confundir con :func:`_normalize_highway`, que agrupa por velocidad libre
+    y colapsa cualquier via transitable a pie a ``"footway"``. Eso sirve para
+    elegir una velocidad, pero no para etiquetar: convertiria ``track`` o
+    ``path`` en ``footway``.
     """
     if value is None:
         return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if ";" not in text:
-        return text
-    for token in text.split(";"):
-        token = token.strip()
-        if token:
-            return token
-    return None
+    tokens = [token.strip() for token in str(value).split(";") if token.strip()]
+    return tokens[0] if tokens else None
 
 
 def derive_topology_nodes_from_edges(
@@ -635,10 +624,9 @@ FINAL_EDGE_COLUMNS = [
     "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
     "geometry",
 ]
-# ``from_node_id`` tiene 12 caracteres y Shapefile lo truncaba a
-# ``from_node_``, con lo que la columna dejaba de casar con la tabla de nodos y
-# se rompia la topologia de la red. Se acorta en los tres formatos para que la
-# columna se llame igual en todos. ``to_node_id`` tiene justo 10 y se conserva.
+# Shapefile truncaba ``from_node_id`` (12 caracteres) a ``from_node_``, con lo
+# que las aristas dejaban de casar con la tabla de nodos. ``to_node_id`` tiene
+# justo 10 y se conserva.
 FINAL_EDGE_RENAME = {"osmid": "edge_id", "from_node_id": "from_node"}
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
@@ -690,10 +678,8 @@ def build_final_osm_layers(
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
 
-    # Tras calcular el tiempo de viaje, se dejan ``highway`` y ``maxspeed`` con
-    # un unico valor utilizable y se guarda el tag original de OSM al lado.
-    # Se hace despues de ``add_mode_travel_time`` para que el calculo siga
-    # viendo exactamente los mismos valores que antes.
+    # Despues de calcular el tiempo de viaje, para que ese calculo siga viendo
+    # los valores originales.
     if "highway" in edges.columns:
         edges["hwy_raw"] = edges["highway"]
         edges["highway"] = edges["highway"].map(_primary_highway)

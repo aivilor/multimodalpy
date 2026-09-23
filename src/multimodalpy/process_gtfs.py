@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -102,7 +102,7 @@ def infer_transport_mode(feed_path: str | Path) -> str:
 
     try:
         routes = read_gtfs_table(feed_path, "routes.txt")
-    except (FileNotFoundError, OSError, ValueError):
+    except (OSError, ValueError, BadZipFile):
         return "bus"
     if "route_type" not in routes.columns:
         return "bus"
