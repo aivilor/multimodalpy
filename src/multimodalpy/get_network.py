@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Sequence
 
@@ -293,7 +294,9 @@ def main(
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
-    gtfs_include_schedule_table: bool = True,
+    multimodal: bool = False,
+    schedule: bool = False,
+    gtfs_zips: bool = False,
 ) -> dict:
     """Descarga y estandariza la red multimodal de un municipio.
 
@@ -335,11 +338,24 @@ def main(
         Periodos punta para el desglose por columnas de la capa de aristas
         GTFS (opcion A). Por defecto: punta_manana 07-09, punta_tarde 17-20,
         resto_del_dia el resto.
-    gtfs_include_schedule_table : bool
-        Si es True (por defecto), ademas de las capas espaciales se escribe
-        una tabla plana ``gtfs_{dataset}_schedule`` con el horario completo
-        viaje-a-viaje (opcion B): tabla de atributos en el .gpkg si
-        ``output_file_type="geopackage"``, o CSV en el resto de formatos.
+    multimodal : bool
+        Reservado para la red multimodal (conexiones entre modos). Todavia no
+        esta implementada, asi que por ahora solo admite False; con True lanza
+        ``NotImplementedError`` en vez de devolver una red incompleta en
+        silencio.
+    schedule : bool
+        Solo aplica si se piden modos de transporte publico. Si es True, ademas
+        de las capas espaciales se escribe una tabla plana
+        ``gtfs_{dataset}_schedule`` con el horario completo viaje a viaje:
+        tabla de atributos dentro del .gpkg si el formato es geopackage, o CSV
+        en la carpeta del dataset en el resto. Por defecto False porque esa
+        tabla es con diferencia lo que mas ocupa: en Gijon sumaba mas de 1 GB
+        del 1,4 GB total de la descarga.
+    gtfs_zips : bool
+        Solo aplica si se piden modos de transporte publico. Si es True se
+        conservan los ZIP GTFS descargados del NAP en ``gtfs_zips/``. Por
+        defecto False: se borran al terminar, ya que solo son la materia prima
+        de las capas y se pueden volver a descargar.
 
     Devuelve
     --------
@@ -367,6 +383,13 @@ def main(
             )
         if normalized not in output_file_types:  # ignora duplicados
             output_file_types.append(normalized)
+
+    if multimodal:
+        raise NotImplementedError(
+            "La red multimodal todavia no esta implementada; main() solo admite "
+            "multimodal=False. El parametro existe para que el codigo que lo "
+            "use no cambie cuando se despliegue."
+        )
 
     osm_modes, nap_modes = _split_modes(modes)
     output_dir = Path(output_path)
@@ -400,16 +423,17 @@ def main(
     # 3) GTFS (bus / tren) via NAP.
     schedule_tables: dict[str, object] = {}
     gtfs_error: str | None = None
+    gtfs_zips_dir = output_dir / "gtfs_zips"
     if nap_modes:
         # Un fallo aqui (404 del NAP, feed corrupto, caida de red) no debe
         # tirar las capas OSM que ya se han construido: se avisa, se anota en
         # el manifiesto y se escribe igualmente lo que si se pudo obtener.
         try:
             gtfs_results = get_area.download_gtfs_layers(
-                area_name, boundary, output_dir / "gtfs_zips",
+                area_name, boundary, gtfs_zips_dir,
                 modes=nap_modes, output_crs=crs, api_key=api_key,
                 hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
-                peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
+                peak_periods=gtfs_peak_periods, include_schedule_table=schedule,
             )
         except Exception as exc:  # noqa: BLE001 - se informa y se sigue
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -460,8 +484,13 @@ def main(
             edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
 
-            if gtfs_include_schedule_table and out.get("schedule") is not None:
+            if schedule and out.get("schedule") is not None:
                 schedule_tables[f"gtfs_{dataset}_schedule"] = out["schedule"]
+
+    if nap_modes and not gtfs_zips:
+        # Los ZIP solo son la materia prima de las capas; se pueden volver a
+        # descargar, asi que por defecto no se dejan ocupando espacio.
+        shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
 
     # 4) Escritura local, una vez por formato solicitado. La descarga y la
     #    normalizacion (pasos 1-3) ya se han hecho una sola vez, asi que pedir
@@ -551,8 +580,12 @@ def _cli(argv: list[str] | None = None) -> None:
         help="Filtra viajes GTFS por ventana horaria, p.ej. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
-        "--no-gtfs-schedule-table", action="store_true",
-        help="No escribir la tabla de horario detallado (opcion B) para GTFS.",
+        "--schedule", action="store_true",
+        help="Escribir tambien la tabla de horario detallado de cada feed GTFS.",
+    )
+    parser.add_argument(
+        "--gtfs-zips", action="store_true",
+        help="Conservar los ZIP GTFS descargados del NAP en vez de borrarlos.",
     )
     args = parser.parse_args(argv)
 
@@ -566,7 +599,8 @@ def _cli(argv: list[str] | None = None) -> None:
         area_code=args.area_code,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
-        gtfs_include_schedule_table=not args.no_gtfs_schedule_table,
+        schedule=args.schedule,
+        gtfs_zips=args.gtfs_zips,
     )
 
 

@@ -212,6 +212,41 @@ viajes.
 
 ---
 
+## Estructura de carpetas de salida
+
+```
+output_path/
+  study_area_boundary.geojson
+  driving/   nodes.geojson  edges.geojson
+  walking/   nodes.geojson  edges.geojson
+  bike/      nodes.geojson  edges.geojson
+  bus/<dataset>/    nodes.geojson  edges.geojson  schedule.csv
+  train/<dataset>/  nodes.geojson  edges.geojson  schedule.csv
+  gtfs_zips/        (solo si gtfs_zips=True)
+  <area>.gpkg       (solo si se pide geopackage)
+```
+
+Con Shapefile cada capa son cinco ficheros (`.shp`, `.shx`, `.dbf`, `.prj`,
+`.cpg`) en su misma carpeta. GeoPackage es un unico fichero en la raiz con
+todas las capas dentro, asi que no se reparte en carpetas.
+
+Que un dataset GTFS vaya a `bus/` o a `train/` se decide leyendo los
+`route_type` de su `routes.txt`, no los metadatos del NAP: alli un mismo
+conjunto puede declararse a la vez como bus y como ferroviario, como pasa con
+Cercanias Renfe.
+
+## Parametros de `main()` que afectan a la salida
+
+| Parametro | Por defecto | Efecto |
+|---|---|---|
+| `output_file_type` | `"geojson"` | Formato o lista de formatos. Con una lista, la descarga y la normalizacion se hacen una sola vez y solo se repite la escritura |
+| `schedule` | `False` | Escribe la tabla de horario viaje a viaje de cada feed. Desactivado por defecto porque es lo que mas ocupa con diferencia: en Gijon, mas de 1 GB de los 1,4 GB de la descarga |
+| `gtfs_zips` | `False` | Conserva los ZIP descargados del NAP. Desactivado por defecto: son solo la materia prima y se pueden volver a descargar |
+| `multimodal` | `False` | Reservado para la red multimodal, aun sin implementar. Con `True` lanza `NotImplementedError` en vez de devolver una red incompleta en silencio |
+| `crs` | `"EPSG:4326"` | CRS de salida de todas las capas |
+
+---
+
 ## Diccionario de abreviaturas
 
 | Abreviatura | Significa |
