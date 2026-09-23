@@ -597,5 +597,8 @@ def download_gtfs_layers(
             "nodes": stops,
             "edges": stop_edges,
             "schedule": schedule,
+            # "bus" o "train", deducido de los route_type del feed. Lo usa
+            # get_network para decidir la carpeta de salida del dataset.
+            "mode": process_gtfs.infer_transport_mode(zip_path),
         }
     return results

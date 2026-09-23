@@ -174,13 +174,14 @@ def _write_schedule_tables(
     output_file_type: str,
     *,
     area_slug: str,
+    layer_paths: dict[str, str],
 ) -> list[str]:
     """Escribe las tablas de horario (una por dataset GTFS) junto a las capas espaciales.
 
     - geopackage: se anaden como tablas de atributos (sin geometria) dentro del
       mismo .gpkg, via sqlite3 (un GeoPackage es una base de datos SQLite).
     - geojson / shapefile / networkx: no admiten tablas no espaciales de forma
-      nativa, asi que se escriben como CSV al lado de las demas capas.
+      nativa, asi que se escriben como CSV en la carpeta del dataset.
     """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -203,9 +204,10 @@ def _write_schedule_tables(
     for name, schedule_df in schedule_tables.items():
         if schedule_df is None or schedule_df.empty:
             continue
-        path = output_dir / f"{name}.csv"
+        path = output_dir / f"{layer_paths.get(name, name)}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         schedule_df.to_csv(path, index=False)
-        written.append(path.name)
+        written.append(str(path.relative_to(output_dir)).replace("\\", "/"))
     return written
 
 
@@ -218,7 +220,17 @@ def _write_layers(
     output_file_type: str,
     *,
     area_slug: str,
+    layer_paths: dict[str, str],
 ) -> list[str]:
+    """Escribe las capas en el formato indicado.
+
+    En GeoJSON y Shapefile cada capa va a su propia carpeta segun el modo
+    (``driving/nodes.geojson``, ``bus/<dataset>/edges.shp``), en vez de dejar
+    decenas de ficheros sueltos en un unico directorio; con Shapefile son
+    ademas cinco ficheros por capa. En GeoPackage no aplica: es un unico
+    fichero con las capas dentro, asi que se deja en la raiz y los nombres de
+    capa se conservan.
+    """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -231,18 +243,18 @@ def _write_layers(
             written.append(f"{gpkg_path.name}::{name}")
         return written
 
+    suffix = {"geojson": ".geojson", "shapefile": ".shp"}.get(output_file_type)
+    if suffix is None:
+        raise ValueError(f"Formato no soportado en _write_layers: {output_file_type}")
+    driver = "GeoJSON" if output_file_type == "geojson" else "ESRI Shapefile"
+
     for name, gdf in layers.items():
         if gdf is None or gdf.empty:
             continue
-        if output_file_type == "geojson":
-            path = output_dir / f"{name}.geojson"
-            gdf.to_file(path, driver="GeoJSON")
-        elif output_file_type == "shapefile":
-            path = output_dir / f"{name}.shp"
-            gdf.to_file(path, driver="ESRI Shapefile")
-        else:
-            raise ValueError(f"Formato no soportado en _write_layers: {output_file_type}")
-        written.append(path.name)
+        path = output_dir / f"{layer_paths.get(name, name)}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        gdf.to_file(path, driver=driver)
+        written.append(str(path.relative_to(output_dir)).replace("\\", "/"))
     return written
 
 
@@ -367,6 +379,10 @@ def main(
     )
 
     layers: dict[str, object] = {"study_area_boundary": boundary.to_crs(crs)}
+    # Ruta relativa (sin extension) de cada capa dentro de la carpeta de salida.
+    # Agrupa por modo para que GeoJSON y Shapefile no dejen decenas de ficheros
+    # sueltos en un unico directorio.
+    layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
     gtfs_results: dict[str, dict[str, object]] = {}
 
@@ -378,6 +394,8 @@ def main(
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
             layers[f"osm_{mode}_edges"] = out["edges"]
+            layer_paths[f"osm_{mode}_nodes"] = f"{mode}/nodes"
+            layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
 
     # 3) GTFS (bus / tren) via NAP.
     schedule_tables: dict[str, object] = {}
@@ -430,6 +448,11 @@ def main(
         for dataset, out in gtfs_results.items():
             nodes_gdf = out["nodes"]
             keep_node_cols = [c for c in GTFS_NODES_COLUMNS if c in nodes_gdf.columns]
+            # "bus" o "train" segun los route_type del feed.
+            gtfs_mode = out.get("mode") or "bus"
+            layer_paths[f"gtfs_{dataset}_nodes"] = f"{gtfs_mode}/{dataset}/nodes"
+            layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
+            layer_paths[f"gtfs_{dataset}_schedule"] = f"{gtfs_mode}/{dataset}/schedule"
             layers[f"gtfs_{dataset}_nodes"] = nodes_gdf[keep_node_cols]
 
             edges_gdf = out["edges"]
@@ -454,21 +477,29 @@ def main(
             )
             files_here.append("study_area_boundary.geojson")
             for mode, out in osm_results.items():
-                path = _osm_graph_to_json(out["graph"], output_dir / f"osm_{mode}_graph.json")
-                files_here.append(path.name)
+                path = _osm_graph_to_json(out["graph"], output_dir / mode / "graph.json")
+                files_here.append(f"{mode}/graph.json")
             for dataset, out in gtfs_results.items():
+                relative = f"{out.get('mode') or 'bus'}/{dataset}/graph.json"
                 path = _gtfs_to_graph_json(
-                    out["nodes"], out["edges"],
-                    output_dir / f"gtfs_{dataset}_graph.json",
+                    out["nodes"], out["edges"], output_dir / relative,
                 )
-                files_here.append(path.name)
+                files_here.append(relative)
             files_here.extend(
-                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+                _write_schedule_tables(
+                    schedule_tables, output_dir, file_type,
+                    area_slug=area_slug, layer_paths=layer_paths,
+                )
             )
         else:
-            files_here = _write_layers(layers, output_dir, file_type, area_slug=area_slug)
+            files_here = _write_layers(
+                layers, output_dir, file_type, area_slug=area_slug, layer_paths=layer_paths,
+            )
             files_here.extend(
-                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+                _write_schedule_tables(
+                    schedule_tables, output_dir, file_type,
+                    area_slug=area_slug, layer_paths=layer_paths,
+                )
             )
         written_by_format[file_type] = files_here
         written.extend(files_here)
