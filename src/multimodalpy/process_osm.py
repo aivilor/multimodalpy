@@ -635,7 +635,11 @@ FINAL_EDGE_COLUMNS = [
     "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
     "geometry",
 ]
-FINAL_EDGE_RENAME = {"osmid": "edge_id"}
+# ``from_node_id`` tiene 12 caracteres y Shapefile lo truncaba a
+# ``from_node_``, con lo que la columna dejaba de casar con la tabla de nodos y
+# se rompia la topologia de la red. Se acorta en los tres formatos para que la
+# columna se llame igual en todos. ``to_node_id`` tiene justo 10 y se conserva.
+FINAL_EDGE_RENAME = {"osmid": "edge_id", "from_node_id": "from_node"}
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
 

@@ -31,6 +31,50 @@ from . import get_area, process_gtfs
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Nombres de columna cortos (limite de 10 caracteres de Shapefile)
+# ---------------------------------------------------------------------------
+# Shapefile trunca a 10 caracteres cualquier nombre de columna mas largo, y
+# resuelve las colisiones resultantes con sufijos numericos, asi que la misma
+# columna acababa llamandose distinto segun el formato de salida. Para que un
+# dato se llame igual en GeoJSON, Shapefile y GeoPackage, los nombres cortos se
+# aplican a los tres por igual.
+#
+# Abreviaturas: m=mean, md=median, mn=min, mx=max, pam=peak_am, ppm=peak_pm,
+# rod=rest_of_day, wd=weekday, we=weekend. El diccionario completo de columnas
+# esta en DATA_SCHEMA.md.
+_GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
+_GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
+
+GTFS_EDGE_RENAME: dict[str, str] = {
+    "from_node_id": "from_node",
+    "route_short_name": "route_sh",
+    "route_long_name": "route_ln",
+    "trip_count": "trips",
+    "days_of_week_summary": "days_week",
+    "hourly_travel_times": "h_tts",
+    "hourly_trip_counts": "h_trips",
+    "travel_time_seconds_mean": "tts_m",
+    "travel_time_seconds_median": "tts_md",
+    "travel_time_seconds_min": "tts_mn",
+    "travel_time_seconds_max": "tts_mx",
+}
+for _period, _p in _GTFS_PERIOD_ABBR.items():
+    GTFS_EDGE_RENAME[f"travel_time_seconds_mean_{_period}"] = f"tts_m_{_p}"
+    GTFS_EDGE_RENAME[f"travel_time_seconds_median_{_period}"] = f"tts_md_{_p}"
+    GTFS_EDGE_RENAME[f"trip_count_{_period}"] = f"trips_{_p}"
+for _day_type, _d in _GTFS_DAY_TYPE_ABBR.items():
+    GTFS_EDGE_RENAME[f"travel_time_seconds_mean_{_day_type}"] = f"tts_m_{_d}"
+    GTFS_EDGE_RENAME[f"trip_count_{_day_type}"] = f"trips_{_d}"
+# Combinacion periodo x tipo de dia: se acortan aun mas (tm_/trp_) porque
+# juntar las cuatro partes no cabe en 10 caracteres de ninguna otra forma.
+for _period, _p in _GTFS_PERIOD_ABBR.items():
+    for _day_type, _d in _GTFS_DAY_TYPE_ABBR.items():
+        GTFS_EDGE_RENAME[f"travel_time_seconds_mean_{_period}_{_day_type}"] = f"tm_{_p}_{_d}"
+        GTFS_EDGE_RENAME[f"trip_count_{_period}_{_day_type}"] = f"trp_{_p}_{_d}"
+del _period, _p, _day_type, _d
+
+
 # Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
 # sinonimo reconocido por ``get_area.OSM_NETWORK_TYPES`` (p. ej. "driving",
 # "coche", "car", "drive" son equivalentes); la capa resultante siempre usa
@@ -390,9 +434,7 @@ def main(
 
             edges_gdf = out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
-            edges_gdf = edges_gdf[keep_cols].rename(
-                columns=lambda c: c.replace("travel_time_seconds_", "tts_")
-            )
+            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
 
             if gtfs_include_schedule_table and out.get("schedule") is not None:
