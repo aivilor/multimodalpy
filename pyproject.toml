@@ -39,6 +39,7 @@ dependencies = [
   "pandas",
   "requests",
   "shapely",
+  "pooch>=1.8",
 ]
 
 
