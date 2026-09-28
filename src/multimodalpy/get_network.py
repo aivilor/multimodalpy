@@ -22,10 +22,60 @@ Los modos se reparten automaticamente entre OSM y GTFS:
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 from pathlib import Path
 from typing import Sequence
 
 from . import get_area, process_gtfs
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Nombres de columna cortos (limite de 10 caracteres de Shapefile)
+# ---------------------------------------------------------------------------
+# Shapefile trunca los nombres mas largos y resuelve las colisiones con sufijos
+# numericos, asi que una misma columna acababa llamandose distinto segun el
+# formato. Los nombres cortos se aplican a los tres formatos por igual.
+# El diccionario completo esta en DATA_SCHEMA.md.
+_GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
+_GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
+
+
+def _build_gtfs_edge_rename() -> dict[str, str]:
+    """Construye el mapa de nombres largos a cortos de la capa de aristas GTFS."""
+    rename = {
+        "from_node_id": "from_node",
+        "route_short_name": "route_sh",
+        "route_long_name": "route_ln",
+        "trip_count": "trips",
+        "days_of_week_summary": "days_week",
+        "hourly_travel_times": "h_tts",
+        "hourly_trip_counts": "h_trips",
+        "travel_time_seconds_mean": "tts_m",
+        "travel_time_seconds_median": "tts_md",
+        "travel_time_seconds_min": "tts_mn",
+        "travel_time_seconds_max": "tts_mx",
+    }
+    for period, short_period in _GTFS_PERIOD_ABBR.items():
+        rename[f"travel_time_seconds_mean_{period}"] = f"tts_m_{short_period}"
+        rename[f"travel_time_seconds_median_{period}"] = f"tts_md_{short_period}"
+        rename[f"trip_count_{period}"] = f"trips_{short_period}"
+    for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
+        rename[f"travel_time_seconds_mean_{day_type}"] = f"tts_m_{short_day}"
+        rename[f"trip_count_{day_type}"] = f"trips_{short_day}"
+    # Periodo x tipo de dia se abrevia mas (tm_/trp_) porque juntar las cuatro
+    # partes no cabe en diez caracteres de ninguna otra forma.
+    for period, short_period in _GTFS_PERIOD_ABBR.items():
+        for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
+            suffix = f"{short_period}_{short_day}"
+            rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{suffix}"
+            rename[f"trip_count_{period}_{day_type}"] = f"trp_{suffix}"
+    return rename
+
+
+GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
 
 
 # Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
@@ -41,6 +91,12 @@ GTFS_MODE_TO_NAP = {
 
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
 VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx"}
+
+# Extension y driver de OGR de los formatos que se escriben capa a capa.
+_FILE_FORMATS = {
+    "geojson": (".geojson", "GeoJSON"),
+    "shapefile": (".shp", "ESRI Shapefile"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +174,11 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
     return output_path
 
 
+def _relative_name(path: Path, root: Path) -> str:
+    """Ruta de ``path`` respecto a ``root``, siempre con '/' como separador."""
+    return path.relative_to(root).as_posix()
+
+
 # ---------------------------------------------------------------------------
 # Escritura de la tabla de horarios (opcion B, tabla plana sin geometria)
 # ---------------------------------------------------------------------------
@@ -127,13 +188,14 @@ def _write_schedule_tables(
     output_file_type: str,
     *,
     area_slug: str,
+    layer_paths: dict[str, str],
 ) -> list[str]:
     """Escribe las tablas de horario (una por dataset GTFS) junto a las capas espaciales.
 
     - geopackage: se anaden como tablas de atributos (sin geometria) dentro del
       mismo .gpkg, via sqlite3 (un GeoPackage es una base de datos SQLite).
     - geojson / shapefile / networkx: no admiten tablas no espaciales de forma
-      nativa, asi que se escriben como CSV al lado de las demas capas.
+      nativa, asi que se escriben como CSV en la carpeta del dataset.
     """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -156,9 +218,10 @@ def _write_schedule_tables(
     for name, schedule_df in schedule_tables.items():
         if schedule_df is None or schedule_df.empty:
             continue
-        path = output_dir / f"{name}.csv"
+        path = output_dir / f"{layer_paths.get(name, name)}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         schedule_df.to_csv(path, index=False)
-        written.append(path.name)
+        written.append(_relative_name(path, output_dir))
     return written
 
 
@@ -171,7 +234,17 @@ def _write_layers(
     output_file_type: str,
     *,
     area_slug: str,
+    layer_paths: dict[str, str],
 ) -> list[str]:
+    """Escribe las capas en el formato indicado.
+
+    En GeoJSON y Shapefile cada capa va a su propia carpeta segun el modo
+    (``driving/nodes.geojson``, ``bus/<dataset>/edges.shp``), en vez de dejar
+    decenas de ficheros sueltos en un unico directorio; con Shapefile son
+    ademas cinco ficheros por capa. En GeoPackage no aplica: es un unico
+    fichero con las capas dentro, asi que se deja en la raiz y los nombres de
+    capa se conservan.
+    """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -184,18 +257,20 @@ def _write_layers(
             written.append(f"{gpkg_path.name}::{name}")
         return written
 
+    try:
+        suffix, driver = _FILE_FORMATS[output_file_type]
+    except KeyError:
+        raise ValueError(
+            f"Formato no soportado en _write_layers: {output_file_type}"
+        ) from None
+
     for name, gdf in layers.items():
         if gdf is None or gdf.empty:
             continue
-        if output_file_type == "geojson":
-            path = output_dir / f"{name}.geojson"
-            gdf.to_file(path, driver="GeoJSON")
-        elif output_file_type == "shapefile":
-            path = output_dir / f"{name}.shp"
-            gdf.to_file(path, driver="ESRI Shapefile")
-        else:
-            raise ValueError(f"Formato no soportado en _write_layers: {output_file_type}")
-        written.append(path.name)
+        path = output_dir / f"{layer_paths.get(name, name)}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        gdf.to_file(path, driver=driver)
+        written.append(_relative_name(path, output_dir))
     return written
 
 
@@ -234,7 +309,9 @@ def main(
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
-    gtfs_include_schedule_table: bool = True,
+    multimodal: bool = False,
+    schedule: bool = False,
+    gtfs_zips: bool = False,
 ) -> dict:
     """Descarga y estandariza la red multimodal de un municipio.
 
@@ -276,17 +353,28 @@ def main(
         Periodos punta para el desglose por columnas de la capa de aristas
         GTFS (opcion A). Por defecto: punta_manana 07-09, punta_tarde 17-20,
         resto_del_dia el resto.
-    gtfs_include_schedule_table : bool
-        Si es True (por defecto), ademas de las capas espaciales se escribe
-        una tabla plana ``gtfs_{dataset}_schedule`` con el horario completo
-        viaje-a-viaje (opcion B): tabla de atributos en el .gpkg si
-        ``output_file_type="geopackage"``, o CSV en el resto de formatos.
+    multimodal : bool
+        Reservado para la red multimodal, aun sin implementar. Solo admite
+        False; con True lanza ``NotImplementedError``.
+    schedule : bool
+        Escribe ademas la tabla de horario viaje a viaje de cada feed GTFS.
+        Desactivado por defecto porque es, con diferencia, lo que mas ocupa de
+        una descarga.
+    gtfs_zips : bool
+        Conserva los ZIP descargados del NAP en ``gtfs_zips/``. Desactivado por
+        defecto: son solo la materia prima de las capas y se pueden volver a
+        descargar.
 
     Devuelve
     --------
     dict
         Manifiesto con el area, los modos, la carpeta y los ficheros escritos.
     """
+    if multimodal:
+        raise NotImplementedError(
+            "La red multimodal todavia no esta implementada; main() solo admite "
+            "multimodal=False."
+        )
     if isinstance(modes, str):
         modes = [modes]
 
@@ -320,6 +408,8 @@ def main(
     )
 
     layers: dict[str, object] = {"study_area_boundary": boundary.to_crs(crs)}
+    # Ruta relativa, sin extension, de cada capa dentro de la carpeta de salida.
+    layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
     gtfs_results: dict[str, dict[str, object]] = {}
 
@@ -331,27 +421,30 @@ def main(
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
             layers[f"osm_{mode}_edges"] = out["edges"]
+            layer_paths[f"osm_{mode}_nodes"] = f"{mode}/nodes"
+            layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
 
     # 3) GTFS (bus / tren) via NAP.
     schedule_tables: dict[str, object] = {}
     gtfs_error: str | None = None
+    gtfs_zips_dir = output_dir / "gtfs_zips"
     if nap_modes:
         # Un fallo aqui (404 del NAP, feed corrupto, caida de red) no debe
         # tirar las capas OSM que ya se han construido: se avisa, se anota en
         # el manifiesto y se escribe igualmente lo que si se pudo obtener.
         try:
             gtfs_results = get_area.download_gtfs_layers(
-                area_name, boundary, output_dir / "gtfs_zips",
+                area_name, boundary, gtfs_zips_dir,
                 modes=nap_modes, output_crs=crs, api_key=api_key,
                 hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
-                peak_periods=gtfs_peak_periods, include_schedule_table=gtfs_include_schedule_table,
+                peak_periods=gtfs_peak_periods, include_schedule_table=schedule,
             )
         except Exception as exc:  # noqa: BLE001 - se informa y se sigue
             gtfs_error = f"{type(exc).__name__}: {exc}"
             gtfs_results = {}
-            print(
-                f"[aviso] No se pudieron descargar los datos GTFS: {gtfs_error}. "
-                "Se escriben solo las capas disponibles."
+            logger.warning(
+                "No se pudieron descargar los datos GTFS: %s. "
+                "Se escriben solo las capas disponibles.", gtfs_error,
             )
     if gtfs_results:
         GTFS_EDGES_COLUMNS = ["edge_id",
@@ -383,17 +476,22 @@ def main(
         for dataset, out in gtfs_results.items():
             nodes_gdf = out["nodes"]
             keep_node_cols = [c for c in GTFS_NODES_COLUMNS if c in nodes_gdf.columns]
+            gtfs_mode = out.get("mode") or "bus"
+            layer_paths[f"gtfs_{dataset}_nodes"] = f"{gtfs_mode}/{dataset}/nodes"
+            layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
+            layer_paths[f"gtfs_{dataset}_schedule"] = f"{gtfs_mode}/{dataset}/schedule"
             layers[f"gtfs_{dataset}_nodes"] = nodes_gdf[keep_node_cols]
 
             edges_gdf = out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
-            edges_gdf = edges_gdf[keep_cols].rename(
-                columns=lambda c: c.replace("travel_time_seconds_", "tts_")
-            )
+            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
 
-            if gtfs_include_schedule_table and out.get("schedule") is not None:
+            if schedule and out.get("schedule") is not None:
                 schedule_tables[f"gtfs_{dataset}_schedule"] = out["schedule"]
+
+    if nap_modes and not gtfs_zips:
+        shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
 
     # 4) Escritura local, una vez por formato solicitado. La descarga y la
     #    normalizacion (pasos 1-3) ya se han hecho una sola vez, asi que pedir
@@ -409,21 +507,29 @@ def main(
             )
             files_here.append("study_area_boundary.geojson")
             for mode, out in osm_results.items():
-                path = _osm_graph_to_json(out["graph"], output_dir / f"osm_{mode}_graph.json")
-                files_here.append(path.name)
+                relative = f"{mode}/graph.json"
+                _osm_graph_to_json(out["graph"], output_dir / relative)
+                files_here.append(relative)
             for dataset, out in gtfs_results.items():
-                path = _gtfs_to_graph_json(
-                    out["nodes"], out["edges"],
-                    output_dir / f"gtfs_{dataset}_graph.json",
-                )
-                files_here.append(path.name)
+                relative = f"{out.get('mode') or 'bus'}/{dataset}/graph.json"
+                _gtfs_to_graph_json(out["nodes"], out["edges"], output_dir / relative)
+                files_here.append(relative)
             files_here.extend(
-                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+                _write_schedule_tables(
+                    schedule_tables, output_dir, file_type,
+                    area_slug=area_slug, layer_paths=layer_paths,
+                )
             )
         else:
-            files_here = _write_layers(layers, output_dir, file_type, area_slug=area_slug)
+            files_here = _write_layers(
+                layers, output_dir, file_type,
+                area_slug=area_slug, layer_paths=layer_paths,
+            )
             files_here.extend(
-                _write_schedule_tables(schedule_tables, output_dir, file_type, area_slug=area_slug)
+                _write_schedule_tables(
+                    schedule_tables, output_dir, file_type,
+                    area_slug=area_slug, layer_paths=layer_paths,
+                )
             )
         written_by_format[file_type] = files_here
         written.extend(files_here)
@@ -444,7 +550,6 @@ def main(
     if nap_modes and not gtfs_results:
         # Distinguir "no hay datos publicados" de "la descarga fallo".
         manifest["gtfs_status"] = gtfs_error or "sin conjuntos de datos publicados"
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
     return manifest
 
 
@@ -476,8 +581,12 @@ def _cli(argv: list[str] | None = None) -> None:
         help="Filtra viajes GTFS por ventana horaria, p.ej. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
-        "--no-gtfs-schedule-table", action="store_true",
-        help="No escribir la tabla de horario detallado (opcion B) para GTFS.",
+        "--schedule", action="store_true",
+        help="Escribir tambien la tabla de horario detallado de cada feed GTFS.",
+    )
+    parser.add_argument(
+        "--gtfs-zips", action="store_true",
+        help="Conservar los ZIP GTFS descargados del NAP en vez de borrarlos.",
     )
     args = parser.parse_args(argv)
 
@@ -491,7 +600,8 @@ def _cli(argv: list[str] | None = None) -> None:
         area_code=args.area_code,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
-        gtfs_include_schedule_table=not args.no_gtfs_schedule_table,
+        schedule=args.schedule,
+        gtfs_zips=args.gtfs_zips,
     )
 
 
