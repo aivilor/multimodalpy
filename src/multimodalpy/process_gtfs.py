@@ -34,7 +34,7 @@ SOURCE_CRS = "EPSG:4326"
 # Periodos horarios por defecto para el desglose de la opcion A.
 # "rest_of_day" se asigna automaticamente a cualquier hora no cubierta aqui.
 DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
-    "peak_am": (7, 9),    # punta manana, 07:00-09:00
+    "peak_am": (7, 9),  # punta manana, 07:00-09:00
     "peak_pm": (17, 20),  # punta tarde, 17:00-20:00
 }
 
@@ -114,7 +114,9 @@ def infer_transport_mode(feed_path: str | Path) -> str:
     return "train" if rail * 2 > len(route_types) else "bus"
 
 
-def _read_optional_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame | None":
+def _read_optional_gtfs_table(
+    feed_path: str | Path, table_name: str
+) -> "pd.DataFrame | None":
     try:
         return read_gtfs_table(feed_path, table_name)
     except FileNotFoundError:
@@ -126,7 +128,9 @@ def _existing_columns(df: "pd.DataFrame", columns: list[str]) -> list[str]:
 
 
 def _unique_join(values) -> str | None:
-    clean = sorted({str(value) for value in values if value is not None and str(value) != "nan"})
+    clean = sorted(
+        {str(value) for value in values if value is not None and str(value) != "nan"}
+    )
     return "|".join(clean) if clean else None
 
 
@@ -173,7 +177,9 @@ def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> "str | None":
     return f"{band_start:02d}-{band_end:02d}"
 
 
-def classify_period(seconds, peak_periods: dict[str, tuple[int, int]] | None = None) -> "str | None":
+def classify_period(
+    seconds, peak_periods: dict[str, tuple[int, int]] | None = None
+) -> "str | None":
     """Clasifica un instante (segundos desde medianoche) en punta_manana /
     punta_tarde / resto_del_dia, segun ``peak_periods`` (por defecto
     ``DEFAULT_PEAK_PERIODS``). Devuelve ``None`` si no hay hora disponible.
@@ -190,7 +196,15 @@ def classify_period(seconds, peak_periods: dict[str, tuple[int, int]] | None = N
     return "rest_of_day"
 
 
-_WEEKDAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_WEEKDAY_ORDER = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
 
 
 def _union_days_of_week(values) -> str | None:
@@ -335,7 +349,9 @@ def _attach_service_days(
     # las banderas a 0 y delegan las fechas concretas a calendar_dates.txt;
     # esos servicios se tratan igual que si no estuvieran en calendar.txt.
     strong_ids = set(
-        cal_runs_weekday[cal_runs_weekday.fillna(False) | cal_runs_weekend.fillna(False)].index
+        cal_runs_weekday[
+            cal_runs_weekday.fillna(False) | cal_runs_weekend.fillna(False)
+        ].index
     )
 
     added_counts = pd.Series(dtype="float64")
@@ -356,27 +372,39 @@ def _attach_service_days(
         # semanales a 0.
         if "date" in cd.columns:
             added_rows = cd[cd["exception_type"] == 1].copy()
-            added_rows["weekday_name"] = pd.to_datetime(
-                added_rows["date"], format="%Y%m%d", errors="coerce"
-            ).dt.day_name().str.lower()
+            added_rows["weekday_name"] = (
+                pd.to_datetime(added_rows["date"], format="%Y%m%d", errors="coerce")
+                .dt.day_name()
+                .str.lower()
+            )
             added_rows = added_rows.dropna(subset=["weekday_name"])
             if not added_rows.empty:
                 inferred_dow = added_rows.groupby("service_id")["weekday_name"].agg(
-                    lambda names: "|".join(day for day in _WEEKDAY_ORDER if day in set(names))
+                    lambda names: "|".join(
+                        day for day in _WEEKDAY_ORDER if day in set(names)
+                    )
                 )
-                inferred_runs_weekday = added_rows.groupby("service_id")["weekday_name"].agg(
-                    lambda names: any(day in weekday_cols for day in names)
-                ).astype("boolean")
-                inferred_runs_weekend = added_rows.groupby("service_id")["weekday_name"].agg(
-                    lambda names: any(day in weekend_cols for day in names)
-                ).astype("boolean")
+                inferred_runs_weekday = (
+                    added_rows.groupby("service_id")["weekday_name"]
+                    .agg(lambda names: any(day in weekday_cols for day in names))
+                    .astype("boolean")
+                )
+                inferred_runs_weekend = (
+                    added_rows.groupby("service_id")["weekday_name"]
+                    .agg(lambda names: any(day in weekend_cols for day in names))
+                    .astype("boolean")
+                )
 
     # ``days_active``: recuento declarado en calendar.txt, mas las fechas
     # anadidas y menos las eliminadas en calendar_dates.txt (si un servicio
     # es "debil" en calendar.txt, cal_days_active es 0 y el resultado queda
     # como el recuento puro de fechas de calendar_dates.txt).
-    service_days = cal_days_active.add(added_counts, fill_value=0).sub(removed_counts, fill_value=0)
-    service_days = service_days.clip(lower=0) if not service_days.empty else service_days
+    service_days = cal_days_active.add(added_counts, fill_value=0).sub(
+        removed_counts, fill_value=0
+    )
+    service_days = (
+        service_days.clip(lower=0) if not service_days.empty else service_days
+    )
 
     # ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend``: para los
     # servicios "fuertes" (patron semanal real en calendar.txt) se respeta
@@ -399,20 +427,34 @@ def _attach_service_days(
         inf_rwe_r = inferred_runs_weekend.reindex(all_ids)
 
         service_dow = cal_dow_r.where(is_strong, inf_dow_r.combine_first(cal_dow_r))
-        service_runs_weekday = cal_rw_r.where(is_strong, inf_rw_r.combine_first(cal_rw_r))
-        service_runs_weekend = cal_rwe_r.where(is_strong, inf_rwe_r.combine_first(cal_rwe_r))
+        service_runs_weekday = cal_rw_r.where(
+            is_strong, inf_rw_r.combine_first(cal_rw_r)
+        )
+        service_runs_weekend = cal_rwe_r.where(
+            is_strong, inf_rwe_r.combine_first(cal_rwe_r)
+        )
 
-
-    trips["days_active"] = pd.NA if service_days.empty else trips["service_id"].map(service_days)
-    trips["active_days_of_week"] = pd.NA if service_dow.empty else trips["service_id"].map(service_dow)
+    trips["days_active"] = (
+        pd.NA if service_days.empty else trips["service_id"].map(service_days)
+    )
+    trips["active_days_of_week"] = (
+        pd.NA if service_dow.empty else trips["service_id"].map(service_dow)
+    )
     trips["runs_weekday"] = (
-        pd.NA if service_runs_weekday.empty else trips["service_id"].map(service_runs_weekday)
+        pd.NA
+        if service_runs_weekday.empty
+        else trips["service_id"].map(service_runs_weekday)
     )
     trips["runs_weekend"] = (
-        pd.NA if service_runs_weekend.empty else trips["service_id"].map(service_runs_weekend)
+        pd.NA
+        if service_runs_weekend.empty
+        else trips["service_id"].map(service_runs_weekend)
     )
     trips["day_type"] = trips.apply(
-        lambda row: _classify_day_type(row.get("runs_weekday"), row.get("runs_weekend")), axis=1
+        lambda row: _classify_day_type(
+            row.get("runs_weekday"), row.get("runs_weekend")
+        ),
+        axis=1,
     )
     return trips
 
@@ -456,16 +498,24 @@ def _build_stop_to_stop_trip_records(
 
     work["next_stop_id"] = work.groupby("trip_id")["stop_id"].shift(-1)
     work["next_arrival_seconds"] = work.groupby("trip_id")["arrival_seconds"].shift(-1)
-    work["next_arrival_time"] = work.groupby("trip_id")["arrival_time"].shift(-1) if "arrival_time" in work.columns else None
+    work["next_arrival_time"] = (
+        work.groupby("trip_id")["arrival_time"].shift(-1)
+        if "arrival_time" in work.columns
+        else None
+    )
     work = work.dropna(subset=["next_stop_id"]).copy()
 
-    work["travel_time_seconds"] = work["next_arrival_seconds"] - work["departure_seconds"]
+    work["travel_time_seconds"] = (
+        work["next_arrival_seconds"] - work["departure_seconds"]
+    )
     work.loc[work["travel_time_seconds"] < 0, "travel_time_seconds"] = float("nan")
 
     work["hour_band"] = work["departure_seconds"].apply(
         lambda s: seconds_to_hour_band(s, band_size_hours=hour_band_size)
     )
-    work["period"] = work["departure_seconds"].apply(lambda s: classify_period(s, peak_periods))
+    work["period"] = work["departure_seconds"].apply(
+        lambda s: classify_period(s, peak_periods)
+    )
 
     if hour_range is not None:
         start_h, end_h = hour_range
@@ -475,22 +525,38 @@ def _build_stop_to_stop_trip_records(
     stop_lookup = stops[["stop_id", "stop_name", "stop_lat", "stop_lon"]].copy()
     stop_lookup["stop_lat"] = pd.to_numeric(stop_lookup["stop_lat"], errors="coerce")
     stop_lookup["stop_lon"] = pd.to_numeric(stop_lookup["stop_lon"], errors="coerce")
-    stop_lookup = stop_lookup.dropna(subset=["stop_lat", "stop_lon"]).drop_duplicates("stop_id")
+    stop_lookup = stop_lookup.dropna(subset=["stop_lat", "stop_lon"]).drop_duplicates(
+        "stop_id"
+    )
 
-    from_lookup = stop_lookup.rename(columns={
-        "stop_id": "from_node_id", "stop_name": "from_stop_name",
-        "stop_lat": "from_stop_lat", "stop_lon": "from_stop_lon",
-    })
-    to_lookup = stop_lookup.rename(columns={
-        "stop_id": "to_node_id", "stop_name": "to_stop_name",
-        "stop_lat": "to_stop_lat", "stop_lon": "to_stop_lon",
-    })
+    from_lookup = stop_lookup.rename(
+        columns={
+            "stop_id": "from_node_id",
+            "stop_name": "from_stop_name",
+            "stop_lat": "from_stop_lat",
+            "stop_lon": "from_stop_lon",
+        }
+    )
+    to_lookup = stop_lookup.rename(
+        columns={
+            "stop_id": "to_node_id",
+            "stop_name": "to_stop_name",
+            "stop_lat": "to_stop_lat",
+            "stop_lon": "to_stop_lon",
+        }
+    )
 
-    edges = work.rename(columns={"stop_id": "from_node_id", "next_stop_id": "to_node_id"}).copy()
+    edges = work.rename(
+        columns={"stop_id": "from_node_id", "next_stop_id": "to_node_id"}
+    ).copy()
 
     trips_work = _attach_service_days(trips, calendar, calendar_dates)
 
-    if frequencies is not None and not frequencies.empty and "trip_id" in frequencies.columns:
+    if (
+        frequencies is not None
+        and not frequencies.empty
+        and "trip_id" in frequencies.columns
+    ):
         freq = frequencies.copy()
         freq["headway_secs"] = pd.to_numeric(freq["headway_secs"], errors="coerce")
         freq["start_seconds"] = freq["start_time"].apply(gtfs_time_to_seconds)
@@ -506,19 +572,43 @@ def _build_stop_to_stop_trip_records(
     trip_cols = _existing_columns(
         trips_work,
         [
-            "trip_id", "route_id", "service_id", "shape_id", "trip_headsign",
-            "days_active", "active_days_of_week", "runs_weekday", "runs_weekend",
-            "day_type", "frequency_trip_count",
+            "trip_id",
+            "route_id",
+            "service_id",
+            "shape_id",
+            "trip_headsign",
+            "days_active",
+            "active_days_of_week",
+            "runs_weekday",
+            "runs_weekend",
+            "day_type",
+            "frequency_trip_count",
         ],
     )
-    route_cols = _existing_columns(routes, ["route_id", "route_short_name", "route_long_name", "route_type"])
-    edges = edges.merge(trips_work[trip_cols].drop_duplicates(subset=["trip_id"]), on="trip_id", how="left")
+    route_cols = _existing_columns(
+        routes, ["route_id", "route_short_name", "route_long_name", "route_type"]
+    )
+    edges = edges.merge(
+        trips_work[trip_cols].drop_duplicates(subset=["trip_id"]),
+        on="trip_id",
+        how="left",
+    )
     if "route_id" in route_cols:
-        edges = edges.merge(routes[route_cols].drop_duplicates(), on="route_id", how="left")
+        edges = edges.merge(
+            routes[route_cols].drop_duplicates(), on="route_id", how="left"
+        )
     edges = edges.merge(from_lookup, on="from_node_id", how="left")
     edges = edges.merge(to_lookup, on="to_node_id", how="left")
-    edges = edges.dropna(subset=["from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat"]).copy()
-    edges["edge_id"] = dataset_name + "_" + edges["from_node_id"].astype(str) + "_" + edges["to_node_id"].astype(str)
+    edges = edges.dropna(
+        subset=["from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat"]
+    ).copy()
+    edges["edge_id"] = (
+        dataset_name
+        + "_"
+        + edges["from_node_id"].astype(str)
+        + "_"
+        + edges["to_node_id"].astype(str)
+    )
     return edges
 
 
@@ -543,17 +633,41 @@ def build_gtfs_schedule_table(
     granularidad en la capa espacial agregada.
     """
     records = _build_stop_to_stop_trip_records(
-        stop_times, stops, trips, routes,
+        stop_times,
+        stops,
+        trips,
+        routes,
         dataset_name=dataset_name,
-        calendar=calendar, calendar_dates=calendar_dates, frequencies=frequencies,
-        hour_band_size=hour_band_size, hour_range=hour_range, peak_periods=peak_periods,
+        calendar=calendar,
+        calendar_dates=calendar_dates,
+        frequencies=frequencies,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
     )
-    columns = _existing_columns(records, [
-        "edge_id", "trip_id", "route_id", "route_short_name", "trip_headsign",
-        "from_node_id", "to_node_id", "departure_time", "arrival_time",
-        "travel_time_seconds", "hour_band", "period", "service_id", "days_active",
-        "active_days_of_week", "runs_weekday", "runs_weekend", "day_type",
-    ])
+    columns = _existing_columns(
+        records,
+        [
+            "edge_id",
+            "trip_id",
+            "route_id",
+            "route_short_name",
+            "trip_headsign",
+            "from_node_id",
+            "to_node_id",
+            "departure_time",
+            "arrival_time",
+            "travel_time_seconds",
+            "hour_band",
+            "period",
+            "service_id",
+            "days_active",
+            "active_days_of_week",
+            "runs_weekday",
+            "runs_weekend",
+            "day_type",
+        ],
+    )
     return records[columns].reset_index(drop=True)
 
 
@@ -573,18 +687,27 @@ def _period_pivot_columns(
     vacias, para que el merge posterior sea consistente."""
     import pandas as pd
 
-    all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + ["rest_of_day"]
+    all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
+        "rest_of_day"
+    ]
     period_rows = rows.dropna(subset=["period"])
     if not period_rows.empty:
-        period_grouped = period_rows.groupby(group_cols + ["period"], dropna=False).agg(
-            travel_time_seconds_mean=("travel_time_seconds", "mean"),
-            trip_count=("trip_id", "nunique"),
-        ).reset_index()
+        period_grouped = (
+            period_rows.groupby(group_cols + ["period"], dropna=False)
+            .agg(
+                travel_time_seconds_mean=("travel_time_seconds", "mean"),
+                trip_count=("trip_id", "nunique"),
+            )
+            .reset_index()
+        )
         pivoted = period_grouped.pivot_table(
-            index=group_cols, columns="period",
+            index=group_cols,
+            columns="period",
             values=["travel_time_seconds_mean", "trip_count"],
         )
-        pivoted.columns = [f"{metric}_{period}{suffix}" for metric, period in pivoted.columns]
+        pivoted.columns = [
+            f"{metric}_{period}{suffix}" for metric, period in pivoted.columns
+        ]
         pivoted = pivoted.reset_index()
     else:
         pivoted = pd.DataFrame(columns=group_cols)
@@ -647,18 +770,34 @@ def build_gtfs_stop_to_stop_edges_gdf(
     from shapely.geometry import LineString
 
     edges = _build_stop_to_stop_trip_records(
-        stop_times, stops, trips, routes,
+        stop_times,
+        stops,
+        trips,
+        routes,
         dataset_name=dataset_name,
-        calendar=calendar, calendar_dates=calendar_dates, frequencies=frequencies,
-        hour_band_size=hour_band_size, hour_range=hour_range, peak_periods=peak_periods,
+        calendar=calendar,
+        calendar_dates=calendar_dates,
+        frequencies=frequencies,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
     )
 
     group_cols = _existing_columns(
         edges,
         [
-            "from_node_id", "to_node_id", "route_id", "route_short_name", "route_long_name",
-            "route_type", "from_stop_name", "to_stop_name",
-            "from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat",
+            "from_node_id",
+            "to_node_id",
+            "route_id",
+            "route_short_name",
+            "route_long_name",
+            "route_type",
+            "from_stop_name",
+            "to_stop_name",
+            "from_stop_lon",
+            "from_stop_lat",
+            "to_stop_lon",
+            "to_stop_lat",
         ],
     )
 
@@ -681,7 +820,9 @@ def build_gtfs_stop_to_stop_edges_gdf(
     # que circula ambos tipos de dia (p.ej. servicio diario) cuenta en las
     # dos columnas; uno que solo circula entre semana o solo en fin de semana
     # cuenta solo en la suya. ---
-    all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + ["rest_of_day"]
+    all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
+        "rest_of_day"
+    ]
     day_type_masks = {
         "weekday": edges.get("runs_weekday"),
         "weekend": edges.get("runs_weekend"),
@@ -700,13 +841,20 @@ def build_gtfs_stop_to_stop_edges_gdf(
                 for period_name in all_period_names:
                     grouped[f"{metric}_{period_name}_{day_type_name}"] = None
             continue
-        day_grouped = day_rows.groupby(group_cols, dropna=False).agg(
-            travel_time_seconds_mean=("travel_time_seconds", "mean"),
-            trip_count=("trip_id", "nunique"),
-        ).reset_index().rename(columns={
-            "travel_time_seconds_mean": f"travel_time_seconds_mean_{day_type_name}",
-            "trip_count": f"trip_count_{day_type_name}",
-        })
+        day_grouped = (
+            day_rows.groupby(group_cols, dropna=False)
+            .agg(
+                travel_time_seconds_mean=("travel_time_seconds", "mean"),
+                trip_count=("trip_id", "nunique"),
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "travel_time_seconds_mean": f"travel_time_seconds_mean_{day_type_name}",
+                    "trip_count": f"trip_count_{day_type_name}",
+                }
+            )
+        )
         grouped = grouped.merge(day_grouped, on=group_cols, how="left")
 
         day_period_pivot = _period_pivot_columns(
@@ -732,21 +880,31 @@ def build_gtfs_stop_to_stop_edges_gdf(
     if include_hourly_summary:
         hour_rows = edges.dropna(subset=["hour_band"])
         if not hour_rows.empty:
-            hour_grouped = hour_rows.groupby(group_cols + ["hour_band"], dropna=False).agg(
-                travel_time_seconds_mean=("travel_time_seconds", "mean"),
-                trip_count=("trip_id", "nunique"),
-            ).reset_index()
-            packed = hour_grouped.groupby(group_cols).apply(
-                lambda df: pd.Series({
-                    "hourly_travel_times": _pack_key_value(
-                        df.set_index("hour_band")["travel_time_seconds_mean"]
+            hour_grouped = (
+                hour_rows.groupby(group_cols + ["hour_band"], dropna=False)
+                .agg(
+                    travel_time_seconds_mean=("travel_time_seconds", "mean"),
+                    trip_count=("trip_id", "nunique"),
+                )
+                .reset_index()
+            )
+            packed = (
+                hour_grouped.groupby(group_cols)
+                .apply(
+                    lambda df: pd.Series(
+                        {
+                            "hourly_travel_times": _pack_key_value(
+                                df.set_index("hour_band")["travel_time_seconds_mean"]
+                            ),
+                            "hourly_trip_counts": _pack_key_value(
+                                df.set_index("hour_band")["trip_count"]
+                            ),
+                        }
                     ),
-                    "hourly_trip_counts": _pack_key_value(
-                        df.set_index("hour_band")["trip_count"]
-                    ),
-                }),
-                include_groups=False,
-            ).reset_index()
+                    include_groups=False,
+                )
+                .reset_index()
+            )
             grouped = grouped.merge(packed, on=group_cols, how="left")
         for col in ("hourly_travel_times", "hourly_trip_counts"):
             if col not in grouped.columns:
@@ -754,7 +912,10 @@ def build_gtfs_stop_to_stop_edges_gdf(
 
     grouped["geometry"] = grouped.apply(
         lambda row: LineString(
-            [(row["from_stop_lon"], row["from_stop_lat"]), (row["to_stop_lon"], row["to_stop_lat"])]
+            [
+                (row["from_stop_lon"], row["from_stop_lat"]),
+                (row["to_stop_lon"], row["to_stop_lat"]),
+            ]
         ),
         axis=1,
     )
@@ -762,9 +923,14 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf = _filter_by_geometry(gdf, filter_geometry)
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
-    gdf["edge_id"] = dataset_name + "_" + gdf["from_node_id"].astype(str) + "_" + gdf["to_node_id"].astype(str)
+    gdf["edge_id"] = (
+        dataset_name
+        + "_"
+        + gdf["from_node_id"].astype(str)
+        + "_"
+        + gdf["to_node_id"].astype(str)
+    )
     return gdf
-
 
 
 def normalize_gtfs_feed(
@@ -805,24 +971,42 @@ def normalize_gtfs_feed(
     frequencies = _read_optional_gtfs_table(feed_path, "frequencies.txt")
 
     stops_gdf = build_gtfs_stops_gdf(
-        stops, dataset_name=dataset_name, layer_id=layer_id, filter_geometry=filter_geometry,
+        stops,
+        dataset_name=dataset_name,
+        layer_id=layer_id,
+        filter_geometry=filter_geometry,
     )
     stop_edges_gdf = build_gtfs_stop_to_stop_edges_gdf(
-        stop_times, stops, trips, routes,
-        dataset_name=dataset_name, layer_id=layer_id, filter_geometry=filter_geometry,
-        calendar=calendar, calendar_dates=calendar_dates, frequencies=frequencies,
-        hour_band_size=hour_band_size, hour_range=hour_range, peak_periods=peak_periods,
+        stop_times,
+        stops,
+        trips,
+        routes,
+        dataset_name=dataset_name,
+        layer_id=layer_id,
+        filter_geometry=filter_geometry,
+        calendar=calendar,
+        calendar_dates=calendar_dates,
+        frequencies=frequencies,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
         include_hourly_summary=include_hourly_summary,
     )
-
 
     schedule_df = None
     if include_schedule_table:
         schedule_df = build_gtfs_schedule_table(
-            stop_times, stops, trips, routes,
+            stop_times,
+            stops,
+            trips,
+            routes,
             dataset_name=dataset_name,
-            calendar=calendar, calendar_dates=calendar_dates, frequencies=frequencies,
-            hour_band_size=hour_band_size, hour_range=hour_range, peak_periods=peak_periods,
+            calendar=calendar,
+            calendar_dates=calendar_dates,
+            frequencies=frequencies,
+            hour_band_size=hour_band_size,
+            hour_range=hour_range,
+            peak_periods=peak_periods,
         )
 
     if target_crs:

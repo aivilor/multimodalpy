@@ -153,9 +153,7 @@ def backends(monkeypatch, boundary):
 # ---------------------------------------------------------------------------
 def test_gtfs_edge_rename_fits_shapefile_limit():
     too_long = {
-        new: old
-        for old, new in get_network.GTFS_EDGE_RENAME.items()
-        if len(new) > 10
+        new: old for old, new in get_network.GTFS_EDGE_RENAME.items() if len(new) > 10
     }
     assert too_long == {}
 
@@ -409,9 +407,7 @@ def test_main_rejects_unknown_mode(tmp_path):
 # ---------------------------------------------------------------------------
 def test_main_osm_geojson_writes_one_folder_per_mode(tmp_path, backends):
     out = tmp_path / "out"
-    manifest = get_network.main(
-        "Valencia", modes=["walking", "bike"], output_path=out
-    )
+    manifest = get_network.main("Valencia", modes=["walking", "bike"], output_path=out)
 
     expected = {
         "study_area_boundary.geojson",
@@ -570,9 +566,7 @@ def test_main_shapefile_writes_layer_files(tmp_path, backends):
 # main(): GTFS
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("mode", "nap_id"), [("bus", 1), ("train", 2)])
-def test_main_gtfs_writes_filtered_and_renamed_layers(
-    tmp_path, backends, mode, nap_id
-):
+def test_main_gtfs_writes_filtered_and_renamed_layers(tmp_path, backends, mode, nap_id):
     backends["gtfs_result"] = {"ds1": make_gtfs_result(mode)}
     manifest = get_network.main(
         "Valencia", modes=[mode], output_path=tmp_path, api_key="secret"
@@ -632,9 +626,7 @@ def test_main_removes_gtfs_zips_unless_asked_to_keep_them(
     assert (tmp_path / "gtfs_zips").exists() is keep_zips
 
 
-def test_main_keeps_osm_layers_when_gtfs_download_fails(
-    tmp_path, backends, caplog
-):
+def test_main_keeps_osm_layers_when_gtfs_download_fails(tmp_path, backends, caplog):
     backends["gtfs_error"] = RuntimeError("NAP down")
     with caplog.at_level(logging.WARNING):
         manifest = get_network.main(

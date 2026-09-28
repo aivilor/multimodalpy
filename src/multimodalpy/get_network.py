@@ -130,7 +130,8 @@ def _osm_graph_to_json(graph: object, output_path: Path) -> Path:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(json_graph.node_link_data(safe), ensure_ascii=False), encoding="utf-8"
+        json.dumps(json_graph.node_link_data(safe), ensure_ascii=False),
+        encoding="utf-8",
     )
     return output_path
 
@@ -163,13 +164,16 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
                 route_id=_json_safe(row.get("route_id")),
                 route_short_name=_json_safe(row.get("route_short_name")),
                 trip_count=_json_safe(row.get("trip_count")),
-                travel_time_seconds_mean=_json_safe(row.get("travel_time_seconds_mean")),
+                travel_time_seconds_mean=_json_safe(
+                    row.get("travel_time_seconds_mean")
+                ),
                 hour_band=_json_safe(row.get("hour_band")),
             )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False), encoding="utf-8"
+        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
+        encoding="utf-8",
     )
     return output_path
 
@@ -382,7 +386,9 @@ def main(
     # (["geojson", "shapefile"]). Con varias, los pasos 1-3 se ejecutan una
     # sola vez y solo se repite la escritura.
     single_output_type = isinstance(output_file_type, str)
-    requested_types = [output_file_type] if single_output_type else list(output_file_type)
+    requested_types = (
+        [output_file_type] if single_output_type else list(output_file_type)
+    )
     if not requested_types:
         raise ValueError("output_file_type no puede estar vacio.")
 
@@ -404,7 +410,10 @@ def main(
 
     # 1) Resolver el area de estudio (siempre en WGS84 para osmnx / recorte GTFS).
     boundary = get_area.find_area_boundary(
-        area_name, boundaries_path, area_code=area_code, target_crs="EPSG:4326",
+        area_name,
+        boundaries_path,
+        area_code=area_code,
+        target_crs="EPSG:4326",
     )
 
     layers: dict[str, object] = {"study_area_boundary": boundary.to_crs(crs)}
@@ -416,7 +425,9 @@ def main(
     # 2) OSM.
     if osm_modes:
         osm_results = get_area.download_osm_layers(
-            boundary, modes=osm_modes, output_crs=crs,
+            boundary,
+            modes=osm_modes,
+            output_crs=crs,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
@@ -434,41 +445,68 @@ def main(
         # el manifiesto y se escribe igualmente lo que si se pudo obtener.
         try:
             gtfs_results = get_area.download_gtfs_layers(
-                area_name, boundary, gtfs_zips_dir,
-                modes=nap_modes, output_crs=crs, api_key=api_key,
-                hour_band_size=gtfs_hour_band_size, hour_range=gtfs_hour_range,
-                peak_periods=gtfs_peak_periods, include_schedule_table=schedule,
+                area_name,
+                boundary,
+                gtfs_zips_dir,
+                modes=nap_modes,
+                output_crs=crs,
+                api_key=api_key,
+                hour_band_size=gtfs_hour_band_size,
+                hour_range=gtfs_hour_range,
+                peak_periods=gtfs_peak_periods,
+                include_schedule_table=schedule,
             )
         except Exception as exc:  # noqa: BLE001 - se informa y se sigue
             gtfs_error = f"{type(exc).__name__}: {exc}"
             gtfs_results = {}
             logger.warning(
                 "No se pudieron descargar los datos GTFS: %s. "
-                "Se escriben solo las capas disponibles.", gtfs_error,
+                "Se escriben solo las capas disponibles.",
+                gtfs_error,
             )
     if gtfs_results:
-        GTFS_EDGES_COLUMNS = ["edge_id",
-            "from_node_id", "to_node_id", "route_id", "route_short_name", "route_long_name",
-            "trip_count", "travel_time_seconds_mean", "travel_time_seconds_median",
-            "travel_time_seconds_min", "travel_time_seconds_max", 
-            "travel_time_seconds_mean_peak_am", "travel_time_seconds_mean_peak_pm",
+        GTFS_EDGES_COLUMNS = [
+            "edge_id",
+            "from_node_id",
+            "to_node_id",
+            "route_id",
+            "route_short_name",
+            "route_long_name",
+            "trip_count",
+            "travel_time_seconds_mean",
+            "travel_time_seconds_median",
+            "travel_time_seconds_min",
+            "travel_time_seconds_max",
+            "travel_time_seconds_mean_peak_am",
+            "travel_time_seconds_mean_peak_pm",
             "travel_time_seconds_mean_rest_of_day",
-            "travel_time_seconds_median_peak_am", "travel_time_seconds_median_peak_pm",
+            "travel_time_seconds_median_peak_am",
+            "travel_time_seconds_median_peak_pm",
             "travel_time_seconds_median_rest_of_day",
-            "trip_count_peak_am", "trip_count_peak_pm", "trip_count_rest_of_day",
-            "travel_time_seconds_mean_weekday", "trip_count_weekday",
-            "travel_time_seconds_mean_weekend", "trip_count_weekend",
+            "trip_count_peak_am",
+            "trip_count_peak_pm",
+            "trip_count_rest_of_day",
+            "travel_time_seconds_mean_weekday",
+            "trip_count_weekday",
+            "travel_time_seconds_mean_weekend",
+            "trip_count_weekend",
             "days_of_week_summary",
-            "hourly_travel_times", "hourly_trip_counts", "geometry",
+            "hourly_travel_times",
+            "hourly_trip_counts",
+            "geometry",
         ]
         # Combinacion periodo x laborables/fin de semana (p.ej.
         # "travel_time_seconds_mean_peak_am_weekday"). Solo cubre los nombres
         # de periodo por defecto (peak_am/peak_pm/rest_of_day); si se pasa un
         # ``gtfs_peak_periods`` propio con otros nombres, sus columnas
         # combinadas no se filtran aqui de forma automatica.
-        for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + ["rest_of_day"]:
+        for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
+            "rest_of_day"
+        ]:
             for day_type_name in ("weekday", "weekend"):
-                GTFS_EDGES_COLUMNS.append(f"travel_time_seconds_mean_{period_name}_{day_type_name}")
+                GTFS_EDGES_COLUMNS.append(
+                    f"travel_time_seconds_mean_{period_name}_{day_type_name}"
+                )
                 GTFS_EDGES_COLUMNS.append(f"trip_count_{period_name}_{day_type_name}")
 
         GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
@@ -516,19 +554,28 @@ def main(
                 files_here.append(relative)
             files_here.extend(
                 _write_schedule_tables(
-                    schedule_tables, output_dir, file_type,
-                    area_slug=area_slug, layer_paths=layer_paths,
+                    schedule_tables,
+                    output_dir,
+                    file_type,
+                    area_slug=area_slug,
+                    layer_paths=layer_paths,
                 )
             )
         else:
             files_here = _write_layers(
-                layers, output_dir, file_type,
-                area_slug=area_slug, layer_paths=layer_paths,
+                layers,
+                output_dir,
+                file_type,
+                area_slug=area_slug,
+                layer_paths=layer_paths,
             )
             files_here.extend(
                 _write_schedule_tables(
-                    schedule_tables, output_dir, file_type,
-                    area_slug=area_slug, layer_paths=layer_paths,
+                    schedule_tables,
+                    output_dir,
+                    file_type,
+                    area_slug=area_slug,
+                    layer_paths=layer_paths,
                 )
             )
         written_by_format[file_type] = files_here
@@ -540,7 +587,9 @@ def main(
         "crs": crs,
         # Se devuelve tal y como se pidio: str si se paso un unico formato como
         # cadena, lista si se pidieron varios.
-        "output_file_type": output_file_types[0] if single_output_type else output_file_types,
+        "output_file_type": output_file_types[0]
+        if single_output_type
+        else output_file_types,
         "output_path": str(output_dir),
         "osm_modes": osm_modes,
         "gtfs_datasets": list(gtfs_results),
@@ -559,33 +608,50 @@ def main(
 def _cli(argv: list[str] | None = None) -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Descarga la red multimodal de un municipio.")
+    parser = argparse.ArgumentParser(
+        description="Descarga la red multimodal de un municipio."
+    )
     parser.add_argument("--area", required=True, help="Nombre del municipio.")
-    parser.add_argument("--modes", nargs="+", default=["walking"], help="Modos de transporte.")
+    parser.add_argument(
+        "--modes", nargs="+", default=["walking"], help="Modos de transporte."
+    )
     parser.add_argument("--output", default="output", help="Carpeta local de descarga.")
     parser.add_argument("--boundaries", help="Shapefile/GeoJSON de limites (opcional).")
-    parser.add_argument("--crs", default="EPSG:4326", help="CRS de salida (por defecto WGS84).")
     parser.add_argument(
-        "--output-file-type", default=["geojson"], nargs="+",
+        "--crs", default="EPSG:4326", help="CRS de salida (por defecto WGS84)."
+    )
+    parser.add_argument(
+        "--output-file-type",
+        default=["geojson"],
+        nargs="+",
         choices=sorted(VALID_OUTPUT_TYPES),
         help="Formato(s) de salida; admite varios en una sola pasada.",
     )
     parser.add_argument("--area-code", help="Codigo oficial del municipio (opcional).")
-    parser.add_argument("--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren.")
     parser.add_argument(
-        "--gtfs-hour-band-size", type=int, default=1,
+        "--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren."
+    )
+    parser.add_argument(
+        "--gtfs-hour-band-size",
+        type=int,
+        default=1,
         help="Franja horaria (horas) para el resumen empaquetado de aristas GTFS (opcion C).",
     )
     parser.add_argument(
-        "--gtfs-hour-range", type=int, nargs=2, metavar=("START", "END"),
+        "--gtfs-hour-range",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
         help="Filtra viajes GTFS por ventana horaria, p.ej. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
-        "--schedule", action="store_true",
+        "--schedule",
+        action="store_true",
         help="Escribir tambien la tabla de horario detallado de cada feed GTFS.",
     )
     parser.add_argument(
-        "--gtfs-zips", action="store_true",
+        "--gtfs-zips",
+        action="store_true",
         help="Conservar los ZIP GTFS descargados del NAP en vez de borrarlos.",
     )
     args = parser.parse_args(argv)

@@ -69,21 +69,48 @@ def _default_boundaries_path() -> Path:
         )
     return shp_files[0]
 
+
 # Solo se aceptan shapefile o geojson como fichero de limites (indicacion de la
 # reunion: nada de geopackage para ``boundaries_path``).
 ALLOWED_BOUNDARY_SUFFIXES = {".shp", ".geojson", ".json"}
 
 DEFAULT_NAME_COLUMNS = (
-    "nombre", "NOMBRE", "name", "NAME",
-    "municipio", "MUNICIPIO", "mun_name", "MUN_NAME",
-    "nombre_mun", "NOMBRE_MUN", "nom_mun", "NOM_MUN",
-    "provincia", "PROVINCIA", "comunidad", "COMUNIDAD",
-    "ccaa", "CCAA", "texto", "TEXTO", "rotulo", "ROTULO", "NAMEUNIT",
+    "nombre",
+    "NOMBRE",
+    "name",
+    "NAME",
+    "municipio",
+    "MUNICIPIO",
+    "mun_name",
+    "MUN_NAME",
+    "nombre_mun",
+    "NOMBRE_MUN",
+    "nom_mun",
+    "NOM_MUN",
+    "provincia",
+    "PROVINCIA",
+    "comunidad",
+    "COMUNIDAD",
+    "ccaa",
+    "CCAA",
+    "texto",
+    "TEXTO",
+    "rotulo",
+    "ROTULO",
+    "NAMEUNIT",
 )
 
 DEFAULT_CODE_COLUMNS = (
-    "NATCODE", "natcode", "INSPIREID", "inspireid",
-    "codigo", "CODIGO", "cod_mun", "COD_MUN", "ine", "INE",
+    "NATCODE",
+    "natcode",
+    "INSPIREID",
+    "inspireid",
+    "codigo",
+    "CODIGO",
+    "cod_mun",
+    "COD_MUN",
+    "ine",
+    "INE",
 )
 
 # El endpoint ``/conjunto-dato/region/{id}`` del NAP solo entiende ids de
@@ -112,9 +139,17 @@ PROVINCE_CODE_COLUMNS = ("NATCODE", "natcode", "cod_mun", "COD_MUN", "ine", "INE
 # nombre de fichero siempre usan la etiqueta canonica en ingles: "walking",
 # "bike", "driving" (ver ``NETWORK_TYPE_TO_LAYER_LABEL``).
 OSM_NETWORK_TYPES = {
-    "caminable": "walk", "walk": "walk", "peatonal": "walk", "walking": "walk",
-    "bicicleta": "bike", "bike": "bike", "bicycle": "bike",
-    "coche": "drive", "car": "drive", "drive": "drive", "carretera": "drive",
+    "caminable": "walk",
+    "walk": "walk",
+    "peatonal": "walk",
+    "walking": "walk",
+    "bicicleta": "bike",
+    "bike": "bike",
+    "bicycle": "bike",
+    "coche": "drive",
+    "car": "drive",
+    "drive": "drive",
+    "carretera": "drive",
     "driving": "drive",
 }
 
@@ -273,7 +308,11 @@ def _select_area_rows(
             distance = levenshtein_distance(target, value)
             score = levenshtein_similarity(target, value)
             max_allowed_distance = max(2, round(max(len(target), len(value)) * 0.3))
-            if distance <= max_allowed_distance and score >= 0.70 and score > best_score:
+            if (
+                distance <= max_allowed_distance
+                and score >= 0.70
+                and score > best_score
+            ):
                 mask = normalized == value
                 best_rows = gdf.loc[mask].copy()
                 best_column = column
@@ -321,25 +360,30 @@ def find_area_boundary(
         raise ValueError("El fichero de limites no tiene CRS definido.")
 
     rows, matched_column, matched_value = _select_area_rows(
-        gdf, area_name, area_code=area_code,
-        name_columns=name_columns, code_columns=code_columns,
+        gdf,
+        area_name,
+        area_code=area_code,
+        name_columns=name_columns,
+        code_columns=code_columns,
     )
     rows = rows.to_crs(target_crs)
     geometry = rows.geometry.union_all()
 
     return gpd.GeoDataFrame(
-        [{
-            "area_name": area_name,
-            "matched_column": matched_column,
-            "matched_value": matched_value,
-            "matched_rows": len(rows),
-            "area_code": area_code,
-            # Codigo INE de provincia (1-52); es el id de region que entiende
-            # la API del NAP. Puede ser None si el fichero de limites no trae
-            # ninguna columna de codigo reconocible.
-            "province_code": _find_province_code(rows),
-            "source_path": str(boundaries_path),
-        }],
+        [
+            {
+                "area_name": area_name,
+                "matched_column": matched_column,
+                "matched_value": matched_value,
+                "matched_rows": len(rows),
+                "area_code": area_code,
+                # Codigo INE de provincia (1-52); es el id de region que entiende
+                # la API del NAP. Puede ser None si el fichero de limites no trae
+                # ninguna columna de codigo reconocible.
+                "province_code": _find_province_code(rows),
+                "source_path": str(boundaries_path),
+            }
+        ],
         geometry=[geometry],
         crs=target_crs,
     )
@@ -382,7 +426,9 @@ def download_osm_layers(
     try:
         import osmnx as ox
     except ImportError as exc:
-        raise ImportError("Instala osmnx para descargar redes OSM: pip install osmnx") from exc
+        raise ImportError(
+            "Instala osmnx para descargar redes OSM: pip install osmnx"
+        ) from exc
 
     area_wgs84 = boundary.to_crs("EPSG:4326")
     polygon = area_wgs84.geometry.iloc[0]
@@ -534,22 +580,25 @@ def download_gtfs_nap_zips(
             "No se pudo deducir la provincia de '%s' desde el fichero de limites; "
             "se usa la provincia '%s' por parecido de nombre, que puede no ser "
             "la correcta.",
-            area_name, best_region.get("nombre"),
+            area_name,
+            best_region.get("nombre"),
         )
 
     datasets_response = _nap_get(
-        f"{base_url}/conjunto-dato/region/{region_id}", headers=headers,
+        f"{base_url}/conjunto-dato/region/{region_id}",
+        headers=headers,
     )
 
     if datasets_response.status_code == 404:
-
         try:
             error_data = datasets_response.json()
             error_message = error_data.get("message", "")
         except Exception:
             error_message = ""
 
-        if "no se ha encontrado ningun conjunto de datos" in normalize_name(error_message):
+        if "no se ha encontrado ningun conjunto de datos" in normalize_name(
+            error_message
+        ):
             logger.info(
                 "El NAP no tiene conjuntos de datos publicados para la region %s; "
                 "no se descargara ningun GTFS.",
@@ -561,7 +610,7 @@ def download_gtfs_nap_zips(
         logger.error(
             "404 no esperado en %s: %s",
             datasets_response.url,
-            error_message or datasets_response.text,      
+            error_message or datasets_response.text,
         )
 
     datasets_response.raise_for_status()
@@ -590,7 +639,9 @@ def download_gtfs_nap_zips(
             }
             try:
                 link_response = requests.get(
-                    f"{base_url}/fichero/{file_id}/descarga", headers=headers, timeout=60,
+                    f"{base_url}/fichero/{file_id}/descarga",
+                    headers=headers,
+                    timeout=60,
                 )
                 link_response.raise_for_status()
                 payload = link_response.json().get("data", {})
@@ -612,12 +663,16 @@ def download_gtfs_nap_zips(
                 row["error"] = str(exc)
                 if fail_fast:
                     report_rows.append(row)
-                    pd.DataFrame(report_rows).to_csv(output_dir / "nap_download_report.csv", index=False)
+                    pd.DataFrame(report_rows).to_csv(
+                        output_dir / "nap_download_report.csv", index=False
+                    )
                     raise
             report_rows.append(row)
 
     if report_rows:
-        pd.DataFrame(report_rows).to_csv(output_dir / "nap_download_report.csv", index=False)
+        pd.DataFrame(report_rows).to_csv(
+            output_dir / "nap_download_report.csv", index=False
+        )
 
     return downloaded
 
@@ -655,7 +710,11 @@ def download_gtfs_layers(
         province_code = None if value is None or value != value else int(value)
 
     zips = download_gtfs_nap_zips(
-        area_name, zip_dir, modes=modes, api_key=api_key, province_code=province_code,
+        area_name,
+        zip_dir,
+        modes=modes,
+        api_key=api_key,
+        province_code=province_code,
     )
 
     filter_geometry = None

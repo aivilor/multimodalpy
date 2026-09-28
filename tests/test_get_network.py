@@ -25,7 +25,9 @@ from multimodalpy import get_area, get_network
 def fake_boundary():
     """Un limite de estudio minimo (un cuadrado) en WGS84."""
     polygon = Polygon([(0, 0), (0, 1), (1, 1), (1, 0)])
-    return gpd.GeoDataFrame({"name": ["fake_area"]}, geometry=[polygon], crs="EPSG:4326")
+    return gpd.GeoDataFrame(
+        {"name": ["fake_area"]}, geometry=[polygon], crs="EPSG:4326"
+    )
 
 
 @pytest.fixture
@@ -70,8 +72,12 @@ def test_main_rejects_invalid_mode(tmp_path):
 # ---------------------------------------------------------------------------
 def test_main_downloads_and_writes_osm_layers(tmp_path, fake_boundary, fake_osm_layers):
     with (
-        patch.object(get_area, "find_area_boundary", return_value=fake_boundary) as mock_boundary,
-        patch.object(get_area, "download_osm_layers", return_value=fake_osm_layers) as mock_osm,
+        patch.object(
+            get_area, "find_area_boundary", return_value=fake_boundary
+        ) as mock_boundary,
+        patch.object(
+            get_area, "download_osm_layers", return_value=fake_osm_layers
+        ) as mock_osm,
     ):
         manifest = get_network.main(
             area_name="Valencia",

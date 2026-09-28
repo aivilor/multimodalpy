@@ -59,7 +59,9 @@ def _clean_for_file(gdf: "gpd.GeoDataFrame") -> "gpd.GeoDataFrame":
     return cleaned
 
 
-def _coord_key(x: float, y: float, round_digits: int = TOPOLOGY_ROUND_DIGITS) -> tuple[float, float]:
+def _coord_key(
+    x: float, y: float, round_digits: int = TOPOLOGY_ROUND_DIGITS
+) -> tuple[float, float]:
     return (round(float(x), round_digits), round(float(y), round_digits))
 
 
@@ -174,18 +176,26 @@ def derive_topology_nodes_from_edges(
                 entry["vertex_occurrences"] = int(entry["vertex_occurrences"]) + 1
                 seen_in_feature.add(key)
                 if key in endpoint_keys:
-                    entry["endpoint_occurrences"] = int(entry["endpoint_occurrences"]) + 1
+                    entry["endpoint_occurrences"] = (
+                        int(entry["endpoint_occurrences"]) + 1
+                    )
 
             for start, end in zip(part, part[1:]):
                 start_key = _coord_key(start[0], start[1], round_digits)
                 end_key = _coord_key(end[0], end[1], round_digits)
                 if start_key == end_key:
                     continue
-                stats[start_key]["incident_segment_count"] = int(stats[start_key]["incident_segment_count"]) + 1
-                stats[end_key]["incident_segment_count"] = int(stats[end_key]["incident_segment_count"]) + 1
+                stats[start_key]["incident_segment_count"] = (
+                    int(stats[start_key]["incident_segment_count"]) + 1
+                )
+                stats[end_key]["incident_segment_count"] = (
+                    int(stats[end_key]["incident_segment_count"]) + 1
+                )
 
         for key in seen_in_feature:
-            stats[key]["incident_feature_count"] = int(stats[key]["incident_feature_count"]) + 1
+            stats[key]["incident_feature_count"] = (
+                int(stats[key]["incident_feature_count"]) + 1
+            )
 
     role_counts: Counter[str] = Counter()
     records: list[dict[str, object]] = []
@@ -198,7 +208,9 @@ def derive_topology_nodes_from_edges(
         elif degree == 1:
             node_role = "endpoint"
         elif degree == 2:
-            node_role = "through_endpoint" if endpoint_occurrences > 0 else "linear_vertex"
+            node_role = (
+                "through_endpoint" if endpoint_occurrences > 0 else "linear_vertex"
+            )
         else:
             node_role = "intersection"
         role_counts[node_role] += 1
@@ -207,7 +219,9 @@ def derive_topology_nodes_from_edges(
         original_osm_id = original.get("osm_id")
         record = {
             **original,
-            "node_id": original.get("node_id") or original_osm_id or f"{layer_id}_topology_node_{idx:07d}",
+            "node_id": original.get("node_id")
+            or original_osm_id
+            or f"{layer_id}_topology_node_{idx:07d}",
             "source_osm_id": original_osm_id,
             "type": "node",
             "layer": layer_id,
@@ -236,7 +250,11 @@ def split_edges_with_topology_nodes(
     topology_nodes: "gpd.GeoDataFrame",
     *,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
-    split_roles: tuple[str, ...] = ("intersection", "through_endpoint", "linear_vertex"),
+    split_roles: tuple[str, ...] = (
+        "intersection",
+        "through_endpoint",
+        "linear_vertex",
+    ),
 ) -> "gpd.GeoDataFrame":
     """Divide cada arista en tramos entre nodos topologicos "reales".
 
@@ -331,7 +349,9 @@ def split_edges_with_topology_nodes(
                 end_node = node_lookup.get(end_key, {})
 
                 record = dict(base_attrs)
-                record["from_node_id"] = start_node.get("node_id", base_attrs.get("from"))
+                record["from_node_id"] = start_node.get(
+                    "node_id", base_attrs.get("from")
+                )
                 record["to_node_id"] = end_node.get("node_id", base_attrs.get("to"))
                 record["length"] = sub_length_m
                 record["geometry"] = sub_geom
@@ -347,13 +367,20 @@ def split_edges_with_topology_nodes(
 # Velocidades por defecto (km/h) segun tipo de via, usadas para "drive" cuando
 # no hay ``maxspeed`` valido.
 DEFAULT_HWY_SPEEDS_KMH: dict[str, float] = {
-    "motorway": 100, "motorway_link": 70,
-    "trunk": 80, "trunk_link": 50,
-    "primary": 60, "primary_link": 40,
-    "secondary": 50, "secondary_link": 40,
-    "tertiary": 40, "tertiary_link": 30,
-    "residential": 30, "living_street": 15,
-    "unclassified": 30, "service": 20,
+    "motorway": 100,
+    "motorway_link": 70,
+    "trunk": 80,
+    "trunk_link": 50,
+    "primary": 60,
+    "primary_link": 40,
+    "secondary": 50,
+    "secondary_link": 40,
+    "tertiary": 40,
+    "tertiary_link": 30,
+    "residential": 30,
+    "living_street": 15,
+    "unclassified": 30,
+    "service": 20,
 }
 
 # Perfil de velocidad libre por modo. "walk" siempre usa una velocidad
@@ -438,8 +465,15 @@ def _parse_maxspeed_kmh(value: object) -> float | None:
 
 # Cualquier variante de via peatonal/paso conocida en OSM se colapsa a "footway".
 WALKING_HIGHWAY_ALIASES: set[str] = {
-    "footway", "path", "steps", "pedestrian", "living_street",
-    "track", "corridor", "elevator", "bridleway",
+    "footway",
+    "path",
+    "steps",
+    "pedestrian",
+    "living_street",
+    "track",
+    "corridor",
+    "elevator",
+    "bridleway",
 }
 
 
@@ -620,8 +654,19 @@ def normalize_osm_graph(
 # Pipeline completo: grafo OSMnx -> capas finales de nodos / aristas
 # ---------------------------------------------------------------------------
 FINAL_EDGE_COLUMNS = [
-    "osmid", "from_node_id", "to_node_id", "highway", "hwy_raw", "lanes",
-    "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
+    "osmid",
+    "from_node_id",
+    "to_node_id",
+    "highway",
+    "hwy_raw",
+    "lanes",
+    "maxspeed",
+    "spd_raw",
+    "name",
+    "oneway",
+    "reversed",
+    "length",
+    "tts",
     "geometry",
 ]
 # Shapefile truncaba ``from_node_id`` (12 caracteres) a ``from_node_``, con lo
@@ -660,7 +705,10 @@ def build_final_osm_layers(
        ``name``, ``oneway``, ``reversed``, ``length``, ``tts``, ``geometry``).
     """
     nodes, edges = normalize_osm_graph(
-        graph, layer_id=layer_id, output_crs=output_crs, topology_nodes=True,
+        graph,
+        layer_id=layer_id,
+        output_crs=output_crs,
+        topology_nodes=True,
         clean_edges_for_export=False,
     )
 

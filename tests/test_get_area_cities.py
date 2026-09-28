@@ -63,7 +63,9 @@ def test_find_area_boundary_exact_name(boundaries_path, name, natcode, province)
 
 
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
-def test_find_area_boundary_is_case_insensitive(boundaries_path, name, natcode, province):
+def test_find_area_boundary_is_case_insensitive(
+    boundaries_path, name, natcode, province
+):
     result = get_area.find_area_boundary(name.upper(), boundaries_path)
     assert result.iloc[0]["matched_value"] == name
 
@@ -71,10 +73,10 @@ def test_find_area_boundary_is_case_insensitive(boundaries_path, name, natcode, 
 @pytest.mark.parametrize(
     ("query", "expected_name"),
     [
-        ("a coruna", "A Coruña"),          # missing tilde
+        ("a coruna", "A Coruña"),  # missing tilde
         ("ALCALA DE HENARES", "Alcalá de Henares"),  # missing accent + upper
         ("san sebastian", "San Sebastián"),  # missing accent
-        ("  Valencia  ", "Valencia"),        # surrounding whitespace
+        ("  Valencia  ", "Valencia"),  # surrounding whitespace
     ],
 )
 def test_find_area_boundary_ignores_accents_case_and_whitespace(
@@ -90,10 +92,10 @@ def test_find_area_boundary_ignores_accents_case_and_whitespace(
 @pytest.mark.parametrize(
     ("typo", "expected_name"),
     [
-        ("Valencai", "Valencia"),      # transposition
-        ("Sevila", "Sevilla"),         # missing letter
-        ("Zaragosa", "Zaragoza"),      # z/s swap
-        ("Barcelona ", "Barcelona"),   # trailing space, still exact after normalize
+        ("Valencai", "Valencia"),  # transposition
+        ("Sevila", "Sevilla"),  # missing letter
+        ("Zaragosa", "Zaragoza"),  # z/s swap
+        ("Barcelona ", "Barcelona"),  # trailing space, still exact after normalize
     ],
 )
 def test_find_area_boundary_tolerates_small_typos(boundaries_path, typo, expected_name):
@@ -135,7 +137,8 @@ def test_province_code_from_natcode(name, natcode, province):
 
 
 @pytest.mark.parametrize(
-    "bad_value", [None, "", "abc", "123", "999999999"]  # too short / non-numeric / out of range
+    "bad_value",
+    [None, "", "abc", "123", "999999999"],  # too short / non-numeric / out of range
 )
 def test_province_code_from_natcode_returns_none_for_unusable_input(bad_value):
     assert get_area.province_code_from_natcode(bad_value) is None
@@ -207,6 +210,8 @@ def test_find_area_boundary_empty_file_raises(tmp_path):
 # Output CRS
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES[:3])
-def test_find_area_boundary_reprojects_to_target_crs(boundaries_path, name, natcode, province):
+def test_find_area_boundary_reprojects_to_target_crs(
+    boundaries_path, name, natcode, province
+):
     result = get_area.find_area_boundary(name, boundaries_path, target_crs="EPSG:25830")
     assert result.crs.to_epsg() == 25830

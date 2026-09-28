@@ -197,12 +197,22 @@ def test_osm_export_has_single_tags_numeric_maxspeed_and_raw_values():
     graph.add_node(3, x=0.002, y=0.0)
     common = {"length": 111.0, "oneway": False, "reversed": False}
     graph.add_edge(
-        1, 2, osmid=10, highway=["footway", "steps"], maxspeed=["30", "50"],
-        geometry=LineString([(0, 0), (0.001, 0)]), **common,
+        1,
+        2,
+        osmid=10,
+        highway=["footway", "steps"],
+        maxspeed=["30", "50"],
+        geometry=LineString([(0, 0), (0.001, 0)]),
+        **common,
     )
     graph.add_edge(
-        2, 3, osmid=11, highway="track", maxspeed="30 mph",
-        geometry=LineString([(0.001, 0), (0.002, 0)]), **common,
+        2,
+        3,
+        osmid=11,
+        highway="track",
+        maxspeed="30 mph",
+        geometry=LineString([(0.001, 0), (0.002, 0)]),
+        **common,
     )
 
     _, edges = process_osm.build_final_osm_layers(
