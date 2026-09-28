@@ -69,8 +69,9 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
     # partes no cabe en diez caracteres de ninguna otra forma.
     for period, short_period in _GTFS_PERIOD_ABBR.items():
         for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
-            rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{short_period}_{short_day}"
-            rename[f"trip_count_{period}_{day_type}"] = f"trp_{short_period}_{short_day}"
+            suffix = f"{short_period}_{short_day}"
+            rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{suffix}"
+            rename[f"trip_count_{period}_{day_type}"] = f"trp_{suffix}"
     return rename
 
 
@@ -92,7 +93,10 @@ VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
 VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx"}
 
 # Extension y driver de OGR de los formatos que se escriben capa a capa.
-_FILE_FORMATS = {"geojson": (".geojson", "GeoJSON"), "shapefile": (".shp", "ESRI Shapefile")}
+_FILE_FORMATS = {
+    "geojson": (".geojson", "GeoJSON"),
+    "shapefile": (".shp", "ESRI Shapefile"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -503,13 +507,12 @@ def main(
             )
             files_here.append("study_area_boundary.geojson")
             for mode, out in osm_results.items():
-                path = _osm_graph_to_json(out["graph"], output_dir / mode / "graph.json")
-                files_here.append(f"{mode}/graph.json")
+                relative = f"{mode}/graph.json"
+                _osm_graph_to_json(out["graph"], output_dir / relative)
+                files_here.append(relative)
             for dataset, out in gtfs_results.items():
                 relative = f"{out.get('mode') or 'bus'}/{dataset}/graph.json"
-                path = _gtfs_to_graph_json(
-                    out["nodes"], out["edges"], output_dir / relative,
-                )
+                _gtfs_to_graph_json(out["nodes"], out["edges"], output_dir / relative)
                 files_here.append(relative)
             files_here.extend(
                 _write_schedule_tables(
@@ -519,7 +522,8 @@ def main(
             )
         else:
             files_here = _write_layers(
-                layers, output_dir, file_type, area_slug=area_slug, layer_paths=layer_paths,
+                layers, output_dir, file_type,
+                area_slug=area_slug, layer_paths=layer_paths,
             )
             files_here.extend(
                 _write_schedule_tables(

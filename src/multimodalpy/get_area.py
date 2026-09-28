@@ -464,7 +464,8 @@ def download_gtfs_nap_zips(
         region_id = int(best_region["id"])
         logger.warning(
             "No se pudo deducir la provincia de '%s' desde el fichero de limites; "
-            "se usa la provincia '%s' por parecido de nombre, que puede no ser la correcta.",
+            "se usa la provincia '%s' por parecido de nombre, que puede no ser "
+            "la correcta.",
             area_name, best_region.get("nombre"),
         )
 
