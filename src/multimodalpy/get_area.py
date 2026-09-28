@@ -392,6 +392,50 @@ def download_osm_layers(
 # ---------------------------------------------------------------------------
 # Descarga GTFS (API NAP) + estandarizacion (process_gtfs)
 # ---------------------------------------------------------------------------
+def _nap_get(url: str, headers: dict, timeout: int = 60) -> "requests.Response":
+    """Peticion GET a la API del NAP con gestion clara de errores de red y autenticacion.
+
+    Gestiona de forma explicita:
+    - ``ConnectionError``: sin conexion a internet o servidor del NAP caido.
+    - ``Timeout``: la API del NAP no respondio a tiempo.
+    - HTTP 401: clave de API ausente, invalida o caducada (texto plano).
+    - HTTP 500: error interno del servidor del NAP.
+    """
+    import requests
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+    except requests.exceptions.ConnectionError:
+        raise ConnectionError(
+            f"No se pudo conectar con la API del NAP ({url}). "
+            "Comprueba tu conexion a internet o reintenta mas tarde."
+        ) from None
+    except requests.exceptions.Timeout:
+        raise TimeoutError(
+            f"La API del NAP no respondio en {timeout} s ({url}). "
+            "El servidor puede estar sobrecargado; reintenta mas tarde."
+        ) from None
+
+    if resp.status_code == 401:
+        raise ValueError(
+            f"Error de autenticacion en la API del NAP: {resp.text.strip()}. "
+            "Comprueba que NAP_API_KEY es valida y no ha caducado."
+        )
+
+    if resp.status_code == 500:
+        try:
+            server_msg = resp.json().get("message", resp.text)
+        except Exception:
+            server_msg = resp.text
+
+        raise RuntimeError(
+            f"Error interno del servidor del NAP (HTTP 500) en {url}: {server_msg}. "
+            "Reintenta mas tarde."
+        )
+
+    return resp
+
+
 def download_gtfs_nap_zips(
     area_name: str,
     output_dir: str | Path,
@@ -440,7 +484,7 @@ def download_gtfs_nap_zips(
 
     region_id = int(province_code) if province_code is not None else None
     if region_id is None:
-        regions_response = requests.get(f"{base_url}/region", headers=headers, timeout=60)
+        regions_response = _nap_get(f"{base_url}/region", headers=headers)
         regions_response.raise_for_status()
         regions = regions_response.json().get("data", [])
         if not regions:
@@ -469,15 +513,33 @@ def download_gtfs_nap_zips(
             area_name, best_region.get("nombre"),
         )
 
-    datasets_response = requests.get(
-        f"{base_url}/conjunto-dato/region/{region_id}", headers=headers, timeout=60,
+    datasets_response = _nap_get(
+        f"{base_url}/conjunto-dato/region/{region_id}", headers=headers,
     )
+
     if datasets_response.status_code == 404:
-        logger.info(
-            "El NAP no tiene conjuntos de datos publicados para la region %s; "
-            "no se descargara ningun GTFS.", region_id,
+
+        try:
+            error_data = datasets_response.json()
+            error_message = error_data.get("message", "")
+        except Exception:
+            error_message = ""
+
+        if "no se ha encontrado ningun conjunto de datos" in normalize_name(error_message):
+            logger.info(
+                "El NAP no tiene conjuntos de datos publicados para la region %s; "
+                "no se descargara ningun GTFS.",
+                region_id,
+            )
+            return []
+
+        # 404 no esperado (endpoint roto, etc.)
+        logger.error(
+            "404 no esperado en %s: %s",
+            datasets_response.url,
+            error_message or datasets_response.text,      
         )
-        return []
+
     datasets_response.raise_for_status()
     datasets = datasets_response.json().get("data", [])
     mode_set = {int(mode) for mode in modes}
