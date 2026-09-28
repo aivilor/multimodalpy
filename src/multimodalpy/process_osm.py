@@ -98,6 +98,25 @@ def _first_if_list(value: object) -> object:
     return value
 
 
+def _primary_highway(value: object) -> object:
+    """Devuelve una unica etiqueta ``highway`` valida de OSM.
+
+    Al simplificar el grafo, osmnx fusiona varias 'ways' en una arista y
+    ``_flatten_to_string`` une sus etiquetas con ';' (``"footway;steps"``), un
+    valor que no existe en OSM. Aqui se resuelve quedandose con la primera; el
+    original se conserva en ``hwy_raw``.
+
+    No confundir con :func:`_normalize_highway`, que agrupa por velocidad libre
+    y colapsa cualquier via transitable a pie a ``"footway"``. Eso sirve para
+    elegir una velocidad, pero no para etiquetar: convertiria ``track`` o
+    ``path`` en ``footway``.
+    """
+    if value is None:
+        return None
+    tokens = [token.strip() for token in str(value).split(";") if token.strip()]
+    return tokens[0] if tokens else None
+
+
 def derive_topology_nodes_from_edges(
     nodes: "gpd.GeoDataFrame",
     edges: "gpd.GeoDataFrame",
@@ -601,10 +620,14 @@ def normalize_osm_graph(
 # Pipeline completo: grafo OSMnx -> capas finales de nodos / aristas
 # ---------------------------------------------------------------------------
 FINAL_EDGE_COLUMNS = [
-    "osmid", "from_node_id", "to_node_id", "highway", "lanes", "maxspeed",
-    "name", "oneway", "reversed", "length", "tts", "geometry",
+    "osmid", "from_node_id", "to_node_id", "highway", "hwy_raw", "lanes",
+    "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
+    "geometry",
 ]
-FINAL_EDGE_RENAME = {"osmid": "edge_id"}
+# Shapefile truncaba ``from_node_id`` (12 caracteres) a ``from_node_``, con lo
+# que las aristas dejaban de casar con la tabla de nodos. ``to_node_id`` tiene
+# justo 10 y se conserva.
+FINAL_EDGE_RENAME = {"osmid": "edge_id", "from_node_id": "from_node"}
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
 
@@ -654,6 +677,15 @@ def build_final_osm_layers(
             edges[col] = edges[col].map(_first_if_list)
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
+
+    # Despues de calcular el tiempo de viaje, para que ese calculo siga viendo
+    # los valores originales.
+    if "highway" in edges.columns:
+        edges["hwy_raw"] = edges["highway"]
+        edges["highway"] = edges["highway"].map(_primary_highway)
+    if "maxspeed" in edges.columns:
+        edges["spd_raw"] = edges["maxspeed"]
+        edges["maxspeed"] = edges["maxspeed"].map(_parse_maxspeed_kmh)
 
     edge_cols = [c for c in FINAL_EDGE_COLUMNS if c in edges.columns]
     edges_final = _clean_for_file(edges[edge_cols]).rename(columns=FINAL_EDGE_RENAME)

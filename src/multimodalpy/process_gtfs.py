@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -80,6 +80,38 @@ def read_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame":
             return _strip_gtfs_whitespace(
                 pd.read_csv(file, dtype=str, low_memory=False)
             )
+
+
+# ``route_type`` de la especificacion GTFS. Los ferroviarios son tranvia (0),
+# metro (1), tren (2), cable tram (5), funicular (7) y monorail (12); el resto
+# (autobus 3, trolebus 11, autobus de transito rapido 700-799...) se tratan
+# como bus.
+RAIL_ROUTE_TYPES: frozenset[int] = frozenset({0, 1, 2, 5, 7, 12})
+
+
+def infer_transport_mode(feed_path: str | Path) -> str:
+    """Devuelve ``"train"`` o ``"bus"`` segun los ``route_type`` del feed.
+
+    Se usa para decidir en que carpeta se guardan las capas de un dataset
+    GTFS. Se mira el propio feed y no los metadatos del NAP porque alli un
+    mismo conjunto de datos puede declararse a la vez como bus y como
+    ferroviario (p. ej. Cercanias Renfe). Si el feed mezcla ambos, gana el
+    tipo mayoritario; si no se puede leer, se asume ``"bus"``.
+    """
+    import pandas as pd
+
+    try:
+        routes = read_gtfs_table(feed_path, "routes.txt")
+    except (OSError, ValueError, BadZipFile):
+        return "bus"
+    if "route_type" not in routes.columns:
+        return "bus"
+
+    route_types = pd.to_numeric(routes["route_type"], errors="coerce").dropna()
+    if route_types.empty:
+        return "bus"
+    rail = int(route_types.isin(RAIL_ROUTE_TYPES).sum())
+    return "train" if rail * 2 > len(route_types) else "bus"
 
 
 def _read_optional_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame | None":

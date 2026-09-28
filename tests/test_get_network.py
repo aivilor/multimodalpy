@@ -90,10 +90,11 @@ def test_main_downloads_and_writes_osm_layers(tmp_path, fake_boundary, fake_osm_
     assert manifest["gtfs_datasets"] == []
     assert manifest["output_file_type"] == "geojson"
 
-    # Los ficheros esperados existen realmente en disco.
+    # Los ficheros esperados existen realmente en disco. Cada modo tiene su
+    # propia carpeta; el limite del area de estudio se queda en la raiz.
     written_files = set(manifest["files"])
     assert "study_area_boundary.geojson" in written_files
-    assert "osm_walking_nodes.geojson" in written_files
-    assert "osm_walking_edges.geojson" in written_files
+    assert "walking/nodes.geojson" in written_files
+    assert "walking/edges.geojson" in written_files
     for filename in written_files:
         assert (tmp_path / filename).exists()
