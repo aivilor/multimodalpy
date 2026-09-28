@@ -36,14 +36,38 @@ logger = logging.getLogger(__name__)
 
 NAP_BASE_URL = "https://nap.transportes.gob.es/api/v2"
 
-# Shapefile de recintos municipales que se distribuye dentro del paquete.
-_PACKAGE_DIR = Path(__file__).resolve().parent
-DEFAULT_BOUNDARIES_PATH = (
-    _PACKAGE_DIR
-    / "data"
-    / "recintos_municipales_inspire_peninbal_etrs89"
-    / "recintos_municipales_inspire_peninbal_etrs89.shp"
+# Shapefile de recintos municipales. No se distribuye dentro del paquete ni
+# del repositorio (~50 MB); se descarga la primera vez que se necesita desde
+# un release de GitHub y se cachea localmente con ``pooch`` (en el directorio
+# de cache estandar del sistema operativo), asi que las llamadas siguientes
+# reutilizan la copia local en vez de descargar de nuevo.
+_BOUNDARIES_RELEASE_URL = (
+    "https://github.com/aivilor/multimodalpy/releases/download/data-v1/"
+    "recintos_municipales_inspire_peninbal_etrs89.zip"
 )
+# TODO: una vez descargado con exito, rellenar con el hash real (ver abajo)
+# para que pooch verifique la integridad del fichero en cada descarga.
+_BOUNDARIES_RELEASE_HASH: str | None = None
+
+
+def _default_boundaries_path() -> Path:
+    """Descarga (o recupera de cache) el shapefile de recintos municipales."""
+    import pooch
+
+    extracted = pooch.retrieve(
+        url=_BOUNDARIES_RELEASE_URL,
+        known_hash=_BOUNDARIES_RELEASE_HASH,
+        fname="recintos_municipales_inspire_peninbal_etrs89.zip",
+        path=pooch.os_cache("multimodalpy"),
+        processor=pooch.Unzip(),
+    )
+    shp_files = [Path(p) for p in extracted if p.endswith(".shp")]
+    if not shp_files:
+        raise FileNotFoundError(
+            "No se encontro ningun .shp en el recurso descargado desde "
+            f"{_BOUNDARIES_RELEASE_URL}"
+        )
+    return shp_files[0]
 
 # Solo se aceptan shapefile o geojson como fichero de limites (indicacion de la
 # reunion: nada de geopackage para ``boundaries_path``).
@@ -277,7 +301,7 @@ def find_area_boundary(
     paquete. La busqueda por nombre es tolerante a acentos y erratas (Levenshtein).
     """
     if boundaries_path is None:
-        boundaries_path = DEFAULT_BOUNDARIES_PATH
+        boundaries_path = _default_boundaries_path()
     boundaries_path = Path(boundaries_path)
 
     if boundaries_path.suffix.lower() not in ALLOWED_BOUNDARY_SUFFIXES:
