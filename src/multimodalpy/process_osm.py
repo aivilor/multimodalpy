@@ -50,7 +50,7 @@ def _json_safe(value: object) -> object:
         return str(value)
 
 
-def _clean_for_file(gdf: "gpd.GeoDataFrame") -> "gpd.GeoDataFrame":
+def _clean_for_file(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Limpia columnas no escalares para poder exportar la capa a fichero."""
     cleaned = gdf.copy()
     for column in cleaned.columns:
@@ -120,12 +120,12 @@ def _primary_highway(value: object) -> object:
 
 
 def derive_topology_nodes_from_edges(
-    nodes: "gpd.GeoDataFrame",
-    edges: "gpd.GeoDataFrame",
+    nodes: gpd.GeoDataFrame,
+    edges: gpd.GeoDataFrame,
     *,
     layer_id: str,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Construye una capa de nodos completa a partir de los vertices de las aristas.
 
     Los grafos simplificados de OSMnx mantienen el grafo de enrutamiento compacto,
@@ -246,8 +246,8 @@ def derive_topology_nodes_from_edges(
 # Division de aristas por nodos topologicos reales
 # ---------------------------------------------------------------------------
 def split_edges_with_topology_nodes(
-    edges: "gpd.GeoDataFrame",
-    topology_nodes: "gpd.GeoDataFrame",
+    edges: gpd.GeoDataFrame,
+    topology_nodes: gpd.GeoDataFrame,
     *,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
     split_roles: tuple[str, ...] = (
@@ -255,7 +255,7 @@ def split_edges_with_topology_nodes(
         "through_endpoint",
         "linear_vertex",
     ),
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Divide cada arista en tramos entre nodos topologicos "reales".
 
     Un grafo simplificado de OSMnx solo conserva como nodos los extremos
@@ -434,7 +434,8 @@ MODE_STOP_PENALTIES_SEC: dict[str, dict[str, float]] = {
 
 def _parse_maxspeed_kmh(value: object) -> float | None:
     """Interpreta el tag ``maxspeed`` de OSM (num., texto, listas, "30 mph",
-    valores ';'-separados como "30;50" o "20;walk")."""
+    valores ';'-separados como "30;50" o "20;walk").
+    """
     if value is None:
         return None
     if isinstance(value, (list, tuple, set)):
@@ -479,7 +480,8 @@ WALKING_HIGHWAY_ALIASES: set[str] = {
 
 def _normalize_highway(highway_value: object) -> object:
     """Normaliza tags highway compuestos (';'-separados o listas) y colapsa
-    cualquier variante peatonal conocida a 'footway'."""
+    cualquier variante peatonal conocida a 'footway'.
+    """
     if isinstance(highway_value, (list, tuple)):
         tokens = [str(v) for v in highway_value if v is not None]
     elif isinstance(highway_value, str) and ";" in highway_value:
@@ -505,14 +507,14 @@ def _hwy_free_flow_speed_kmh(highway_value: object, profile: dict) -> float:
 
 
 def add_mode_travel_time(
-    edges: "gpd.GeoDataFrame",
-    nodes: "gpd.GeoDataFrame",
+    edges: gpd.GeoDataFrame,
+    nodes: gpd.GeoDataFrame,
     *,
     mode: str,
     length_col: str = "length",
     to_node_col: str = "to_node_id",
     output_col: str = "tts",
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Calcula el tiempo de viaje por arista (``tts``, en segundos).
 
     tiempo = tiempo_libre (longitud / velocidad) + penalizacion_de_parada
@@ -606,7 +608,7 @@ def normalize_osm_graph(
     travel_speed_kmh: float | None = None,
     topology_nodes: bool = True,
     clean_edges_for_export: bool = True,
-) -> tuple["gpd.GeoDataFrame", "gpd.GeoDataFrame"]:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Normaliza un grafo de OSMnx en GeoDataFrames de nodos y aristas.
 
     Devuelve:
@@ -683,7 +685,7 @@ def build_final_osm_layers(
     mode: str,
     output_crs: str = SOURCE_CRS,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
-) -> tuple["gpd.GeoDataFrame", "gpd.GeoDataFrame"]:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Pipeline completo: grafo OSMnx -> capas finales de nodos y aristas.
 
     Pasos:

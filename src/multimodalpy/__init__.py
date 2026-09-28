@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import logging
 
-from . import get_area
+from . import get_area, get_network, process_gtfs, process_osm
 from .get_area import find_area_boundary
 from .get_network import main
-from . import get_network, process_gtfs, process_osm
 
 # Una libreria no debe escribir en la terminal por su cuenta: sin este handler,
 # Python mostraria por stderr los avisos de nivel WARNING aunque la aplicacion

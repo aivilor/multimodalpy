@@ -42,7 +42,7 @@ DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
 # ---------------------------------------------------------------------------
 # Lectura de tablas GTFS
 # ---------------------------------------------------------------------------
-def _strip_gtfs_whitespace(df: "pd.DataFrame") -> "pd.DataFrame":
+def _strip_gtfs_whitespace(df: pd.DataFrame) -> pd.DataFrame:
     """Quita el relleno de espacios de cabeceras y valores de una tabla GTFS.
 
     Algunos feeds oficiales publican los CSV con las columnas alineadas a un
@@ -63,7 +63,7 @@ def _strip_gtfs_whitespace(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
-def read_gtfs_table(feed_path: str | Path, table_name: str) -> "pd.DataFrame":
+def read_gtfs_table(feed_path: str | Path, table_name: str) -> pd.DataFrame:
     """Lee una tabla GTFS desde un ZIP o desde una carpeta GTFS extraida."""
     import pandas as pd
 
@@ -116,14 +116,14 @@ def infer_transport_mode(feed_path: str | Path) -> str:
 
 def _read_optional_gtfs_table(
     feed_path: str | Path, table_name: str
-) -> "pd.DataFrame | None":
+) -> pd.DataFrame | None:
     try:
         return read_gtfs_table(feed_path, table_name)
     except FileNotFoundError:
         return None
 
 
-def _existing_columns(df: "pd.DataFrame", columns: list[str]) -> list[str]:
+def _existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
     return [column for column in columns if column in df.columns]
 
 
@@ -134,7 +134,7 @@ def _unique_join(values) -> str | None:
     return "|".join(clean) if clean else None
 
 
-def _filter_by_geometry(gdf: "gpd.GeoDataFrame", filter_geometry) -> "gpd.GeoDataFrame":
+def _filter_by_geometry(gdf: gpd.GeoDataFrame, filter_geometry) -> gpd.GeoDataFrame:
     if filter_geometry is None:
         return gdf
     return gdf[gdf.geometry.intersects(filter_geometry)].copy()
@@ -143,7 +143,7 @@ def _filter_by_geometry(gdf: "gpd.GeoDataFrame", filter_geometry) -> "gpd.GeoDat
 # ---------------------------------------------------------------------------
 # Horas GTFS (permiten valores >= 24:00:00 para servicios nocturnos)
 # ---------------------------------------------------------------------------
-def gtfs_time_to_seconds(time_str) -> "float":
+def gtfs_time_to_seconds(time_str) -> float:
     """Convierte 'HH:MM:SS' (con HH pudiendo ser >= 24) a segundos desde medianoche.
 
     Devuelve NaN si el valor es nulo o no tiene el formato esperado.
@@ -165,7 +165,7 @@ def gtfs_time_to_seconds(time_str) -> "float":
     return hours * 3600 + minutes * 60 + seconds
 
 
-def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> "str | None":
+def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
     """Agrupa segundos-desde-medianoche en una franja horaria tipo '08-09'."""
     import math
 
@@ -179,7 +179,7 @@ def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> "str | None":
 
 def classify_period(
     seconds, peak_periods: dict[str, tuple[int, int]] | None = None
-) -> "str | None":
+) -> str | None:
     """Clasifica un instante (segundos desde medianoche) en punta_manana /
     punta_tarde / resto_del_dia, segun ``peak_periods`` (por defecto
     ``DEFAULT_PEAK_PERIODS``). Devuelve ``None`` si no hay hora disponible.
@@ -209,7 +209,8 @@ _WEEKDAY_ORDER = [
 
 def _union_days_of_week(values) -> str | None:
     """Une varios textos 'lunes|martes' (uno por viaje) en un unico resumen,
-    ordenado de lunes a domingo, sin duplicados."""
+    ordenado de lunes a domingo, sin duplicados.
+    """
     import math
 
     days: set[str] = set()
@@ -223,7 +224,7 @@ def _union_days_of_week(values) -> str | None:
     return "|".join(day for day in _WEEKDAY_ORDER if day in days)
 
 
-def _pack_key_value(pairs: "pd.Series", *, decimals: int = 0) -> "str | None":
+def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
     """Empaqueta pares (etiqueta, valor) ordenados en 'etiqueta:valor|etiqueta:valor'."""
     import math
 
@@ -242,12 +243,12 @@ def _pack_key_value(pairs: "pd.Series", *, decimals: int = 0) -> "str | None":
 # Construccion de capas normalizadas
 # ---------------------------------------------------------------------------
 def build_gtfs_stops_gdf(
-    stops: "pd.DataFrame",
+    stops: pd.DataFrame,
     *,
     dataset_name: str,
     layer_id: str,
     filter_geometry=None,
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Capa de paradas (nodos) a partir de ``stops.txt``."""
     import geopandas as gpd
     import pandas as pd
@@ -286,10 +287,10 @@ def _classify_day_type(runs_weekday, runs_weekend) -> str | None:
 
 
 def _attach_service_days(
-    trips: "pd.DataFrame",
-    calendar: "pd.DataFrame | None",
-    calendar_dates: "pd.DataFrame | None",
-) -> "pd.DataFrame":
+    trips: pd.DataFrame,
+    calendar: pd.DataFrame | None,
+    calendar_dates: pd.DataFrame | None,
+) -> pd.DataFrame:
     """Anade a ``trips`` columnas sobre en que dias circula el servicio:
 
     - ``days_active``: num. dias/semana con servicio (recuento, como antes).
@@ -460,19 +461,19 @@ def _attach_service_days(
 
 
 def _build_stop_to_stop_trip_records(
-    stop_times: "pd.DataFrame",
-    stops: "pd.DataFrame",
-    trips: "pd.DataFrame",
-    routes: "pd.DataFrame",
+    stop_times: pd.DataFrame,
+    stops: pd.DataFrame,
+    trips: pd.DataFrame,
+    routes: pd.DataFrame,
     *,
     dataset_name: str,
-    calendar: "pd.DataFrame | None" = None,
-    calendar_dates: "pd.DataFrame | None" = None,
-    frequencies: "pd.DataFrame | None" = None,
+    calendar: pd.DataFrame | None = None,
+    calendar_dates: pd.DataFrame | None = None,
+    frequencies: pd.DataFrame | None = None,
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """Construye la tabla intermedia, sin agregar, de un registro por (viaje,
     tramo entre paradas consecutivas). La reutilizan tanto la capa agregada de
     aristas (``build_gtfs_stop_to_stop_edges_gdf``) como la tabla plana de
@@ -613,19 +614,19 @@ def _build_stop_to_stop_trip_records(
 
 
 def build_gtfs_schedule_table(
-    stop_times: "pd.DataFrame",
-    stops: "pd.DataFrame",
-    trips: "pd.DataFrame",
-    routes: "pd.DataFrame",
+    stop_times: pd.DataFrame,
+    stops: pd.DataFrame,
+    trips: pd.DataFrame,
+    routes: pd.DataFrame,
     *,
     dataset_name: str,
-    calendar: "pd.DataFrame | None" = None,
-    calendar_dates: "pd.DataFrame | None" = None,
-    frequencies: "pd.DataFrame | None" = None,
+    calendar: pd.DataFrame | None = None,
+    calendar_dates: pd.DataFrame | None = None,
+    frequencies: pd.DataFrame | None = None,
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """Opcion B: tabla plana (sin geometria), un registro por viaje y tramo.
 
     Pensada para unirse con la capa ``edges`` por ``edge_id`` cuando se necesita
@@ -672,19 +673,20 @@ def build_gtfs_schedule_table(
 
 
 def _period_pivot_columns(
-    rows: "pd.DataFrame",
+    rows: pd.DataFrame,
     group_cols: list[str],
     peak_periods: dict[str, tuple[int, int]] | None,
     *,
     suffix: str = "",
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """Agrega ``travel_time_seconds_mean`` / ``trip_count`` por periodo
     (punta_manana / punta_tarde / resto_del_dia), pivotando ``period`` a
     columnas tipo ``travel_time_seconds_mean_peak_am``. ``suffix`` se anade al
     final de cada nombre de columna (p.ej. ``"_weekday"``) para poder
     combinar este desglose por periodo con otro desglose (laborables/fin de
     semana). Devuelve siempre todas las columnas de periodo, aunque esten
-    vacias, para que el merge posterior sea consistente."""
+    vacias, para que el merge posterior sea consistente.
+    """
     import pandas as pd
 
     all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
@@ -721,22 +723,22 @@ def _period_pivot_columns(
 
 
 def build_gtfs_stop_to_stop_edges_gdf(
-    stop_times: "pd.DataFrame",
-    stops: "pd.DataFrame",
-    trips: "pd.DataFrame",
-    routes: "pd.DataFrame",
+    stop_times: pd.DataFrame,
+    stops: pd.DataFrame,
+    trips: pd.DataFrame,
+    routes: pd.DataFrame,
     *,
     dataset_name: str,
     layer_id: str,
     filter_geometry=None,
-    calendar: "pd.DataFrame | None" = None,
-    calendar_dates: "pd.DataFrame | None" = None,
-    frequencies: "pd.DataFrame | None" = None,
+    calendar: pd.DataFrame | None = None,
+    calendar_dates: pd.DataFrame | None = None,
+    frequencies: pd.DataFrame | None = None,
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Capa de aristas parada-a-parada: una fila por par de paradas.
 
     Incluye tres cosas nuevas, todas manteniendo el formato tabular:
@@ -945,7 +947,7 @@ def normalize_gtfs_feed(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
     include_schedule_table: bool = True,
-) -> tuple["gpd.GeoDataFrame", "gpd.GeoDataFrame", "pd.DataFrame | None"]:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
     """Normaliza un feed GTFS en (paradas, aristas, horario).
 
     El tercer elemento devuelto, ``schedule`` (opcion B), es una tabla plana

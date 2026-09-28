@@ -23,8 +23,9 @@ import logging
 import os
 import re
 import unicodedata
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING
 
 from . import process_gtfs, process_osm
 
@@ -247,7 +248,7 @@ def province_code_from_natcode(value: object) -> int | None:
     return None
 
 
-def _find_province_code(gdf: "gpd.GeoDataFrame") -> int | None:
+def _find_province_code(gdf: gpd.GeoDataFrame) -> int | None:
     """Busca el codigo de provincia en las columnas de codigo del boundary."""
     for column in _existing_columns(gdf, PROVINCE_CODE_COLUMNS):
         for raw_value in gdf[column].dropna().tolist():
@@ -260,17 +261,17 @@ def _find_province_code(gdf: "gpd.GeoDataFrame") -> int | None:
 # ---------------------------------------------------------------------------
 # Resolucion del area de estudio (municipio -> poligono)
 # ---------------------------------------------------------------------------
-def _existing_columns(gdf: "gpd.GeoDataFrame", requested: Iterable[str]) -> list[str]:
+def _existing_columns(gdf: gpd.GeoDataFrame, requested: Iterable[str]) -> list[str]:
     return [column for column in requested if column in gdf.columns]
 
 
 def _select_area_rows(
-    gdf: "gpd.GeoDataFrame",
+    gdf: gpd.GeoDataFrame,
     area_name: str,
     area_code: str | None = None,
     name_columns: Iterable[str] | None = None,
     code_columns: Iterable[str] | None = None,
-) -> tuple["gpd.GeoDataFrame", str, str]:
+) -> tuple[gpd.GeoDataFrame, str, str]:
     if area_code:
         for column in _existing_columns(gdf, code_columns or DEFAULT_CODE_COLUMNS):
             normalized = gdf[column].astype(str).str.strip()
@@ -332,7 +333,7 @@ def find_area_boundary(
     name_columns: Iterable[str] | None = None,
     code_columns: Iterable[str] | None = None,
     target_crs: str = "EPSG:4326",
-) -> "gpd.GeoDataFrame":
+) -> gpd.GeoDataFrame:
     """Devuelve un unico poligono (disuelto) para el municipio indicado.
 
     ``boundaries_path`` debe ser un shapefile (.shp) o un GeoJSON (.geojson/.json).
@@ -393,7 +394,7 @@ def find_area_boundary(
 # Descarga OSM (osmnx) + estandarizacion (process_osm)
 # ---------------------------------------------------------------------------
 def download_osm_layers(
-    boundary: "gpd.GeoDataFrame",
+    boundary: gpd.GeoDataFrame,
     *,
     modes: Iterable[str] = ("caminable",),
     output_crs: str = "EPSG:4326",
@@ -462,7 +463,7 @@ def download_osm_layers(
 # ---------------------------------------------------------------------------
 # Descarga GTFS (API NAP) + estandarizacion (process_gtfs)
 # ---------------------------------------------------------------------------
-def _nap_get(url: str, headers: dict, timeout: int = 60) -> "requests.Response":
+def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
     """Peticion GET a la API del NAP con gestion clara de errores de red y autenticacion.
 
     Gestiona de forma explicita:
@@ -679,7 +680,7 @@ def download_gtfs_nap_zips(
 
 def download_gtfs_layers(
     area_name: str,
-    boundary: "gpd.GeoDataFrame",
+    boundary: gpd.GeoDataFrame,
     zip_dir: str | Path,
     *,
     modes: Iterable[int],
