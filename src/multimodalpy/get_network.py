@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -611,6 +612,15 @@ def main(
     if nap_modes and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"
+        # The failure is also logged, but the package logger is silent
+        # unless the application configures logging, so without a warning
+        # the user just gets a network with no bus/train and no reason.
+        warnings.warn(
+            "No bus/train layers were written: "
+            f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
+            UserWarning,
+            stacklevel=2,
+        )
     return manifest
 
 
