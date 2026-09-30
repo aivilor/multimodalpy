@@ -26,6 +26,12 @@ import logging
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+    import networkx as nx
+    import pandas as pd
 
 from . import get_area, process_gtfs
 
@@ -116,7 +122,7 @@ def _json_safe(value: object) -> object:
         return str(value)
 
 
-def _osm_graph_to_json(graph: object, output_path: Path) -> Path:
+def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
     """Write an OSMnx graph as NetworkX node-link JSON."""
     import networkx as nx
     from networkx.readwrite import json_graph
@@ -188,7 +194,7 @@ def _relative_name(path: Path, root: Path) -> str:
 # Writing the schedule table (option B, flat table with no geometry)
 # ---------------------------------------------------------------------------
 def _write_schedule_tables(
-    schedule_tables: dict[str, object],
+    schedule_tables: dict[str, pd.DataFrame | None],
     output_dir: Path,
     output_file_type: str,
     *,
@@ -234,7 +240,7 @@ def _write_schedule_tables(
 # Writing layers in the requested format
 # ---------------------------------------------------------------------------
 def _write_layers(
-    layers: dict[str, object],
+    layers: dict[str, gpd.GeoDataFrame | None],
     output_dir: Path,
     output_file_type: str,
     *,
@@ -415,11 +421,13 @@ def main(
         target_crs="EPSG:4326",
     )
 
-    layers: dict[str, object] = {"study_area_boundary": boundary.to_crs(crs)}
+    layers: dict[str, gpd.GeoDataFrame | None] = {
+        "study_area_boundary": boundary.to_crs(crs)
+    }
     # Relative path, without extension, of each layer inside the output folder.
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
-    gtfs_results: dict[str, dict[str, object]] = {}
+    gtfs_results: dict[str, dict[str, Any]] = {}
 
     # 2) OSM.
     if osm_modes:
@@ -435,7 +443,7 @@ def main(
             layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
 
     # 3) GTFS (bus / train) via NAP.
-    schedule_tables: dict[str, object] = {}
+    schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_error: str | None = None
     gtfs_zips_dir = output_dir / "gtfs_zips"
     if nap_modes:
@@ -510,22 +518,18 @@ def main(
 
         GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
 
-        for dataset, out in gtfs_results.items():
-            nodes_gdf = out["nodes"]
+        for dataset, gtfs_out in gtfs_results.items():
+            nodes_gdf = gtfs_out["nodes"]
             keep_node_cols = [c for c in GTFS_NODES_COLUMNS if c in nodes_gdf.columns]
-            gtfs_mode = out.get("mode") or "bus"
-            layer_paths[f"gtfs_{dataset}_nodes"] = f"{gtfs_mode}/{dataset}/nodes"
-            layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
-            layer_paths[f"gtfs_{dataset}_schedule"] = f"{gtfs_mode}/{dataset}/schedule"
-            layers[f"gtfs_{dataset}_nodes"] = nodes_gdf[keep_node_cols]
-
-            edges_gdf = out["edges"]
+            gtfs_mode = gtfs_out.get("mode") or "bus"
+            ...
+            edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
             edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
-            layers[f"gtfs_{dataset}_edges"] = edges_gdf
-
-            if schedule and out.get("schedule") is not None:
-                schedule_tables[f"gtfs_{dataset}_schedule"] = out["schedule"]
+            ...
+            if schedule and gtfs_out.get("schedule") is not None:
+                schedule_tables[f"gtfs_{dataset}_schedule"] = gtfs_out["schedule"]
+                
 
     if nap_modes and not gtfs_zips:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
@@ -549,9 +553,9 @@ def main(
                 relative = f"{mode}/graph.json"
                 _osm_graph_to_json(out["graph"], output_dir / relative)
                 files_here.append(relative)
-            for dataset, out in gtfs_results.items():
-                relative = f"{out.get('mode') or 'bus'}/{dataset}/graph.json"
-                _gtfs_to_graph_json(out["nodes"], out["edges"], output_dir / relative)
+            for dataset, gtfs_out in gtfs_results.items():
+                relative = f"{gtfs_out.get('mode') or 'bus'}/{dataset}/graph.json"
+                _gtfs_to_graph_json(gtfs_out["nodes"], gtfs_out["edges"], output_dir / relative)
                 files_here.append(relative)
             files_here.extend(
                 _write_schedule_tables(
