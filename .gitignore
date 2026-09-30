@@ -1,0 +1,10 @@
+# Sistema operativo
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.coverage
+
+# Datos generados
+data/outputs/dist/
