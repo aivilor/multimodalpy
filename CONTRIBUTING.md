@@ -1,107 +1,68 @@
-# Contributing Guide
+# Contributing to multimodalpy
 
-This document describes how our team of 3 works together in this repository using a branch-based workflow.
+Thanks for your interest in contributing! `multimodalpy` is a small, community-friendly scientific Python package, and contributions of all kinds are welcome — bug reports, documentation fixes, new features, and code review.
 
-## Branch Structure
+## Ways to contribute
 
-```
-main
- └── develop (branched from main)
-       └── debug (branched from develop)
-```
+- **Report a bug or request a feature**: [open an issue](https://github.com/aivilor/multimodalpy/issues) with as much detail as possible (Python version, OS, a minimal reproducible example for bugs).
+- **Improve documentation**: typo fixes, clearer examples, and new tutorials are all valuable and don't require deep familiarity with the codebase.
+- **Fix a bug or add a feature**: see the development setup below, then open a pull request.
+- **Review pull requests**: feedback on open PRs is welcome even if you're not the author.
 
-| Branch | Purpose | Who works here |
-|---|---|---|
-| `main` | Final, production-ready code only | No one pushes directly |
-| `develop` | Integration branch where finished features come together | Everyone, via Pull Requests |
-| `debug` | Testing/QA stage to catch integration bugs before release | Whoever is testing/fixing bugs |
-| `feature/*` | Individual work on a specific task or feature | One person per branch |
+## Development setup
 
-## Workflow
-
-```
-feature/*  →  develop   (Pull Request, 1+ approval required)
-develop    →  debug     (when a batch of features is ready to test)
-debug      →  main      (once tested and confirmed stable)
-```
-
-**Important:** Never merge `develop` directly into `main`, skipping `debug`. The `debug` stage exists to catch bugs after integration but before release — skipping it defeats its purpose.
-
-## Starting New Work
-
-1. Make sure your local `develop` is up to date:
+1. Fork the repository and clone your fork:
    ```bash
-   git checkout develop
-   git pull origin develop
+   git clone https://github.com/<your-username>/multimodalpy.git
+   cd multimodalpy
    ```
 
-2. Create a feature branch off `develop`:
+2. Create a virtual environment and install the package in editable mode with development dependencies:
    ```bash
-   git checkout -b feature/yourname-task
+   python -m venv .venv
+   source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+   pip install -e . --group dev
+   ```
+   (requires pip ≥ 25.1 for the `--group` flag; alternatively, with [uv](https://docs.astral.sh/uv/): `uv sync --group dev`)
+
+3. Create a branch for your change:
+   ```bash
+   git checkout -b fix/short-description-of-change
    ```
 
-   **Naming convention:** `feature/name-task` (e.g. `feature/ana-login`, `feature/luis-api`)
-   For bug fixes: `bugfix/name-issue`
+## Running the checks locally
 
-3. Work, commit, and push regularly:
-   ```bash
-   git add .
-   git commit -m "Describe your change"
-   git push -u origin feature/yourname-task
-   ```
-
-## Submitting Work
-
-1. Open a Pull Request from your `feature/*` branch **into `develop`**.
-2. Request review from at least one teammate.
-3. Resolve any merge conflicts before requesting review.
-   - Rule of thumb: **whoever opens the PR is responsible for resolving conflicts.**
-4. Once approved, merge into `develop`.
-
-## Moving to Debug
-
-When `develop` has a stable batch of features ready to test:
+Before opening a pull request, make sure the full check suite passes — this is the same suite run in CI:
 
 ```bash
-git checkout debug
-git pull origin debug
-git merge develop
-git push origin debug
+python -m pytest       # test suite + coverage report
+python -m mypy         # static type checking
+python -m ruff check . # linting
 ```
 
-- Test thoroughly on `debug`.
-- Fix any bugs found directly on `debug` (or via short-lived `bugfix/*` branches merged into `debug`).
+All three must pass cleanly for a PR to be merged.
 
-## Releasing to Main
+### Code style
 
-Once `debug` is confirmed stable:
+- Code is formatted and linted with [ruff](https://docs.astral.sh/ruff/) (line length 88, numpy-style docstrings).
+- Type-check with [mypy](https://mypy-lang.org/); please add type hints to new public functions.
+- Docstrings follow the [numpy docstring convention](https://numpydoc.readthedocs.io/en/latest/format.html) (see existing functions in `src/multimodalpy/` for examples).
 
-```bash
-git checkout main
-git pull origin main
-git merge debug
-git push origin main
-```
+## Submitting a pull request
 
-Only merge to `main` when the code is fully tested and ready for release.
+1. Push your branch and open a pull request against **`develop`** (not `main`) — this repo develops on `develop` and releases from `main`.
+2. Fill in the PR description: what changed and why, and how you tested it.
+3. Make sure CI (GitHub Actions `Tests` workflow) passes on your PR.
+4. Be responsive to review feedback — most PRs go through at least one round of comments.
 
-## Branch Protection Rules (GitHub Settings)
+## Reporting security issues
 
-To enforce this workflow, `main` (and ideally `develop`) should have branch protection enabled:
+Please do not open a public issue for security-sensitive bugs. Instead, email the maintainer directly at aivilor@upv.es.
 
-- Require Pull Requests before merging
-- Require at least 1 approval
-- Require status checks to pass (if CI is set up)
-- Disable direct pushes
+## Code of Conduct
 
-## General Guidelines
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to abide by its terms.
 
-- **Pull before you branch** — always sync with `develop` before starting new work.
-- **Keep PRs small** — easier to review with a 3-person team.
-- **One feature branch per task** — don't mix unrelated changes.
-- **Communicate** — use GitHub Issues or a Project board to track who's working on what, so branches map to tracked tasks.
-- **Delete merged feature branches** to keep the branch list clean:
-  ```bash
-  git branch -d feature/yourname-task
-  git push origin --delete feature/yourname-task
-  ```
+## Questions?
+
+If anything here is unclear, open an issue and ask — improving these docs based on real questions is itself a welcome contribution.

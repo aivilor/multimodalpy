@@ -1,7 +1,7 @@
 """Downloads data locally according to what the user requested.
 
 Contains the library's main function, ``main()``, which orchestrates the
-whole pipeline with the minimal parameters the user needs:
+whole pipeline with the minimal parameters the user needs::
 
     main(
         area_name,          # str  : municipality to download
@@ -13,7 +13,7 @@ whole pipeline with the minimal parameters the user needs:
                                      # (or a list of several of them)
     )
 
-Modes are automatically split between OSM and GTFS:
+Modes are automatically split between OSM and GTFS::
 
     OSM  -> "walking", "bike", "driving"
     GTFS -> "bus", "trains"
