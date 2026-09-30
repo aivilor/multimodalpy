@@ -30,9 +30,15 @@ if TYPE_CHECKING:
     import networkx as nx
 
 
-# Working CRS. The output CRS is decided in the main function (``main``);
-# defaults to WGS84 (EPSG:4326), the universal CRS.
+# CRS of the graphs downloaded by osmnx. The output CRS is decided in the
+# main function (``main``); defaults to WGS84 (EPSG:4326), the universal CRS.
 SOURCE_CRS = "EPSG:4326"
+# Decimals used to decide that two vertices are the same topology node.
+# The topology is always built in a projected CRS in metres (see
+# ``_metric_crs``), never in the output CRS, so 3 decimals means 1 mm
+# whatever ``output_crs`` the user asks for. Rounding in the output CRS
+# made the result depend on it: in EPSG:4326, 3 decimals of a degree is
+# ~100 m and merged separate intersections into a single node.
 TOPOLOGY_ROUND_DIGITS = 3
 
 
@@ -64,6 +70,32 @@ def _coord_key(
     x: float, y: float, round_digits: int = TOPOLOGY_ROUND_DIGITS
 ) -> tuple[float, float]:
     return (round(float(x), round_digits), round(float(y), round_digits))
+
+
+def _is_metric(crs) -> bool:
+    """Return True if ``crs`` is projected and its axes are in metres."""
+    if crs is None or not crs.is_projected:
+        return False
+    return all(axis.unit_name in {"metre", "meter"} for axis in crs.axis_info[:2])
+
+
+def _metric_crs(*gdfs: gpd.GeoDataFrame | None):
+    """Choose the projected CRS (in metres) the topology is built in.
+
+    If the data is already in a metric projected CRS, that one is kept;
+    otherwise (e.g. EPSG:4326, as osmnx returns it) the local UTM zone is
+    estimated from the data. The choice depends only on the input data,
+    never on the requested output CRS, so the resulting network is the
+    same whatever ``output_crs`` is. Returns ``None`` if there is no
+    geometry to decide from.
+    """
+    for gdf in gdfs:
+        if gdf is None or gdf.crs is None or gdf.empty:
+            continue
+        if _is_metric(gdf.crs):
+            return gdf.crs
+        return gdf.estimate_utm_crs()
+    return None
 
 
 def _iter_line_coords(geometry) -> list[list[tuple[float, float]]]:
@@ -138,12 +170,26 @@ def derive_topology_nodes_from_edges(
     vertex and classifies it as an endpoint, linear vertex or
     intersection. If a derived node matches an original OSMnx node, its
     metadata is kept.
+
+    Vertices are matched in a projected CRS in metres (see
+    ``_metric_crs``): if the layers come in a geographic CRS they are
+    projected for the matching and the result is returned in the edges'
+    original CRS. ``round_digits`` is therefore in metres (3 = 1 mm).
+    Each node keeps the exact coordinates of its first occurrence, not the
+    rounded matching key.
     """
     import geopandas as gpd
     from shapely.geometry import Point
 
     if edges.empty:
         return nodes.copy()
+
+    output_crs = edges.crs
+    work_crs = _metric_crs(edges)
+    if work_crs is not None and not _is_metric(edges.crs):
+        edges = edges.to_crs(work_crs)
+        if not nodes.empty and nodes.crs is not None:
+            nodes = nodes.to_crs(work_crs)
 
     original_by_coord: dict[tuple[float, float], dict] = {}
     if not nodes.empty:
@@ -171,8 +217,9 @@ def derive_topology_nodes_from_edges(
                 entry = stats.setdefault(
                     key,
                     {
-                        "x": key[0],
-                        "y": key[1],
+                        # Exact coordinates of the first occurrence.
+                        "x": float(x),
+                        "y": float(y),
                         "incident_segment_count": 0,
                         "incident_feature_count": 0,
                         "endpoint_occurrences": 0,
@@ -245,6 +292,8 @@ def derive_topology_nodes_from_edges(
 
 
     topology_nodes = gpd.GeoDataFrame(records, geometry=geometries, crs=edges.crs)
+    if output_crs is not None and topology_nodes.crs != output_crs:
+        topology_nodes = topology_nodes.to_crs(output_crs)
     topology_nodes.attrs["node_role_counts"] = dict(sorted(role_counts.items()))
     return _clean_for_file(topology_nodes)
 
@@ -293,12 +342,29 @@ def split_edges_with_topology_nodes(
 
     To go back to the previous behavior (not cutting at plain shape
     vertices), pass ``split_roles=("intersection", "through_endpoint")``.
+
+    As in ``derive_topology_nodes_from_edges``, vertices are matched in a
+    projected CRS in metres; layers in a geographic CRS are projected for
+    the matching and the result is returned in the edges' original CRS.
     """
     import geopandas as gpd
     from shapely.geometry import LineString
 
     if edges.empty:
         return edges.copy()
+
+    output_crs = edges.crs
+    work_crs = _metric_crs(edges)
+    if work_crs is not None and not _is_metric(edges.crs):
+        edges = edges.to_crs(work_crs)
+    if (
+        topology_nodes is not None
+        and not topology_nodes.empty
+        and topology_nodes.crs is not None
+        and edges.crs is not None
+        and topology_nodes.crs != edges.crs
+    ):
+        topology_nodes = topology_nodes.to_crs(edges.crs)
 
     node_lookup: dict[tuple[float, float], dict] = {}
     if topology_nodes is not None and not topology_nodes.empty:
@@ -370,6 +436,8 @@ def split_edges_with_topology_nodes(
                 records.append(record)
 
     split_gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=edges.crs)
+    if output_crs is not None and split_gdf.crs != output_crs:
+        split_gdf = split_gdf.to_crs(output_crs)
     return split_gdf
 
 
@@ -623,7 +691,7 @@ def normalize_osm_graph(
     graph: nx.MultiDiGraph,
     *,
     layer_id: str,
-    output_crs: str = SOURCE_CRS,
+    output_crs: str | None = SOURCE_CRS,
     travel_speed_kmh: float | None = None,
     topology_nodes: bool = True,
     clean_edges_for_export: bool = True,
@@ -636,6 +704,13 @@ def normalize_osm_graph(
             OSMnx's simplification, or full topology nodes if
             ``topology_nodes=True``).
         edges_gdf: OSM graph edges with their attributes.
+
+    The topology is always derived in a projected CRS in metres chosen
+    from the graph itself (see ``_metric_crs``), and only then reprojected
+    to ``output_crs``, so the nodes do not depend on the output CRS.
+    ``output_crs=None`` leaves both layers in that metric working CRS
+    (used by ``build_final_osm_layers``, which still needs to split the
+    edges before reprojecting).
 
     ``clean_edges_for_export=False`` leaves the edges' list-valued
     columns (``osmid``, ``highway``, ``lanes``, ``maxspeed``, ``name``,
@@ -664,11 +739,15 @@ def normalize_osm_graph(
     nodes["layer"] = layer_id
     edges["layer"] = layer_id
 
-    nodes = _clean_for_file(nodes.to_crs(output_crs))
-    edges = edges.to_crs(output_crs)
+    work_crs = _metric_crs(edges, nodes) or edges.crs
+    nodes = _clean_for_file(nodes.to_crs(work_crs))
+    edges = edges.to_crs(work_crs)
     edges = _clean_for_file(edges) if clean_edges_for_export else edges
     if topology_nodes:
         nodes = derive_topology_nodes_from_edges(nodes, edges, layer_id=layer_id)
+    if output_crs is not None:
+        nodes = nodes.to_crs(output_crs)
+        edges = edges.to_crs(output_crs)
     return nodes, edges
 
 
@@ -726,11 +805,15 @@ def build_final_osm_layers(
        ``from_node_id``, ``to_node_id``, ``highway``, ``lanes``,
        ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
        ``tts``, ``geometry``).
+
+    Steps 1-2 run in a projected CRS in metres chosen from the graph
+    (``_metric_crs``); both layers are reprojected to ``output_crs`` only
+    at the end, so the network's topology is the same for any output CRS.
     """
     nodes, edges = normalize_osm_graph(
         graph,
         layer_id=layer_id,
-        output_crs=output_crs,
+        output_crs=None,  # stay in the metric working CRS until the end
         topology_nodes=True,
         clean_edges_for_export=False,
     )
@@ -764,4 +847,4 @@ def build_final_osm_layers(
     node_cols = [c for c in FINAL_NODE_COLUMNS if c in nodes.columns]
     nodes_final = _clean_for_file(nodes[node_cols])
 
-    return nodes_final, edges_final
+    return nodes_final.to_crs(output_crs), edges_final.to_crs(output_crs)

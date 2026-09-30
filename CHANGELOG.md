@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CITATION.cff` for machine-readable citation metadata.
 
 ### Fixed
+- OSM topology no longer depends on the output CRS. Topology nodes were
+  matched on coordinates rounded to 3 decimals in the requested `crs`,
+  which in the default EPSG:4326 is ~100 m: nearby intersections merged
+  into a single node, edges became self-loops and nodes were moved to the
+  rounded position. The topology is now built in a projected CRS in
+  metres chosen from the data (the local UTM zone), with a 1 mm
+  tolerance, and the final layers are reprojected to `crs` at the end.
+  Nodes keep their exact coordinates.
 - Corrected `.gitignore` so build artifacts in `dist/` are actually
   excluded from version control (previous pattern only matched a nested,
   nonexistent `data/outputs/dist/` path).
