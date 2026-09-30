@@ -522,13 +522,20 @@ def main(
             nodes_gdf = gtfs_out["nodes"]
             keep_node_cols = [c for c in GTFS_NODES_COLUMNS if c in nodes_gdf.columns]
             gtfs_mode = gtfs_out.get("mode") or "bus"
-            ...
+
+            layers[f"gtfs_{dataset}_nodes"] = nodes_gdf[keep_node_cols]
+            layer_paths[f"gtfs_{dataset}_nodes"] = f"{gtfs_mode}/{dataset}/nodes"
+
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
             edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
-            ...
+
+            layers[f"gtfs_{dataset}_edges"] = edges_gdf
+            layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
+
             if schedule and gtfs_out.get("schedule") is not None:
                 schedule_tables[f"gtfs_{dataset}_schedule"] = gtfs_out["schedule"]
+                layer_paths[f"gtfs_{dataset}_schedule"] = f"{gtfs_mode}/{dataset}/schedule"
                 
 
     if nap_modes and not gtfs_zips:
