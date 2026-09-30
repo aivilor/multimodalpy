@@ -1,7 +1,7 @@
 # multimodalpy
 
 [![Tests](https://github.com/aivilor/multimodalpy/actions/workflows/tests.yml/badge.svg)](https://github.com/aivilor/multimodalpy/actions/workflows/tests.yml)
-[![TestPyPI version](https://img.shields.io/badge/TestPyPI-0.1.0-blue.svg)](https://test.pypi.org/project/multimodalpy/) <!-- swap for a real PyPI badge once published there -->
+[![TestPyPI version](https://img.shields.io/badge/TestPyPI-0.1.1-blue.svg)](https://test.pypi.org/project/multimodalpy/) <!-- swap for a real PyPI badge once published there -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Easy creation of multimodal transport networks from OpenStreetMap and GTFS data.
