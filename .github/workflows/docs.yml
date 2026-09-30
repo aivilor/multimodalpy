@@ -1,0 +1,42 @@
+name: Docs
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
+
+jobs:
+  build:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install package with docs dependencies
+        run: pip install -e . --group docs
+
+      - name: Build docs (fail on warnings)
+        run: sphinx-build -b html -W docs docs/_build/html
+
+      - name: Upload built docs as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/_build/html
+          retention-days: 7

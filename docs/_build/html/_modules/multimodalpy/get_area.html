@@ -1,0 +1,1199 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>multimodalpy.get_area &#8212; multimodalpy 0.1.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../../_static/scripts/fontawesome.js?digest=cb8930eaaf36d9849b67"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67" />
+
+    <script src="../../_static/documentation_options.js?v=01f34227"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = '_modules/multimodalpy/get_area';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.1.0" />
+  
+    
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+  
+    <p class="title logo__title">multimodalpy 0.1.0 documentation</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api.html">
+    API reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/aivilor/multimodalpy" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar hide-on-wide">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api.html">
+    API reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/aivilor/multimodalpy" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../index.html" class="nav-link">Module code</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">multimodalpy.get_area</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <h1>Source code for multimodalpy.get_area</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Downloads data from the OSM and GTFS APIs, and calls process_osm / process_gtfs.</span>
+
+<span class="sd">This module resolves a study area (municipality) from an administrative</span>
+<span class="sd">boundaries file and downloads the network layers:</span>
+
+<span class="sd">- OSM (via ``osmnx``) for walking / bike / driving modes, normalizing the</span>
+<span class="sd">  result with :mod:`multimodalpy.process_osm`.</span>
+<span class="sd">- Official GTFS (via the NAP API, Spain&#39;s National Access Point) for bus /</span>
+<span class="sd">  train, normalizing the result with :mod:`multimodalpy.process_gtfs`.</span>
+
+<span class="sd">The functions return in-memory objects (GeoDataFrames / graphs). Writing to</span>
+<span class="sd">disk in the format chosen by the user is done by</span>
+<span class="sd">:mod:`multimodalpy.get_network`.</span>
+
+<span class="sd">Credentials: no key is stored in the code. The NAP key is read from the</span>
+<span class="sd">``NAP_API_KEY`` environment variable (or a local ``.env`` file).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">difflib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">unicodedata</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterable</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">TYPE_CHECKING</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">process_gtfs</span><span class="p">,</span> <span class="n">process_osm</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">geopandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">gpd</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="n">NAP_BASE_URL</span> <span class="o">=</span> <span class="s2">&quot;https://nap.transportes.gob.es/api/v2&quot;</span>
+
+<span class="c1"># Municipal-boundary shapefile. It isn&#39;t distributed inside the package or</span>
+<span class="c1"># the repository (~50 MB); it&#39;s downloaded the first time it&#39;s needed from</span>
+<span class="c1"># a GitHub release and cached locally with ``pooch`` (in the OS&#39;s standard</span>
+<span class="c1"># cache directory), so subsequent calls reuse the local copy instead of</span>
+<span class="c1"># downloading again.</span>
+<span class="n">_BOUNDARIES_RELEASE_URL</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;https://github.com/aivilor/multimodalpy/releases/download/data-v1/&quot;</span>
+    <span class="s2">&quot;recintos_municipales_inspire_peninbal_etrs89.zip&quot;</span>
+<span class="p">)</span>
+<span class="c1"># TODO: once downloaded successfully, fill in the real hash (see below)</span>
+<span class="c1"># so pooch can verify the file&#39;s integrity on every download.</span>
+<span class="n">_BOUNDARIES_RELEASE_HASH</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_default_boundaries_path</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Path</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Download (or retrieves from cache) the municipal-boundary shapefile.&quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">pooch</span>
+
+    <span class="n">extracted</span> <span class="o">=</span> <span class="n">pooch</span><span class="o">.</span><span class="n">retrieve</span><span class="p">(</span>
+        <span class="n">url</span><span class="o">=</span><span class="n">_BOUNDARIES_RELEASE_URL</span><span class="p">,</span>
+        <span class="n">known_hash</span><span class="o">=</span><span class="n">_BOUNDARIES_RELEASE_HASH</span><span class="p">,</span>
+        <span class="n">fname</span><span class="o">=</span><span class="s2">&quot;recintos_municipales_inspire_peninbal_etrs89.zip&quot;</span><span class="p">,</span>
+        <span class="n">path</span><span class="o">=</span><span class="n">pooch</span><span class="o">.</span><span class="n">os_cache</span><span class="p">(</span><span class="s2">&quot;multimodalpy&quot;</span><span class="p">),</span>
+        <span class="n">processor</span><span class="o">=</span><span class="n">pooch</span><span class="o">.</span><span class="n">Unzip</span><span class="p">(),</span>
+    <span class="p">)</span>
+    <span class="n">shp_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">Path</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">extracted</span> <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.shp&quot;</span><span class="p">)]</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">shp_files</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
+            <span class="s2">&quot;No .shp file found in the resource downloaded from &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_BOUNDARIES_RELEASE_URL</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">shp_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+
+<span class="c1"># Only shapefile or geojson are accepted as the boundaries file (per the</span>
+<span class="c1"># meeting notes: no geopackage for ``boundaries_path``).</span>
+<span class="n">ALLOWED_BOUNDARY_SUFFIXES</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;.shp&quot;</span><span class="p">,</span> <span class="s2">&quot;.geojson&quot;</span><span class="p">,</span> <span class="s2">&quot;.json&quot;</span><span class="p">}</span>
+
+<span class="n">DEFAULT_NAME_COLUMNS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;nombre&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;NOMBRE&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;name&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;NAME&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;municipio&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;MUNICIPIO&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;mun_name&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;MUN_NAME&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;nombre_mun&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;NOMBRE_MUN&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;nom_mun&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;NOM_MUN&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;provincia&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;PROVINCIA&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;comunidad&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;COMUNIDAD&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;ccaa&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;CCAA&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;texto&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;TEXTO&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rotulo&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;ROTULO&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;NAMEUNIT&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">DEFAULT_CODE_COLUMNS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;NATCODE&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;natcode&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;INSPIREID&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;inspireid&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;codigo&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;CODIGO&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;cod_mun&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;COD_MUN&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;ine&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;INE&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># The NAP&#39;s ``/conjunto-dato/region/{id}`` endpoint only understands province</span>
+<span class="c1"># ids: INE codes 1-52. The ``/region`` listing, on the other hand, returns</span>
+<span class="c1"># ~8300 entries (municipalities, regions and provinces) that share that same</span>
+<span class="c1"># id space, so searching there by name is a trap:</span>
+<span class="c1">#</span>
+<span class="c1"># - Municipality entries (``tipo=3``) carry the 5-digit INE code, always</span>
+<span class="c1">#   outside the 1-52 range, and the endpoint responds 404.</span>
+<span class="c1"># - Region/CCAA entries (``tipo=1``) carry the region code (1-19), which</span>
+<span class="c1">#   does fall inside the province range, so the endpoint silently returns</span>
+<span class="c1">#   the data for a DIFFERENT province (e.g. the &quot;Madrid&quot; entry has id=13</span>
+<span class="c1">#   and ends up serving Ciudad Real, which is province 13).</span>
+<span class="c1">#</span>
+<span class="c1"># For this reason the province is inferred from the municipality&#39;s official</span>
+<span class="c1"># code, not from comparing names.</span>
+<span class="n">NAP_PROVINCE_IDS</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">53</span><span class="p">))</span>
+
+<span class="c1"># Columns the province code can be extracted from, in order of preference.</span>
+<span class="c1"># NATCODE (INSPIRE) has the form</span>
+<span class="c1"># ``&lt;2 country&gt;&lt;2 region&gt;&lt;2 province&gt;&lt;5 municipality&gt;``.</span>
+<span class="n">PROVINCE_CODE_COLUMNS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;NATCODE&quot;</span><span class="p">,</span> <span class="s2">&quot;natcode&quot;</span><span class="p">,</span> <span class="s2">&quot;cod_mun&quot;</span><span class="p">,</span> <span class="s2">&quot;COD_MUN&quot;</span><span class="p">,</span> <span class="s2">&quot;ine&quot;</span><span class="p">,</span> <span class="s2">&quot;INE&quot;</span><span class="p">)</span>
+
+<span class="c1"># Supported OSM modes (walking / bike / driving). Several input synonyms</span>
+<span class="c1"># are accepted (Spanish/English), but the resulting layer and file name</span>
+<span class="c1"># always use the canonical English label: &quot;walking&quot;, &quot;bike&quot;, &quot;driving&quot;</span>
+<span class="c1"># (see ``NETWORK_TYPE_TO_LAYER_LABEL``).</span>
+<span class="n">OSM_NETWORK_TYPES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;caminable&quot;</span><span class="p">:</span> <span class="s2">&quot;walk&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;walk&quot;</span><span class="p">:</span> <span class="s2">&quot;walk&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;peatonal&quot;</span><span class="p">:</span> <span class="s2">&quot;walk&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;walking&quot;</span><span class="p">:</span> <span class="s2">&quot;walk&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;bicicleta&quot;</span><span class="p">:</span> <span class="s2">&quot;bike&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;bike&quot;</span><span class="p">:</span> <span class="s2">&quot;bike&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;bicycle&quot;</span><span class="p">:</span> <span class="s2">&quot;bike&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;coche&quot;</span><span class="p">:</span> <span class="s2">&quot;drive&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;car&quot;</span><span class="p">:</span> <span class="s2">&quot;drive&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;drive&quot;</span><span class="p">:</span> <span class="s2">&quot;drive&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;carretera&quot;</span><span class="p">:</span> <span class="s2">&quot;drive&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;driving&quot;</span><span class="p">:</span> <span class="s2">&quot;drive&quot;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="c1"># Canonical layer/file label for each osmnx ``network_type``.</span>
+<span class="n">NETWORK_TYPE_TO_LAYER_LABEL</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;walk&quot;</span><span class="p">:</span> <span class="s2">&quot;walking&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;bike&quot;</span><span class="p">:</span> <span class="s2">&quot;bike&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;drive&quot;</span><span class="p">:</span> <span class="s2">&quot;driving&quot;</span><span class="p">,</span>
+<span class="p">}</span>
+
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># Text / environment utilities</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<div class="viewcode-block" id="load_dotenv">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.load_dotenv">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_dotenv</span><span class="p">(</span><span class="n">env_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load variables from a ``.env`` file into ``os.environ`` (if it exists).&quot;&quot;&quot;</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">env_path</span> <span class="ow">or</span> <span class="s2">&quot;.env&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+        <span class="k">return</span>
+    <span class="k">for</span> <span class="n">raw_line</span> <span class="ow">in</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">splitlines</span><span class="p">():</span>
+        <span class="n">line</span> <span class="o">=</span> <span class="n">raw_line</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">line</span> <span class="ow">or</span> <span class="n">line</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;#&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;=&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">line</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">key</span><span class="o">.</span><span class="n">strip</span><span class="p">(),</span> <span class="n">value</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s1">&#39;&quot;&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;&#39;&quot;</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="normalize_name">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.normalize_name">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">normalize_name</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">object</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalize text for accent-/case-insensitive comparisons.&quot;&quot;&quot;</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">unicodedata</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="s2">&quot;NFKD&quot;</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">text</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;ascii&quot;</span><span class="p">,</span> <span class="s2">&quot;ignore&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;ascii&quot;</span><span class="p">)</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;[^a-zA-Z0-9]+&quot;</span><span class="p">,</span> <span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\s+&quot;</span><span class="p">,</span> <span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="levenshtein_distance">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.levenshtein_distance">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">levenshtein_distance</span><span class="p">(</span><span class="n">left</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Levenshtein edit distance between two normalized strings.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">left</span> <span class="o">==</span> <span class="n">right</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mi">0</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">left</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">right</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">right</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">left</span><span class="p">)</span>
+
+    <span class="n">previous</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">right</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">left_char</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="n">current</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">j</span><span class="p">,</span> <span class="n">right_char</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">right</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+            <span class="n">insert_cost</span> <span class="o">=</span> <span class="n">current</span><span class="p">[</span><span class="n">j</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="n">delete_cost</span> <span class="o">=</span> <span class="n">previous</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="n">replace_cost</span> <span class="o">=</span> <span class="n">previous</span><span class="p">[</span><span class="n">j</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="n">left_char</span> <span class="o">!=</span> <span class="n">right_char</span><span class="p">)</span>
+            <span class="n">current</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">insert_cost</span><span class="p">,</span> <span class="n">delete_cost</span><span class="p">,</span> <span class="n">replace_cost</span><span class="p">))</span>
+        <span class="n">previous</span> <span class="o">=</span> <span class="n">current</span>
+    <span class="k">return</span> <span class="n">previous</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span></div>
+
+
+
+<div class="viewcode-block" id="levenshtein_similarity">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.levenshtein_similarity">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">levenshtein_similarity</span><span class="p">(</span><span class="n">left</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;0-1 similarity score based on the Levenshtein distance.&quot;&quot;&quot;</span>
+    <span class="n">max_length</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">left</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">right</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">max_length</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">1.0</span>
+    <span class="k">return</span> <span class="mi">1</span> <span class="o">-</span> <span class="p">(</span><span class="n">levenshtein_distance</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">)</span> <span class="o">/</span> <span class="n">max_length</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="slugify">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.slugify">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">slugify</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate a filesystem-safe slug from value.&quot;&quot;&quot;</span>
+    <span class="n">slug</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">slug</span> <span class="ow">or</span> <span class="s2">&quot;area&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="province_code_from_natcode">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.province_code_from_natcode">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">province_code_from_natcode</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">object</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract the INE province code (1-52) from an INSPIRE NATCODE.</span>
+
+<span class="sd">    ``NATCODE`` has the form ``&lt;2 country&gt;&lt;2 region&gt;&lt;2 province&gt;&lt;5</span>
+<span class="sd">    municipality&gt;`` (e.g. ``34074040136`` -&gt; province 40, Segovia). The two</span>
+<span class="sd">    province digits are repeated at the start of the municipality code, so</span>
+<span class="sd">    both positions are tried and the first one that falls in the valid</span>
+<span class="sd">    range is accepted. Returns ``None`` if the code doesn&#39;t allow the</span>
+<span class="sd">    province to be inferred.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">digits</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\D&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">digits</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">8</span><span class="p">:</span>
+        <span class="n">candidates</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">digits</span><span class="p">[</span><span class="mi">4</span><span class="p">:</span><span class="mi">6</span><span class="p">],</span> <span class="n">digits</span><span class="p">[</span><span class="mi">6</span><span class="p">:</span><span class="mi">8</span><span class="p">])</span>
+    <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">digits</span><span class="p">)</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
+        <span class="c1"># Standalone INE municipality code (e.g. &quot;40136&quot;).</span>
+        <span class="n">candidates</span> <span class="o">=</span> <span class="p">(</span><span class="n">digits</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="mi">2</span><span class="p">],)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">candidate</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">code</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">candidate</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">code</span> <span class="ow">in</span> <span class="n">NAP_PROVINCE_IDS</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">code</span>
+    <span class="k">return</span> <span class="kc">None</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_find_province_code</span><span class="p">(</span><span class="n">gdf</span><span class="p">:</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Look up the province code in the boundary&#39;s code columns.&quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">_existing_columns</span><span class="p">(</span><span class="n">gdf</span><span class="p">,</span> <span class="n">PROVINCE_CODE_COLUMNS</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">raw_value</span> <span class="ow">in</span> <span class="n">gdf</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+            <span class="n">code</span> <span class="o">=</span> <span class="n">province_code_from_natcode</span><span class="p">(</span><span class="n">raw_value</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">code</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># Study-area resolution (municipality -&gt; polygon)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_existing_columns</span><span class="p">(</span><span class="n">gdf</span><span class="p">:</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">,</span> <span class="n">requested</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">requested</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">gdf</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_area_rows</span><span class="p">(</span>
+    <span class="n">gdf</span><span class="p">:</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">,</span>
+    <span class="n">area_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">area_code</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">name_columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">code_columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">area_code</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">_existing_columns</span><span class="p">(</span><span class="n">gdf</span><span class="p">,</span> <span class="n">code_columns</span> <span class="ow">or</span> <span class="n">DEFAULT_CODE_COLUMNS</span><span class="p">):</span>
+            <span class="n">normalized</span> <span class="o">=</span> <span class="n">gdf</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+            <span class="n">exact_mask</span> <span class="o">=</span> <span class="n">normalized</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="n">area_code</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">exact_mask</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">exact_mask</span><span class="p">,</span> <span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="k">return</span> <span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">exact_mask</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span> <span class="n">column</span><span class="p">,</span> <span class="n">value</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No boundary found for code &#39;</span><span class="si">{</span><span class="n">area_code</span><span class="si">}</span><span class="s2">&#39;.&quot;</span><span class="p">)</span>
+
+    <span class="n">target</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">area_name</span><span class="p">)</span>
+    <span class="n">columns</span> <span class="o">=</span> <span class="n">_existing_columns</span><span class="p">(</span><span class="n">gdf</span><span class="p">,</span> <span class="n">name_columns</span> <span class="ow">or</span> <span class="n">DEFAULT_NAME_COLUMNS</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">columns</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;No name column found in the boundaries file. &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Available columns: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">gdf</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">best_rows</span> <span class="o">=</span> <span class="n">best_column</span> <span class="o">=</span> <span class="n">best_value</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">best_score</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span><span class="p">:</span>
+        <span class="n">normalized</span> <span class="o">=</span> <span class="n">gdf</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">)</span>
+
+        <span class="n">exact_mask</span> <span class="o">=</span> <span class="n">normalized</span> <span class="o">==</span> <span class="n">target</span>
+        <span class="k">if</span> <span class="n">exact_mask</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">exact_mask</span><span class="p">,</span> <span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">exact_mask</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span> <span class="n">column</span><span class="p">,</span> <span class="n">value</span>
+
+        <span class="n">contains_mask</span> <span class="o">=</span> <span class="n">normalized</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">contains</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">na</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">contains_mask</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">contains_mask</span><span class="p">,</span> <span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">contains_mask</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span> <span class="n">column</span><span class="p">,</span> <span class="n">value</span>
+
+        <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">normalized</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+            <span class="n">distance</span> <span class="o">=</span> <span class="n">levenshtein_distance</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+            <span class="n">score</span> <span class="o">=</span> <span class="n">levenshtein_similarity</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+            <span class="n">max_allowed_distance</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="nb">round</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">target</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="p">))</span> <span class="o">*</span> <span class="mf">0.3</span><span class="p">))</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_allowed_distance</span>
+                <span class="ow">and</span> <span class="n">score</span> <span class="o">&gt;=</span> <span class="mf">0.70</span>
+                <span class="ow">and</span> <span class="n">score</span> <span class="o">&gt;</span> <span class="n">best_score</span>
+            <span class="p">):</span>
+                <span class="n">mask</span> <span class="o">=</span> <span class="n">normalized</span> <span class="o">==</span> <span class="n">value</span>
+                <span class="n">best_rows</span> <span class="o">=</span> <span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+                <span class="n">best_column</span> <span class="o">=</span> <span class="n">column</span>
+                <span class="n">best_value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">gdf</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="n">best_score</span> <span class="o">=</span> <span class="n">score</span>
+
+    <span class="k">if</span> <span class="n">best_rows</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No boundary found for area &#39;</span><span class="si">{</span><span class="n">area_name</span><span class="si">}</span><span class="s2">&#39;.&quot;</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">best_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+    <span class="k">assert</span> <span class="n">best_value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">best_rows</span><span class="p">,</span> <span class="n">best_column</span><span class="p">,</span> <span class="n">best_value</span>
+
+
+<div class="viewcode-block" id="find_area_boundary">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.find_area_boundary">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">find_area_boundary</span><span class="p">(</span>
+    <span class="n">area_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">boundaries_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">area_code</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">name_columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">code_columns</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">target_crs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;EPSG:4326&quot;</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a single (dissolved) polygon for the given municipality.</span>
+
+<span class="sd">    ``boundaries_path`` must be a shapefile (.shp) or a GeoJSON</span>
+<span class="sd">    (.geojson/.json). If not given, the packaged municipal-boundary</span>
+<span class="sd">    shapefile is used. Name matching is tolerant to accents and typos</span>
+<span class="sd">    (Levenshtein).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">boundaries_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">boundaries_path</span> <span class="o">=</span> <span class="n">_default_boundaries_path</span><span class="p">()</span>
+    <span class="n">boundaries_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">boundaries_path</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">boundaries_path</span><span class="o">.</span><span class="n">suffix</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALLOWED_BOUNDARY_SUFFIXES</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;boundaries_path only accepts shapefile (.shp) or geojson &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;(.geojson/.json). Received: </span><span class="si">{</span><span class="n">boundaries_path</span><span class="o">.</span><span class="n">suffix</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">boundaries_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Boundaries file does not exist: </span><span class="si">{</span><span class="n">boundaries_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="kn">import</span><span class="w"> </span><span class="nn">geopandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">gpd</span>
+
+    <span class="n">gdf</span> <span class="o">=</span> <span class="n">gpd</span><span class="o">.</span><span class="n">read_file</span><span class="p">(</span><span class="n">boundaries_path</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">gdf</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Boundaries file is empty: </span><span class="si">{</span><span class="n">boundaries_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">gdf</span><span class="o">.</span><span class="n">crs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Boundaries file has no CRS defined.&quot;</span><span class="p">)</span>
+
+    <span class="n">rows</span><span class="p">,</span> <span class="n">matched_column</span><span class="p">,</span> <span class="n">matched_value</span> <span class="o">=</span> <span class="n">_select_area_rows</span><span class="p">(</span>
+        <span class="n">gdf</span><span class="p">,</span>
+        <span class="n">area_name</span><span class="p">,</span>
+        <span class="n">area_code</span><span class="o">=</span><span class="n">area_code</span><span class="p">,</span>
+        <span class="n">name_columns</span><span class="o">=</span><span class="n">name_columns</span><span class="p">,</span>
+        <span class="n">code_columns</span><span class="o">=</span><span class="n">code_columns</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">rows</span><span class="o">.</span><span class="n">to_crs</span><span class="p">(</span><span class="n">target_crs</span><span class="p">)</span>
+    <span class="n">geometry</span> <span class="o">=</span> <span class="n">rows</span><span class="o">.</span><span class="n">geometry</span><span class="o">.</span><span class="n">union_all</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;area_name&quot;</span><span class="p">:</span> <span class="n">area_name</span><span class="p">,</span>
+                <span class="s2">&quot;matched_column&quot;</span><span class="p">:</span> <span class="n">matched_column</span><span class="p">,</span>
+                <span class="s2">&quot;matched_value&quot;</span><span class="p">:</span> <span class="n">matched_value</span><span class="p">,</span>
+                <span class="s2">&quot;matched_rows&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">rows</span><span class="p">),</span>
+                <span class="s2">&quot;area_code&quot;</span><span class="p">:</span> <span class="n">area_code</span><span class="p">,</span>
+                <span class="c1"># INE province code (1-52); this is the region id understood</span>
+                <span class="c1"># by the NAP API. Can be None if the boundaries file doesn&#39;t</span>
+                <span class="c1"># include any recognizable code column.</span>
+                <span class="s2">&quot;province_code&quot;</span><span class="p">:</span> <span class="n">_find_province_code</span><span class="p">(</span><span class="n">rows</span><span class="p">),</span>
+                <span class="s2">&quot;source_path&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">boundaries_path</span><span class="p">),</span>
+            <span class="p">}</span>
+        <span class="p">],</span>
+        <span class="n">geometry</span><span class="o">=</span><span class="p">[</span><span class="n">geometry</span><span class="p">],</span>
+        <span class="n">crs</span><span class="o">=</span><span class="n">target_crs</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># OSM download (osmnx) + standardization (process_osm)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<div class="viewcode-block" id="download_osm_layers">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.download_osm_layers">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">download_osm_layers</span><span class="p">(</span>
+    <span class="n">boundary</span><span class="p">:</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">modes</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;caminable&quot;</span><span class="p">,),</span>
+    <span class="n">output_crs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;EPSG:4326&quot;</span><span class="p">,</span>
+    <span class="n">simplify</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">retain_all</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Download OSM network layers for the given modes and standardizes them.</span>
+
+<span class="sd">    Returns ``{mode: {&quot;nodes&quot;: gdf, &quot;edges&quot;: gdf, &quot;graph&quot;: osmnx_graph}}``,</span>
+<span class="sd">    where ``mode`` is always the canonical English label (&quot;walking&quot;, &quot;bike&quot;,</span>
+<span class="sd">    &quot;driving&quot;), regardless of the synonym used in ``modes`` (e.g. &quot;coche&quot;,</span>
+<span class="sd">    &quot;car&quot;, &quot;drive&quot; and &quot;driving&quot; all produce the &quot;driving&quot; key).</span>
+
+<span class="sd">    ``nodes``/``edges`` are already the final layers, ready to export (see</span>
+<span class="sd">    :func:`multimodalpy.process_osm.build_final_osm_layers`):</span>
+
+<span class="sd">    - ``nodes``: ``node_id``, ``node_role``, ``geometry``.</span>
+<span class="sd">    - ``edges``: ``edge_id``, ``from_node_id``, ``to_node_id``, ``highway``,</span>
+<span class="sd">      ``lanes``, ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,</span>
+<span class="sd">      ``tts`` (travel time in seconds: free-flow speed + stop penalty based</span>
+<span class="sd">      on the mode), ``geometry``.</span>
+
+<span class="sd">    Travel time is computed automatically based on the network mode</span>
+<span class="sd">    (``walking``: constant 5 km/h with no penalty; ``bike``: speed capped</span>
+<span class="sd">    at 25 km/h with a reduced stop penalty; ``driving``: speed from</span>
+<span class="sd">    ``maxspeed``/road type with a stop penalty based on the arrival node).</span>
+<span class="sd">    ``travel_speed_kmh`` no longer needs to be specified.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">import</span><span class="w"> </span><span class="nn">osmnx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ox</span>
+    <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+            <span class="s2">&quot;Install osmnx to download OSM networks: pip install osmnx&quot;</span>
+        <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
+
+    <span class="n">area_wgs84</span> <span class="o">=</span> <span class="n">boundary</span><span class="o">.</span><span class="n">to_crs</span><span class="p">(</span><span class="s2">&quot;EPSG:4326&quot;</span><span class="p">)</span>
+    <span class="n">polygon</span> <span class="o">=</span> <span class="n">area_wgs84</span><span class="o">.</span><span class="n">geometry</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">results</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="n">modes</span><span class="p">:</span>
+        <span class="n">input_key</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">mode</span><span class="p">)</span>
+        <span class="n">network_type</span> <span class="o">=</span> <span class="n">OSM_NETWORK_TYPES</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">input_key</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">network_type</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">valid</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">OSM_NETWORK_TYPES</span><span class="p">))</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown OSM mode &#39;</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">&#39;. Valid values: </span><span class="si">{</span><span class="n">valid</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">layer_key</span> <span class="o">=</span> <span class="n">NETWORK_TYPE_TO_LAYER_LABEL</span><span class="p">[</span><span class="n">network_type</span><span class="p">]</span>
+
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">ox</span><span class="o">.</span><span class="n">graph_from_polygon</span><span class="p">(</span>
+            <span class="n">polygon</span><span class="p">,</span>
+            <span class="n">network_type</span><span class="o">=</span><span class="n">network_type</span><span class="p">,</span>
+            <span class="n">simplify</span><span class="o">=</span><span class="n">simplify</span><span class="p">,</span>
+            <span class="n">retain_all</span><span class="o">=</span><span class="n">retain_all</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">nodes</span><span class="p">,</span> <span class="n">edges</span> <span class="o">=</span> <span class="n">process_osm</span><span class="o">.</span><span class="n">build_final_osm_layers</span><span class="p">(</span>
+            <span class="n">graph</span><span class="p">,</span>
+            <span class="n">layer_id</span><span class="o">=</span><span class="n">layer_key</span><span class="p">,</span>
+            <span class="n">mode</span><span class="o">=</span><span class="n">network_type</span><span class="p">,</span>
+            <span class="n">output_crs</span><span class="o">=</span><span class="n">output_crs</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">results</span><span class="p">[</span><span class="n">layer_key</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;nodes&quot;</span><span class="p">:</span> <span class="n">nodes</span><span class="p">,</span> <span class="s2">&quot;edges&quot;</span><span class="p">:</span> <span class="n">edges</span><span class="p">,</span> <span class="s2">&quot;graph&quot;</span><span class="p">:</span> <span class="n">graph</span><span class="p">}</span>
+
+    <span class="k">return</span> <span class="n">results</span></div>
+
+
+
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="c1"># GTFS download (NAP API) + standardization (process_gtfs)</span>
+<span class="c1"># ---------------------------------------------------------------------------</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_nap_get</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">headers</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">timeout</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">60</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">requests</span><span class="o">.</span><span class="n">Response</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;GET request to the NAP API with clear handling of network/auth errors.</span>
+
+<span class="sd">    Explicitly handles:</span>
+<span class="sd">    - ``ConnectionError``: no internet connection or the NAP server is down.</span>
+<span class="sd">    - ``Timeout``: the NAP API didn&#39;t respond in time.</span>
+<span class="sd">    - HTTP 401: missing, invalid or expired API key (plain text).</span>
+<span class="sd">    - HTTP 500: internal NAP server error.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">requests</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">ConnectionError</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ConnectionError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Could not connect to the NAP API (</span><span class="si">{</span><span class="n">url</span><span class="si">}</span><span class="s2">). &quot;</span>
+            <span class="s2">&quot;Check your internet connection or try again later.&quot;</span>
+        <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="kc">None</span>
+    <span class="k">except</span> <span class="n">requests</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">Timeout</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">TimeoutError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;The NAP API did not respond within </span><span class="si">{</span><span class="n">timeout</span><span class="si">}</span><span class="s2">s (</span><span class="si">{</span><span class="n">url</span><span class="si">}</span><span class="s2">). &quot;</span>
+            <span class="s2">&quot;The server may be overloaded; try again later.&quot;</span>
+        <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">401</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Authentication error from the NAP API: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="si">}</span><span class="s2">. &quot;</span>
+            <span class="s2">&quot;Check that NAP_API_KEY is valid and hasn&#39;t expired.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">500</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">server_msg</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;message&quot;</span><span class="p">,</span> <span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="n">server_msg</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">text</span>
+
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Internal NAP server error (HTTP 500) at </span><span class="si">{</span><span class="n">url</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">server_msg</span><span class="si">}</span><span class="s2">. &quot;</span>
+            <span class="s2">&quot;Try again later.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">resp</span>
+
+
+<div class="viewcode-block" id="download_gtfs_nap_zips">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.download_gtfs_nap_zips">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">download_gtfs_nap_zips</span><span class="p">(</span>
+    <span class="n">area_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">modes</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+    <span class="n">api_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">base_url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">NAP_BASE_URL</span><span class="p">,</span>
+    <span class="n">fail_fast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">province_code</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the NAP GTFS zip files for the study area&#39;s province.</span>
+
+<span class="sd">    NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.</span>
+<span class="sd">    The key is taken from ``api_key`` or the ``NAP_API_KEY`` environment</span>
+<span class="sd">    variable.</span>
+
+<span class="sd">    ``province_code`` is the INE province code (1-52), which is exactly</span>
+<span class="sd">    the region id understood by the API. This is the reliable path, and</span>
+<span class="sd">    the one used by :func:`get_network.main`, which gets it from the</span>
+<span class="sd">    boundary. If not given, ``area_name`` is compared against the names of</span>
+<span class="sd">    the 52 province entries in the ``/region`` listing; never against the</span>
+<span class="sd">    municipality or region (CCAA) entries, which return 404 or another</span>
+<span class="sd">    province&#39;s data (see ``NAP_PROVINCE_IDS``).</span>
+
+<span class="sd">    If the province has no published dataset, the API responds with 404:</span>
+<span class="sd">    that isn&#39;t an error, so it&#39;s logged and an empty list is returned</span>
+<span class="sd">    instead of raising an exception.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+
+    <span class="n">api_key</span> <span class="o">=</span> <span class="n">api_key</span> <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;NAP_API_KEY&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">api_key</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;Missing NAP API key. Set NAP_API_KEY in the environment or a &quot;</span>
+            <span class="s2">&quot;.env file, or pass api_key=... (only needed for public-&quot;</span>
+            <span class="s2">&quot;transport modes).&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">output_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span>
+    <span class="n">output_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="n">api_key</span><span class="p">}</span>
+
+    <span class="k">if</span> <span class="n">province_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">province_code</span><span class="p">)</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">NAP_PROVINCE_IDS</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;province_code &#39;</span><span class="si">{</span><span class="n">province_code</span><span class="si">}</span><span class="s2">&#39; is not valid: must be an &quot;</span>
+            <span class="s2">&quot;INE province code between 1 and 52.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">region_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">province_code</span><span class="p">)</span> <span class="k">if</span> <span class="n">province_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">region_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">regions_response</span> <span class="o">=</span> <span class="n">_nap_get</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base_url</span><span class="si">}</span><span class="s2">/region&quot;</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">)</span>
+        <span class="n">regions_response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+        <span class="n">regions</span> <span class="o">=</span> <span class="n">regions_response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">regions</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The NAP API did not return any region.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Only province entries (``tipo == &quot;0&quot;``) have an id that the</span>
+        <span class="c1"># datasets endpoint knows how to interpret.</span>
+        <span class="n">provinces</span> <span class="o">=</span> <span class="p">[</span><span class="n">item</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">regions</span> <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">item</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tipo&quot;</span><span class="p">))</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">provinces</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The NAP API did not return any province region (tipo=0).&quot;</span><span class="p">)</span>
+
+        <span class="n">target</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">area_name</span><span class="p">)</span>
+        <span class="n">best_region</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
+            <span class="n">provinces</span><span class="p">,</span>
+            <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">item</span><span class="p">:</span> <span class="n">difflib</span><span class="o">.</span><span class="n">SequenceMatcher</span><span class="p">(</span>
+                <span class="kc">None</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">item</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nombre&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">ratio</span><span class="p">(),</span>
+        <span class="p">)</span>
+        <span class="n">region_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">best_region</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">])</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="s2">&quot;Could not infer the province for &#39;</span><span class="si">%s</span><span class="s2">&#39; from the boundaries &quot;</span>
+            <span class="s2">&quot;file; using province &#39;</span><span class="si">%s</span><span class="s2">&#39; based on name similarity, which &quot;</span>
+            <span class="s2">&quot;may not be correct.&quot;</span><span class="p">,</span>
+            <span class="n">area_name</span><span class="p">,</span>
+            <span class="n">best_region</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nombre&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="n">datasets_response</span> <span class="o">=</span> <span class="n">_nap_get</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base_url</span><span class="si">}</span><span class="s2">/conjunto-dato/region/</span><span class="si">{</span><span class="n">region_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">datasets_response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">404</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">error_data</span> <span class="o">=</span> <span class="n">datasets_response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+            <span class="n">error_message</span> <span class="o">=</span> <span class="n">error_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;message&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="n">error_message</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+
+        <span class="c1"># Do NOT translate this string: it&#39;s matched against the NAP API&#39;s</span>
+        <span class="c1"># own (Spanish-language) error response text, not our own message.</span>
+        <span class="k">if</span> <span class="s2">&quot;no se ha encontrado ningun conjunto de datos&quot;</span> <span class="ow">in</span> <span class="n">normalize_name</span><span class="p">(</span>
+            <span class="n">error_message</span>
+        <span class="p">):</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;NAP has no published datasets for region </span><span class="si">%s</span><span class="s2">; no GTFS &quot;</span>
+                <span class="s2">&quot;will be downloaded.&quot;</span><span class="p">,</span>
+                <span class="n">region_id</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">return</span> <span class="p">[]</span>
+
+        <span class="c1"># Unexpected 404 (broken endpoint, etc.)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+            <span class="s2">&quot;Unexpected 404 at </span><span class="si">%s</span><span class="s2">: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">datasets_response</span><span class="o">.</span><span class="n">url</span><span class="p">,</span>
+            <span class="n">error_message</span> <span class="ow">or</span> <span class="n">datasets_response</span><span class="o">.</span><span class="n">text</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">datasets_response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+    <span class="n">datasets</span> <span class="o">=</span> <span class="n">datasets_response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="p">[])</span>
+    <span class="n">mode_set</span> <span class="o">=</span> <span class="p">{</span><span class="nb">int</span><span class="p">(</span><span class="n">mode</span><span class="p">)</span> <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="n">modes</span><span class="p">}</span>
+
+    <span class="n">downloaded</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">report_rows</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">dataset</span> <span class="ow">in</span> <span class="n">datasets</span><span class="p">:</span>
+        <span class="n">dataset_modes</span> <span class="o">=</span> <span class="p">{</span><span class="nb">int</span><span class="p">(</span><span class="n">item</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">dataset</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tiposTransporte&quot;</span><span class="p">,</span> <span class="p">[])}</span>
+        <span class="k">if</span> <span class="n">mode_set</span> <span class="ow">and</span> <span class="n">dataset_modes</span><span class="o">.</span><span class="n">isdisjoint</span><span class="p">(</span><span class="n">mode_set</span><span class="p">):</span>
+            <span class="k">continue</span>
+
+        <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="n">dataset</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;ficheros&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+            <span class="n">file_id</span> <span class="o">=</span> <span class="n">file_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">file_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">row</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;dataset_id&quot;</span><span class="p">:</span> <span class="n">dataset</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;dataset_name&quot;</span><span class="p">:</span> <span class="n">dataset</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nombre&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;file_id&quot;</span><span class="p">:</span> <span class="n">file_id</span><span class="p">,</span>
+                <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;file_name&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">}</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">link_response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base_url</span><span class="si">}</span><span class="s2">/fichero/</span><span class="si">{</span><span class="n">file_id</span><span class="si">}</span><span class="s2">/descarga&quot;</span><span class="p">,</span>
+                    <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span>
+                    <span class="n">timeout</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">link_response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+                <span class="n">payload</span> <span class="o">=</span> <span class="n">link_response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="p">{})</span>
+                <span class="n">download_url</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;enlaceDescarga&quot;</span><span class="p">)</span>
+                <span class="n">file_name</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nombreFichero&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="sa">f</span><span class="s2">&quot;nap_gtfs_</span><span class="si">{</span><span class="n">file_id</span><span class="si">}</span><span class="s2">.zip&quot;</span>
+                <span class="n">row</span><span class="p">[</span><span class="s2">&quot;file_name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">file_name</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">download_url</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The NAP response did not include enlaceDescarga&quot;</span><span class="p">)</span>
+
+                <span class="n">zip_response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">download_url</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+                <span class="n">zip_response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+                <span class="n">path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="n">file_name</span>
+                <span class="n">path</span><span class="o">.</span><span class="n">write_bytes</span><span class="p">(</span><span class="n">zip_response</span><span class="o">.</span><span class="n">content</span><span class="p">)</span>
+                <span class="n">downloaded</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+                <span class="n">row</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;downloaded&quot;</span>
+                <span class="n">row</span><span class="p">[</span><span class="s2">&quot;path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># noqa: BLE001 - logged and execution continues</span>
+                <span class="n">row</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;failed&quot;</span>
+                <span class="n">row</span><span class="p">[</span><span class="s2">&quot;error&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">fail_fast</span><span class="p">:</span>
+                    <span class="n">report_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+                    <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">report_rows</span><span class="p">)</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span>
+                        <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">&quot;nap_download_report.csv&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span>
+                    <span class="p">)</span>
+                    <span class="k">raise</span>
+            <span class="n">report_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">report_rows</span><span class="p">:</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">report_rows</span><span class="p">)</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span>
+            <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">&quot;nap_download_report.csv&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">downloaded</span></div>
+
+
+
+<div class="viewcode-block" id="download_gtfs_layers">
+<a class="viewcode-back" href="../../_autosummary/multimodalpy.get_area.html#multimodalpy.get_area.download_gtfs_layers">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">download_gtfs_layers</span><span class="p">(</span>
+    <span class="n">area_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">boundary</span><span class="p">:</span> <span class="n">gpd</span><span class="o">.</span><span class="n">GeoDataFrame</span><span class="p">,</span>
+    <span class="n">zip_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">modes</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+    <span class="n">output_crs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;EPSG:4326&quot;</span><span class="p">,</span>
+    <span class="n">clip_to_boundary</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">api_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">hour_band_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">hour_range</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">peak_periods</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">include_schedule_table</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">province_code</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Download NAP GTFS data and returns normalized layers per dataset.</span>
+
+<span class="sd">    Returns ``{dataset: {&quot;nodes_stops&quot;: gdf, &quot;edges&quot;: gdf,</span>
+<span class="sd">    &quot;edges_shapes_reference&quot;: gdf, &quot;schedule&quot;: DataFrame | None}}``.</span>
+
+<span class="sd">    ``province_code`` is the area&#39;s INE province code; if not given, it&#39;s</span>
+<span class="sd">    taken from the ``boundary``&#39;s ``province_code`` column (filled in by</span>
+<span class="sd">    :func:`find_area_boundary`). See :func:`download_gtfs_nap_zips`.</span>
+
+<span class="sd">    ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /</span>
+<span class="sd">    ``include_schedule_table`` are forwarded to</span>
+<span class="sd">    ``process_gtfs.normalize_gtfs_feed`` (see that function for details on</span>
+<span class="sd">    options A/B/C).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">province_code</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="s2">&quot;province_code&quot;</span> <span class="ow">in</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">boundary</span><span class="p">,</span> <span class="s2">&quot;columns&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">boundary</span><span class="p">[</span><span class="s2">&quot;province_code&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">province_code</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">value</span> <span class="o">!=</span> <span class="n">value</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="n">zips</span> <span class="o">=</span> <span class="n">download_gtfs_nap_zips</span><span class="p">(</span>
+        <span class="n">area_name</span><span class="p">,</span>
+        <span class="n">zip_dir</span><span class="p">,</span>
+        <span class="n">modes</span><span class="o">=</span><span class="n">modes</span><span class="p">,</span>
+        <span class="n">api_key</span><span class="o">=</span><span class="n">api_key</span><span class="p">,</span>
+        <span class="n">province_code</span><span class="o">=</span><span class="n">province_code</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">filter_geometry</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">clip_to_boundary</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">boundary</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="n">filter_geometry</span> <span class="o">=</span> <span class="n">boundary</span><span class="o">.</span><span class="n">to_crs</span><span class="p">(</span><span class="s2">&quot;EPSG:4326&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">geometry</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="n">results</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">zip_path</span> <span class="ow">in</span> <span class="n">zips</span><span class="p">:</span>
+        <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">slugify</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">zip_path</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">stops</span><span class="p">,</span> <span class="n">stop_edges</span><span class="p">,</span> <span class="n">schedule</span> <span class="o">=</span> <span class="n">process_gtfs</span><span class="o">.</span><span class="n">normalize_gtfs_feed</span><span class="p">(</span>
+                <span class="n">zip_path</span><span class="p">,</span>
+                <span class="n">dataset_name</span><span class="o">=</span><span class="n">dataset_name</span><span class="p">,</span>
+                <span class="n">layer_id</span><span class="o">=</span><span class="n">dataset_name</span><span class="p">,</span>
+                <span class="n">filter_geometry</span><span class="o">=</span><span class="n">filter_geometry</span><span class="p">,</span>
+                <span class="n">target_crs</span><span class="o">=</span><span class="n">output_crs</span><span class="p">,</span>
+                <span class="n">hour_band_size</span><span class="o">=</span><span class="n">hour_band_size</span><span class="p">,</span>
+                <span class="n">hour_range</span><span class="o">=</span><span class="n">hour_range</span><span class="p">,</span>
+                <span class="n">peak_periods</span><span class="o">=</span><span class="n">peak_periods</span><span class="p">,</span>
+                <span class="n">include_schedule_table</span><span class="o">=</span><span class="n">include_schedule_table</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># noqa: BLE001 - a corrupt feed shouldn&#39;t break everything</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Could not normalize feed </span><span class="si">%s</span><span class="s2">: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">zip_path</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">exc</span><span class="p">)</span>
+            <span class="k">continue</span>
+        <span class="n">results</span><span class="p">[</span><span class="n">dataset_name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;nodes&quot;</span><span class="p">:</span> <span class="n">stops</span><span class="p">,</span>
+            <span class="s2">&quot;edges&quot;</span><span class="p">:</span> <span class="n">stop_edges</span><span class="p">,</span>
+            <span class="s2">&quot;schedule&quot;</span><span class="p">:</span> <span class="n">schedule</span><span class="p">,</span>
+            <span class="c1"># &quot;bus&quot; or &quot;train&quot;, inferred from the feed&#39;s route_type. Used</span>
+            <span class="c1"># by get_network to decide the dataset&#39;s output folder.</span>
+            <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">process_gtfs</span><span class="o">.</span><span class="n">infer_transport_mode</span><span class="p">(</span><span class="n">zip_path</span><span class="p">),</span>
+        <span class="p">}</span>
+    <span class="k">return</span> <span class="n">results</span></div>
+
+</pre></div>
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2026, Aida Villalba Ortiz.
+      <br/>
+    
+  </p>
+</div>
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    <br/>
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.21.0.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

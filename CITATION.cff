@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "multimodalpy"
+abstract: >-
+  Easy creation of multimodal transport networks from OpenStreetMap and
+  GTFS data.
+authors:
+  - family-names: "Villalba Ortiz"
+    given-names: "Aida"
+    email: "aivilor@upv.es"
+    affiliation: "Universitat Politècnica de València"
+version: 0.1.1
+date-released: 2026-09-30
+url: "https://github.com/aivilor/multimodalpy"
+repository-code: "https://github.com/aivilor/multimodalpy"
+license: MIT
+keywords:
+  - multimodal
+  - transport networks
+  - OpenStreetMap
+  - GTFS
+  - geospatial
+  - Python
