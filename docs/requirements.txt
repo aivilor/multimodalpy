@@ -1,0 +1,7 @@
+# Read the Docs builds in an isolated environment and does not read
+# [dependency-groups] from pyproject.toml, so the docs build deps are
+# pinned here explicitly. Keep this in sync with the "docs" group in
+# pyproject.toml.
+sphinx>=7
+pydata-sphinx-theme
+myst-parser
