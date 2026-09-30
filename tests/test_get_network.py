@@ -200,7 +200,7 @@ def test_split_modes_is_case_and_whitespace_insensitive(
 
 
 def test_split_modes_rejects_unknown_mode():
-    with pytest.raises(ValueError, match="Modo desconocido 'helicopter'"):
+    with pytest.raises(ValueError, match="Unknown mode 'helicopter'"):
         get_network._split_modes(["walking", "helicopter"])
 
 
@@ -279,7 +279,7 @@ def test_write_layers_geopackage_puts_layers_in_one_file(tmp_path):
 
 def test_write_layers_rejects_unsupported_format(tmp_path):
     nodes = make_osm_result()["nodes"]
-    with pytest.raises(ValueError, match="Formato no soportado"):
+    with pytest.raises(ValueError, match="Unsupported format"):
         get_network._write_layers(
             {"nodes": nodes},
             tmp_path,
@@ -388,17 +388,17 @@ def test_main_multimodal_is_not_implemented(tmp_path):
 
 @pytest.mark.parametrize("bad_type", ["csv", "gpkg", ["geojson", "csv"]])
 def test_main_rejects_unknown_output_file_type(tmp_path, bad_type):
-    with pytest.raises(ValueError, match="no valido"):
+    with pytest.raises(ValueError, match="is not valid"):
         get_network.main("Valencia", output_path=tmp_path, output_file_type=bad_type)
 
 
 def test_main_rejects_empty_output_file_type_list(tmp_path):
-    with pytest.raises(ValueError, match="no puede estar vacio"):
+    with pytest.raises(ValueError, match="cannot be empty"):
         get_network.main("Valencia", output_path=tmp_path, output_file_type=[])
 
 
 def test_main_rejects_unknown_mode(tmp_path):
-    with pytest.raises(ValueError, match="Modo desconocido"):
+    with pytest.raises(ValueError, match="Unknown mode"):
         get_network.main("Valencia", modes=["helicopter"], output_path=tmp_path)
 
 
@@ -636,13 +636,13 @@ def test_main_keeps_osm_layers_when_gtfs_download_fails(tmp_path, backends, capl
     assert manifest["gtfs_status"] == "RuntimeError: NAP down"
     assert manifest["gtfs_datasets"] == []
     assert "walking/nodes.geojson" in manifest["files"]
-    assert "No se pudieron descargar los datos GTFS" in caplog.text
+    assert "Could not download GTFS data" in caplog.text
 
 
 def test_main_reports_when_nap_has_no_published_datasets(tmp_path, backends):
     backends["gtfs_result"] = {}
     manifest = get_network.main("Valencia", modes=["bus"], output_path=tmp_path)
-    assert manifest["gtfs_status"] == "sin conjuntos de datos publicados"
+    assert manifest["gtfs_status"] == "no published datasets"
     assert manifest["files"] == ["study_area_boundary.geojson"]
 
 

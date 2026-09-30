@@ -105,7 +105,7 @@ def test_find_area_boundary_tolerates_small_typos(boundaries_path, typo, expecte
 
 
 def test_find_area_boundary_rejects_name_too_different_from_any_city(boundaries_path):
-    with pytest.raises(ValueError, match="No se encontro ningun limite"):
+    with pytest.raises(ValueError, match="No boundary found"):
         get_area.find_area_boundary("Ciudad Que No Existe Del Todo", boundaries_path)
 
 
@@ -125,7 +125,7 @@ def test_find_area_boundary_by_area_code(boundaries_path, name, natcode, provinc
 
 
 def test_find_area_boundary_unknown_area_code_raises(boundaries_path):
-    with pytest.raises(ValueError, match="No se encontro ningun limite"):
+    with pytest.raises(ValueError, match="No boundary found"):
         get_area.find_area_boundary("Valencia", boundaries_path, area_code="00000000")
 
 
@@ -179,7 +179,7 @@ def test_find_area_boundary_raises_when_no_name_column_present(tmp_path):
     path = tmp_path / "boundaries.geojson"
     gdf.to_file(path, driver="GeoJSON")
 
-    with pytest.raises(ValueError, match="ninguna columna de nombre"):
+    with pytest.raises(ValueError, match="No name column found"):
         get_area.find_area_boundary("Cuenca", path)
 
 
@@ -189,7 +189,7 @@ def test_find_area_boundary_raises_when_no_name_column_present(tmp_path):
 def test_find_area_boundary_rejects_unsupported_suffix(tmp_path):
     bad_path = tmp_path / "boundaries.gpkg"
     bad_path.write_bytes(b"")
-    with pytest.raises(ValueError, match="solo admite shapefile"):
+    with pytest.raises(ValueError, match="only accepts shapefile"):
         get_area.find_area_boundary("Valencia", bad_path)
 
 
@@ -202,7 +202,7 @@ def test_find_area_boundary_empty_file_raises(tmp_path):
     gdf = gpd.GeoDataFrame({"nombre": []}, geometry=[], crs="EPSG:4326")
     path = tmp_path / "boundaries.geojson"
     gdf.to_file(path, driver="GeoJSON")
-    with pytest.raises(ValueError, match="esta vacio"):
+    with pytest.raises(ValueError, match="is empty"):
         get_area.find_area_boundary("Valencia", path)
 
 

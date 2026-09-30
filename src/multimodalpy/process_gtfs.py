@@ -1,21 +1,22 @@
-"""Estandarizacion de datos GTFS. Limpieza de datos de bus + tren.
+"""GTFS data standardization. Cleans bus + train data.
 
-Este modulo tiene dos bloques:
+This module has two parts:
 
-1. Estandarizacion de un feed GTFS (ZIP o carpeta) en capas GeoPandas:
-   - ``nodes_stops``              : paradas como puntos.
-   - ``edges``                    : aristas parada-a-parada (secuencia de viajes),
-                                     una fila por par de paradas, con tiempo de
-                                     viaje y desglose por periodo horario.
-   - ``edges_shapes_reference``   : geometria de recorrido (shapes.txt).
-   - ``schedule`` (tabla plana, no espacial): un registro por viaje y tramo,
-     para quien necesite el detalle de horarios sin perder granularidad.
+1. Standardizing a GTFS feed (zip or folder) into GeoPandas layers:
+   - ``nodes_stops``              : stops as points.
+   - ``edges``                    : stop-to-stop edges (trip sequence), one
+                                     row per stop pair, with travel time and
+                                     an hour-band breakdown.
+   - ``edges_shapes_reference``   : route geometry (shapes.txt).
+   - ``schedule`` (flat, non-spatial table): one record per trip and
+     segment, for anyone who needs the full schedule detail without losing
+     granularity.
 
-2. Limpieza de bus + tren: proyeccion de paradas sobre el recorrido (snap) y
-   division de las lineas del recorrido en tramos entre paradas consecutivas,
-   para obtener una topologia parada-tramo-parada coherente.
+2. Bus + train cleanup: snapping stops onto the route geometry and
+   splitting the route lines into segments between consecutive stops, to
+   get a coherent stop-segment-stop topology.
 
-No se escribe ningun fichero aqui; eso lo hace ``get_network``.
+No file is written here; that's done by ``get_network``.
 """
 
 from __future__ import annotations
@@ -31,40 +32,40 @@ if TYPE_CHECKING:
 
 SOURCE_CRS = "EPSG:4326"
 
-# Periodos horarios por defecto para el desglose de la opcion A.
-# "rest_of_day" se asigna automaticamente a cualquier hora no cubierta aqui.
+# Default peak periods for the option A breakdown.
+# "rest_of_day" is automatically assigned to any hour not covered here.
 DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
-    "peak_am": (7, 9),  # punta manana, 07:00-09:00
-    "peak_pm": (17, 20),  # punta tarde, 17:00-20:00
+    "peak_am": (7, 9),  # morning peak, 07:00-09:00
+    "peak_pm": (17, 20),  # evening peak, 17:00-20:00
 }
 
 
 # ---------------------------------------------------------------------------
-# Lectura de tablas GTFS
+# Reading GTFS tables
 # ---------------------------------------------------------------------------
 def _strip_gtfs_whitespace(df: pd.DataFrame) -> pd.DataFrame:
-    """Quita el relleno de espacios de cabeceras y valores de una tabla GTFS.
+    """Strip padding whitespace from a GTFS table's headers and values.
 
-    Algunos feeds oficiales publican los CSV con las columnas alineadas a un
-    ancho fijo (p. ej. el de Cercanias de RENFE, cuya cabecera literal es
-    ``"stop_sequence            ..."`` y cuyos valores son ``"005        ..."``).
-    Sin recortar, cualquier acceso por nombre de columna revienta con KeyError
-    y los identificadores no casan entre tablas.
+    Some official feeds publish their CSVs with columns padded to a fixed
+    width (e.g. RENFE's Cercanias feed, whose literal header is
+    ``"stop_sequence            ..."`` and whose values look like
+    ``"005        ..."``). Without trimming, any access by column name
+    breaks with a KeyError and identifiers don't match across tables.
     """
     from pandas.api.types import is_object_dtype, is_string_dtype
 
     df.columns = [str(column).strip() for column in df.columns]
     for column in df.columns:
         series = df[column]
-        # Las tablas se leen con dtype=str, pero el dtype concreto depende de
-        # la version de pandas ("object" hasta 2.x, "str" desde 3.0).
+        # Tables are read with dtype=str, but the concrete dtype depends
+        # on the pandas version ("object" up to 2.x, "str" from 3.0).
         if is_string_dtype(series) or is_object_dtype(series):
             df[column] = series.str.strip()
     return df
 
 
 def read_gtfs_table(feed_path: str | Path, table_name: str) -> pd.DataFrame:
-    """Lee una tabla GTFS desde un ZIP o desde una carpeta GTFS extraida."""
+    """Read a GTFS table from a zip file or an extracted GTFS folder."""
     import pandas as pd
 
     feed_path = Path(feed_path)
@@ -75,28 +76,28 @@ def read_gtfs_table(feed_path: str | Path, table_name: str) -> pd.DataFrame:
 
     with ZipFile(feed_path) as zf:
         if table_name not in zf.namelist():
-            raise FileNotFoundError(f"{table_name} no se encuentra en {feed_path}")
+            raise FileNotFoundError(f"{table_name} not found in {feed_path}")
         with zf.open(table_name) as file:
             return _strip_gtfs_whitespace(
                 pd.read_csv(file, dtype=str, low_memory=False)
             )
 
 
-# ``route_type`` de la especificacion GTFS. Los ferroviarios son tranvia (0),
-# metro (1), tren (2), cable tram (5), funicular (7) y monorail (12); el resto
-# (autobus 3, trolebus 11, autobus de transito rapido 700-799...) se tratan
-# como bus.
+# GTFS spec ``route_type``. Rail-based modes are tram (0), subway (1),
+# rail (2), cable tram (5), funicular (7) and monorail (12); everything
+# else (bus 3, trolleybus 11, bus rapid transit 700-799...) is treated as
+# bus.
 RAIL_ROUTE_TYPES: frozenset[int] = frozenset({0, 1, 2, 5, 7, 12})
 
 
 def infer_transport_mode(feed_path: str | Path) -> str:
-    """Devuelve ``"train"`` o ``"bus"`` segun los ``route_type`` del feed.
+    """Return ``"train"`` or ``"bus"`` based on the feed's ``route_type`` values.
 
-    Se usa para decidir en que carpeta se guardan las capas de un dataset
-    GTFS. Se mira el propio feed y no los metadatos del NAP porque alli un
-    mismo conjunto de datos puede declararse a la vez como bus y como
-    ferroviario (p. ej. Cercanias Renfe). Si el feed mezcla ambos, gana el
-    tipo mayoritario; si no se puede leer, se asume ``"bus"``.
+    Used to decide which folder a GTFS dataset's layers are saved under.
+    The feed itself is checked rather than the NAP metadata, because there
+    the same dataset can be declared as both bus and rail at once (e.g.
+    Cercanias Renfe). If the feed mixes both, the majority type wins; if
+    it can't be read, ``"bus"`` is assumed.
     """
     import pandas as pd
 
@@ -141,12 +142,12 @@ def _filter_by_geometry(gdf: gpd.GeoDataFrame, filter_geometry) -> gpd.GeoDataFr
 
 
 # ---------------------------------------------------------------------------
-# Horas GTFS (permiten valores >= 24:00:00 para servicios nocturnos)
+# GTFS times (allow values >= 24:00:00 for overnight services)
 # ---------------------------------------------------------------------------
 def gtfs_time_to_seconds(time_str) -> float:
-    """Convierte 'HH:MM:SS' (con HH pudiendo ser >= 24) a segundos desde medianoche.
+    """Convert 'HH:MM:SS' (HH may be >= 24) to seconds since midnight.
 
-    Devuelve NaN si el valor es nulo o no tiene el formato esperado.
+    Returns NaN if the value is null or not in the expected format.
     """
     import math
 
@@ -166,7 +167,7 @@ def gtfs_time_to_seconds(time_str) -> float:
 
 
 def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
-    """Agrupa segundos-desde-medianoche en una franja horaria tipo '08-09'."""
+    """Group seconds-since-midnight into an hour band like '08-09'."""
     import math
 
     if seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
@@ -180,10 +181,11 @@ def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
 def classify_period(
     seconds, peak_periods: dict[str, tuple[int, int]] | None = None
 ) -> str | None:
-    """Clasifica un instante (segundos desde medianoche) en punta_manana /
+    """Classify a moment (seconds since midnight) into a peak period.
 
-    punta_tarde / resto_del_dia, segun ``peak_periods`` (por defecto
-    ``DEFAULT_PEAK_PERIODS``). Devuelve ``None`` si no hay hora disponible.
+    Peak periods are peak_am / peak_pm / rest_of_day, based on
+    ``peak_periods`` (defaults to ``DEFAULT_PEAK_PERIODS``). Returns
+    ``None`` if no time is available.
     """
     import math
 
@@ -209,9 +211,9 @@ _WEEKDAY_ORDER = [
 
 
 def _union_days_of_week(values) -> str | None:
-    """Une varios textos 'lunes|martes' (uno por viaje) en un unico resumen,
+    """Merge several day-of-week strings (one per trip) into a single summary.
 
-    ordenado de lunes a domingo, sin duplicados.
+    Ordered Monday to Sunday, with duplicates removed.
     """
     import math
 
@@ -227,7 +229,7 @@ def _union_days_of_week(values) -> str | None:
 
 
 def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
-    """Empaqueta pares (etiqueta, valor) ordenados en 'etiqueta:valor|etiqueta:valor'."""  # noqa: E501
+    """Pack sorted (label, value) pairs into 'label:value|label:value'."""
     import math
 
     items = []
@@ -242,7 +244,7 @@ def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Construccion de capas normalizadas
+# Building the normalized layers
 # ---------------------------------------------------------------------------
 def build_gtfs_stops_gdf(
     stops: pd.DataFrame,
@@ -251,7 +253,7 @@ def build_gtfs_stops_gdf(
     layer_id: str,
     filter_geometry=None,
 ) -> gpd.GeoDataFrame:
-    """Capa de paradas (nodos) a partir de ``stops.txt``."""
+    """Build the stops (nodes) layer from ``stops.txt``."""
     import geopandas as gpd
     import pandas as pd
 
@@ -274,7 +276,7 @@ def build_gtfs_stops_gdf(
 
 
 def _classify_day_type(runs_weekday, runs_weekend) -> str | None:
-    """Combina los flags booleanos de actividad en una etiqueta legible."""
+    """Combine the boolean activity flags into a readable label."""
     import pandas as pd
 
     wd = bool(runs_weekday) if pd.notna(runs_weekday) else False
@@ -293,20 +295,20 @@ def _attach_service_days(
     calendar: pd.DataFrame | None,
     calendar_dates: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Anade a ``trips`` columnas sobre en que dias circula el servicio.
+    """Add columns to ``trips`` describing which days the service runs.
 
-    - ``days_active``: num. dias/semana con servicio (recuento, como antes).
-    - ``active_days_of_week``: texto tipo ``"friday|monday|thursday"`` con los
-      dias de la semana concretos en que el servicio esta activo.
-    - ``runs_weekday`` / ``runs_weekend``: booleanos, ``True`` si el servicio
-      circula algun dia laborable (lunes-viernes) / de fin de semana
-      (sabado-domingo) respectivamente.
-    - ``day_type``: etiqueta resumen -- ``"weekday"``, ``"weekend"``,
-      ``"weekday_and_weekend"`` o ``None`` si no se puede determinar.
+    - ``days_active``: number of days/week with service (a count, as before).
+    - ``active_days_of_week``: text like ``"friday|monday|thursday"`` with
+      the specific days of the week the service is active on.
+    - ``runs_weekday`` / ``runs_weekend``: booleans, ``True`` if the service
+      runs on any weekday (Monday-Friday) / weekend day (Saturday-Sunday)
+      respectively.
+    - ``day_type``: summary label -- ``"weekday"``, ``"weekend"``,
+      ``"weekday_and_weekend"`` or ``None`` if it can't be determined.
 
-    La fuente principal es ``calendar.txt`` (el patron semanal declarado). Si
-    no existe, se infieren los dias de la semana a partir de las fechas
-    anadidas en ``calendar_dates.txt`` (``exception_type == 1``).
+    The primary source is ``calendar.txt`` (the declared weekly pattern).
+    If it doesn't exist, the days of the week are inferred from the dates
+    added in ``calendar_dates.txt`` (``exception_type == 1``).
     """
     import pandas as pd
 
@@ -325,7 +327,7 @@ def _attach_service_days(
 
     trips = trips.copy()
 
-    # --- Info declarada en calendar.txt (si existe) ---
+    # --- Info declared in calendar.txt (if it exists) ---
     cal_days_active = pd.Series(dtype="float64")
     cal_dow = pd.Series(dtype="object")
     cal_runs_weekday = pd.Series(dtype="boolean")
@@ -347,10 +349,11 @@ def _attach_service_days(
         cal_runs_weekday = cal["runs_weekday"].astype("boolean")
         cal_runs_weekend = cal["runs_weekend"].astype("boolean")
 
-    # Servicios con un patron semanal real declarado en calendar.txt (al menos
-    # un dia activo). Algunos feeds usan calendar.txt como "stub" con todas
-    # las banderas a 0 y delegan las fechas concretas a calendar_dates.txt;
-    # esos servicios se tratan igual que si no estuvieran en calendar.txt.
+    # Services with a real weekly pattern declared in calendar.txt (at
+    # least one active day). Some feeds use calendar.txt as a "stub" with
+    # all flags set to 0 and delegate the concrete dates to
+    # calendar_dates.txt; those services are treated the same as if they
+    # weren't in calendar.txt at all.
     strong_ids = set(
         cal_runs_weekday[
             cal_runs_weekday.fillna(False) | cal_runs_weekend.fillna(False)
@@ -369,10 +372,9 @@ def _attach_service_days(
         added_counts = cd[cd["exception_type"] == 1].groupby("service_id").size()
         removed_counts = cd[cd["exception_type"] == 2].groupby("service_id").size()
 
-        # Dias de la semana inferidos a partir de las fechas anadidas
-        # (exception_type == 1). Se usan para los servicios "debiles": los
-        # que no aparecen en calendar.txt, o aparecen con todas las banderas
-        # semanales a 0.
+        # Days of the week inferred from the added dates
+        # (exception_type == 1). Used for "weak" services: those absent
+        # from calendar.txt, or present with all weekly flags at 0.
         if "date" in cd.columns:
             added_rows = cd[cd["exception_type"] == 1].copy()
             added_rows["weekday_name"] = (
@@ -398,10 +400,10 @@ def _attach_service_days(
                     .astype("boolean")
                 )
 
-    # ``days_active``: recuento declarado en calendar.txt, mas las fechas
-    # anadidas y menos las eliminadas en calendar_dates.txt (si un servicio
-    # es "debil" en calendar.txt, cal_days_active es 0 y el resultado queda
-    # como el recuento puro de fechas de calendar_dates.txt).
+    # ``days_active``: count declared in calendar.txt, plus the dates
+    # added and minus the dates removed in calendar_dates.txt (if a
+    # service is "weak" in calendar.txt, cal_days_active is 0 and the
+    # result ends up as the plain count of dates from calendar_dates.txt).
     service_days = cal_days_active.add(added_counts, fill_value=0).sub(
         removed_counts, fill_value=0
     )
@@ -409,12 +411,12 @@ def _attach_service_days(
         service_days.clip(lower=0) if not service_days.empty else service_days
     )
 
-    # ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend``: para los
-    # servicios "fuertes" (patron semanal real en calendar.txt) se respeta
-    # ese patron. Para el resto ("debiles": ausentes de calendar.txt, o
-    # presentes con todas las banderas a 0) se usa lo inferido de
-    # calendar_dates.txt si hay datos, y si no, se deja lo que hubiera en
-    # calendar.txt (tipicamente vacio/False).
+    # ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend``: for
+    # "strong" services (a real weekly pattern in calendar.txt) that
+    # pattern is respected. For the rest ("weak": absent from
+    # calendar.txt, or present with all flags at 0), what's inferred from
+    # calendar_dates.txt is used when available, and otherwise whatever
+    # was in calendar.txt is kept (typically empty/False).
     all_ids = cal_dow.index.union(inferred_dow.index)
     if len(all_ids) == 0:
         service_dow = pd.Series(dtype="object")
@@ -476,13 +478,12 @@ def _build_stop_to_stop_trip_records(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
 ) -> pd.DataFrame:
-    """Construye la tabla intermedia, sin agregar, de un registro por (viaje,
+    """Build the intermediate, unaggregated table of trip-segment records.
 
-    tramo entre paradas consecutivas).
-    La reutilizan tanto la capa agregada de
-    aristas (``build_gtfs_stop_to_stop_edges_gdf``) como la tabla plana de
-    horarios (``build_gtfs_schedule_table``), para no duplicar la logica de
-    calculo de tiempos y merges.
+    One record per (trip, segment between consecutive stops). Reused by
+    both the aggregated edges layer (``build_gtfs_stop_to_stop_edges_gdf``)
+    and the flat schedule table (``build_gtfs_schedule_table``), to avoid
+    duplicating the travel-time and merge logic.
     """
     import pandas as pd
 
@@ -631,11 +632,11 @@ def build_gtfs_schedule_table(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
 ) -> pd.DataFrame:
-    """Opcion B: tabla plana (sin geometria), un registro por viaje y tramo.
+    """Option B: a flat table (no geometry), one record per trip and segment.
 
-    Pensada para unirse con la capa ``edges`` por ``edge_id`` cuando se necesita
-    el detalle completo de horarios (cada paso de cada viaje), sin perder esa
-    granularidad en la capa espacial agregada.
+    Meant to be joined with the ``edges`` layer by ``edge_id`` when the
+    full schedule detail is needed (every step of every trip), without
+    losing that granularity in the aggregated spatial layer.
     """
     records = _build_stop_to_stop_trip_records(
         stop_times,
@@ -682,16 +683,14 @@ def _period_pivot_columns(
     peak_periods: dict[str, tuple[int, int]] | None,
     *,
     suffix: str = "",
-
 ) -> pd.DataFrame:
-    """Agrega ``travel_time_seconds_mean`` / ``trip_count`` por periodo
+    """Aggregate ``travel_time_seconds_mean`` / ``trip_count`` by period.
 
-    (punta_manana / punta_tarde / resto_del_dia), pivotando ``period`` a
-    columnas tipo ``travel_time_seconds_mean_peak_am``. ``suffix`` se anade al
-    final de cada nombre de columna (p.ej. ``"_weekday"``) para poder
-    combinar este desglose por periodo con otro desglose (laborables/fin de
-    semana). Devuelve siempre todas las columnas de periodo, aunque esten
-    vacias, para que el merge posterior sea consistente.
+    Periods are peak_am / peak_pm / rest_of_day, pivoting ``period`` into
+    columns like ``travel_time_seconds_mean_peak_am``. ``suffix`` is added
+    to the end of each column name so this period breakdown can be
+    combined with another breakdown (weekday/weekend). Always returns all
+    period columns, even if empty, so the later merge stays consistent.
     """
     import pandas as pd
 
@@ -745,33 +744,38 @@ def build_gtfs_stop_to_stop_edges_gdf(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
 ) -> gpd.GeoDataFrame:
-    """Capa de aristas parada-a-parada: una fila por par de paradas.
+    """Build the stop-to-stop edges layer: one row per pair of stops.
 
-    Incluye tres cosas nuevas, todas manteniendo el formato tabular:
+    Includes three new things, all keeping the tabular format:
 
-    - Opcion A: columnas por periodo (``peak_am``/``peak_pm``/``rest_of_day``
-      por defecto) para ``travel_time_seconds_mean``, ``travel_time_seconds_median``
-      y ``trip_count``, p.ej. ``travel_time_seconds_mean_peak_am``.
-    - Opcion C: si ``include_hourly_summary=True``, dos columnas de texto
-      empaquetado ``hourly_travel_times`` / ``hourly_trip_counts`` tipo
-      ``"07-08:320|08-09:280|17-18:310"`` con el detalle por hora, sin generar
-      filas adicionales.
-    - Laborables vs. fin de semana: columnas ``travel_time_seconds_mean_weekday``
-      / ``trip_count_weekday`` y ``travel_time_seconds_mean_weekend`` /
-      ``trip_count_weekend``, calculadas a partir de ``calendar.txt`` (o
-      inferidas de ``calendar_dates.txt`` si no hay ``calendar.txt``). Un
-      servicio que circula todos los dias aporta a ambas columnas. Ademas,
-      ``days_of_week_summary`` empaqueta en texto la union de dias de la
-      semana con servicio en esa arista, p.ej. ``"monday|tuesday|friday"``.
-    - Combinacion periodo x laborables/fin de semana: las mismas columnas de
-      la opcion A pero separadas ademas por dia, p.ej.
+    - Option A: per-period columns (``peak_am``/``peak_pm``/``rest_of_day``
+      by default) for ``travel_time_seconds_mean``,
+      ``travel_time_seconds_median`` and ``trip_count``, e.g.
+      ``travel_time_seconds_mean_peak_am``.
+    - Option C: if ``include_hourly_summary=True``, two packed text
+      columns ``hourly_travel_times`` / ``hourly_trip_counts`` like
+      ``"07-08:320|08-09:280|17-18:310"`` with the per-hour detail,
+      without generating extra rows.
+    - Weekday vs. weekend: columns
+      ``travel_time_seconds_mean_weekday`` / ``trip_count_weekday`` and
+      ``travel_time_seconds_mean_weekend`` / ``trip_count_weekend``,
+      computed from ``calendar.txt`` (or inferred from
+      ``calendar_dates.txt`` if there's no ``calendar.txt``). A service
+      that runs every day contributes to both columns. In addition,
+      ``days_of_week_summary`` packs into text the union of the days of
+      the week with service on that edge, e.g.
+      ``"monday|tuesday|friday"``.
+    - Period x weekday/weekend combination: the same option A columns but
+      also split by day, e.g.
       ``travel_time_seconds_mean_peak_am_weekday`` /
-      ``trip_count_peak_am_weekend`` / ``travel_time_seconds_mean_rest_of_day_weekday``.
-    - Los agregados globales de siempre (``trip_count``, ``travel_time_seconds_mean``,
-      etc.) sobre el conjunto completo de viajes, no solo el periodo punta.
+      ``trip_count_peak_am_weekend`` /
+      ``travel_time_seconds_mean_rest_of_day_weekday``.
+    - The usual overall aggregates (``trip_count``,
+      ``travel_time_seconds_mean``, etc.) over the full set of trips, not
+      just the peak period.
 
-    Para el detalle completo por viaje (sin agregar en absoluto), usar
-    ``build_gtfs_schedule_table`` (opcion B).
+    For the full per-trip detail (not aggregated at all), use
+    ``build_gtfs_schedule_table`` (option B).
     """
     import geopandas as gpd
     import pandas as pd
@@ -809,7 +813,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
         ],
     )
 
-    # --- Agregados globales (todas las horas juntas) ---
+    # --- Overall aggregates (all hours together) ---
     aggregations = {
         "trip_count": ("trip_id", "nunique"),
         "travel_time_seconds_mean": ("travel_time_seconds", "mean"),
@@ -818,17 +822,17 @@ def build_gtfs_stop_to_stop_edges_gdf(
     }
     grouped = edges.groupby(group_cols, dropna=False).agg(**aggregations).reset_index()
 
-    # --- Opcion A: columnas por periodo
-    # (punta_manana / punta_tarde / resto_del_dia) ---
+    # --- Option A: per-period columns
+    # (peak_am / peak_pm / rest_of_day) ---
     period_pivot = _period_pivot_columns(edges, group_cols, peak_periods)
     grouped = grouped.merge(period_pivot, on=group_cols, how="left")
 
-    # --- Laborables vs. fin de semana: mismos agregados globales, separados
-    # por ``runs_weekday`` / ``runs_weekend``, mas la combinacion con el
-    # periodo (p.ej. ``travel_time_seconds_mean_peak_am_weekday``). Un viaje
-    # que circula ambos tipos de dia (p.ej. servicio diario) cuenta en las
-    # dos columnas; uno que solo circula entre semana o solo en fin de semana
-    # cuenta solo en la suya. ---
+    # --- Weekday vs. weekend: same overall aggregates, split by
+    # ``runs_weekday`` / ``runs_weekend``, plus the combination with the
+    # period (e.g. ``travel_time_seconds_mean_peak_am_weekday``). A trip
+    # that runs on both day types (e.g. a daily service) counts in both
+    # columns; one that only runs on weekdays or only on weekends counts
+    # only in its own. ---
     all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
         "rest_of_day"
     ]
@@ -873,9 +877,10 @@ def build_gtfs_stop_to_stop_edges_gdf(
         )
         grouped = grouped.merge(day_period_pivot, on=group_cols, how="left")
 
-    # --- Resumen de dias de la semana con servicio, como texto empaquetado
-    # (union de los dias de todos los viajes que usan esa arista, p.ej.
-    # "monday|tuesday|wednesday|thursday|friday"). No genera filas nuevas. ---
+    # --- Summary of days of the week with service, as packed text (the
+    # union of the days across every trip that uses that edge, e.g.
+    # "monday|tuesday|wednesday|thursday|friday"). Doesn't generate new
+    # rows. ---
     if "active_days_of_week" in edges.columns:
         days_summary = (
             edges.groupby(group_cols, dropna=False)["active_days_of_week"]
@@ -887,7 +892,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     else:
         grouped["days_of_week_summary"] = None
 
-    # --- Opcion C: resumen horario empaquetado en texto, sin filas nuevas ---
+    # --- Option C: hourly summary packed as text, no new rows ---
     if include_hourly_summary:
         hour_rows = edges.dropna(subset=["hour_band"])
         if not hour_rows.empty:
@@ -957,21 +962,21 @@ def normalize_gtfs_feed(
     include_hourly_summary: bool = True,
     include_schedule_table: bool = True,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
-    """Normaliza un feed GTFS en (paradas, aristas, horario).
+    """Normalize a GTFS feed into (stops, edges, schedule).
 
-    El tercer elemento devuelto, ``schedule`` (opcion B), es una tabla plana
-    (``pandas.DataFrame``, sin geometria) con el detalle viaje-a-viaje; es
-    ``None`` si ``include_schedule_table=False``.
+    The third returned element, ``schedule`` (option B), is a flat table
+    (``pandas.DataFrame``, no geometry) with the trip-by-trip detail; it's
+    ``None`` if ``include_schedule_table=False``.
 
-    ``peak_periods`` (opcion A) por defecto separa punta_manana (07-09),
-    punta_tarde (17-20) y resto_del_dia (todo lo demas); se puede pasar un
-    dict propio con el mismo formato para cambiar los tramos.
+    ``peak_periods`` (option A) defaults to separating peak_am (07-09),
+    peak_pm (17-20) and rest_of_day (everything else); a custom dict with
+    the same format can be passed to change the bands.
 
-    Tanto la capa de aristas como la tabla de horario incluyen ademas una
-    separacion laborables/fin de semana (columnas ``*_weekday`` / ``*_weekend``
-    en aristas, columnas ``active_days_of_week`` / ``runs_weekday`` /
-    ``runs_weekend`` / ``day_type`` en el horario), derivada de ``calendar.txt``
-    (con fallback a ``calendar_dates.txt`` si no existe).
+    Both the edges layer and the schedule table also include a
+    weekday/weekend split (``*_weekday`` / ``*_weekend`` columns in edges,
+    ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend`` /
+    ``day_type`` columns in the schedule), derived from ``calendar.txt``
+    (falling back to ``calendar_dates.txt`` if it doesn't exist).
     """
     stops = read_gtfs_table(feed_path, "stops.txt")
     stop_times = read_gtfs_table(feed_path, "stop_times.txt")

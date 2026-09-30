@@ -1,21 +1,21 @@
-"""Estandarizacion de datos OSM (principalmente creacion de intersecciones).
+"""OSM data standardization (mainly building intersections).
 
-Este modulo convierte un grafo de ``osmnx`` en capas normalizadas de nodos y
-aristas listas para GeoPandas / QGIS. Su parte mas importante es la creacion
-explicita de nodos topologicos (intersecciones, extremos y vertices lineales) a
-partir de la geometria de las aristas, de forma que la red quede completa aunque
-``osmnx`` simplifique el grafo de enrutamiento.
+This module converts an ``osmnx`` graph into normalized node and edge
+layers ready for GeoPandas / QGIS. Its most important part is the
+explicit creation of topology nodes (intersections, endpoints and linear
+vertices) from the edges' geometry, so the network stays complete even
+when ``osmnx`` simplifies the routing graph.
 
-Funciones publicas principales:
+Main public functions:
 
 - ``normalize_osm_graph(graph, ...)``              -> ``(nodes_gdf, edges_gdf)``
-- ``derive_topology_nodes_from_edges(...)``        -> capa de nodos topologicos
-- ``split_edges_with_topology_nodes(...)``         -> aristas cortadas por nodo real
-- ``add_mode_travel_time(edges, nodes, mode=...)`` -> tiempo de viaje (``tts``)
-- ``build_final_osm_layers(graph, ...)``           -> capas finales listas para exportar
-- ``add_edge_travel_time(graph, speed_kmh)``       -> tiempo de viaje simple (legacy)
+- ``derive_topology_nodes_from_edges(...)``        -> topology nodes layer
+- ``split_edges_with_topology_nodes(...)``         -> edges split at real nodes
+- ``add_mode_travel_time(edges, nodes, mode=...)`` -> travel time (``tts``)
+- ``build_final_osm_layers(graph, ...)``           -> final layers ready to export
+- ``add_edge_travel_time(graph, speed_kmh)``       -> simple travel time (legacy)
 
-No se escribe ningun fichero aqui; eso lo hace ``get_network``.
+No file is written here; that's done by ``get_network``.
 """
 
 from __future__ import annotations
@@ -29,14 +29,14 @@ if TYPE_CHECKING:
     import geopandas as gpd
 
 
-# CRS de trabajo. El CRS de salida se decide en la funcion principal (``main``);
-# por defecto es WGS84 (EPSG:4326), el CRS universal.
+# Working CRS. The output CRS is decided in the main function (``main``);
+# defaults to WGS84 (EPSG:4326), the universal CRS.
 SOURCE_CRS = "EPSG:4326"
 TOPOLOGY_ROUND_DIGITS = 3
 
 
 def _json_safe(value: object) -> object:
-    """Convierte un valor a un tipo serializable en GeoJSON/atributos."""
+    """Convert a value to a type serializable in GeoJSON/attributes."""
     try:
         if value != value:  # NaN
             return None
@@ -51,7 +51,7 @@ def _json_safe(value: object) -> object:
 
 
 def _clean_for_file(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Limpia columnas no escalares para poder exportar la capa a fichero."""
+    """Clean non-scalar columns so the layer can be exported to a file."""
     cleaned = gdf.copy()
     for column in cleaned.columns:
         if column != cleaned.geometry.name:
@@ -76,15 +76,16 @@ def _iter_line_coords(geometry) -> list[list[tuple[float, float]]]:
 
 
 def _flatten_to_string(value: object, sep: str = ";") -> object:
-    """Convierte columnas con listas (``highway``, ``lanes``, ``maxspeed``, ``name``)
+    """Flatten list-valued columns into a single string.
 
-    en una cadena simple, uniendo los valores con ``sep``.
+    Applies to ``highway``, ``lanes``, ``maxspeed`` and ``name``, joining
+    their values with ``sep``.
 
-    OSMnx guarda una lista en estos campos cuando una arista simplificada
-    proviene de varias 'ways' de OSM con valores distintos para ese atributo
-    (p. ej. ``highway=['residential', 'tertiary']``). Tras exportar a fichero
-    (GeoJSON/Shapefile/GeoPackage) las listas no son un tipo valido de columna,
-    asi que aqui se aplanan a texto.
+    OSMnx stores a list in these fields when a simplified edge comes from
+    several OSM 'ways' with different values for that attribute (e.g.
+    ``highway=['residential', 'tertiary']``). After exporting to a file
+    (GeoJSON/Shapefile/GeoPackage) lists aren't a valid column type, so
+    they're flattened to text here.
     """
     if value is None:
         return None
@@ -95,24 +96,25 @@ def _flatten_to_string(value: object, sep: str = ";") -> object:
 
 
 def _first_if_list(value: object) -> object:
-    """Se queda con el primer elemento si el valor es una lista (p. ej. ``oneway``/``reversed``)."""  # noqa: E501
+    """Keep the first element if the value is a list (e.g. ``oneway``/``reversed``)."""
     if isinstance(value, (list, tuple)):
         return value[0] if value else None
     return value
 
 
 def _primary_highway(value: object) -> object:
-    """Devuelve una unica etiqueta ``highway`` valida de OSM.
+    """Return a single valid OSM ``highway`` label.
 
-    Al simplificar el grafo, osmnx fusiona varias 'ways' en una arista y
-    ``_flatten_to_string`` une sus etiquetas con ';' (``"footway;steps"``), un
-    valor que no existe en OSM. Aqui se resuelve quedandose con la primera; el
-    original se conserva en ``hwy_raw``.
+    When simplifying the graph, osmnx merges several 'ways' into one
+    edge, and ``_flatten_to_string`` joins their labels with ';'
+    (``"footway;steps"``), a value that doesn't exist in OSM. This
+    resolves it by keeping the first one; the original is kept in
+    ``hwy_raw``.
 
-    No confundir con :func:`_normalize_highway`, que agrupa por velocidad libre
-    y colapsa cualquier via transitable a pie a ``"footway"``. Eso sirve para
-    elegir una velocidad, pero no para etiquetar: convertiria ``track`` o
-    ``path`` en ``footway``.
+    Not to be confused with :func:`_normalize_highway`, which groups by
+    free-flow speed and collapses any walkable way to ``"footway"``.
+    That's useful for picking a speed, but not for labeling: it would
+    turn ``track`` or ``path`` into ``footway``.
     """
     if value is None:
         return None
@@ -127,13 +129,14 @@ def derive_topology_nodes_from_edges(
     layer_id: str,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
 ) -> gpd.GeoDataFrame:
-    """Construye una capa de nodos completa a partir de los vertices de las aristas.
+    """Build a complete nodes layer from the edges' vertices.
 
-    Los grafos simplificados de OSMnx mantienen el grafo de enrutamiento compacto,
-    por lo que los vertices intermedios de la geometria no siempre estan presentes
-    en la capa de nodos exportada. Esta funcion crea un nodo por cada vertice unico
-    de las aristas y lo clasifica como extremo, vertice lineal o interseccion. Si un
-    nodo derivado coincide con un nodo original de OSMnx, se conservan sus metadatos.
+    OSMnx's simplified graphs keep the routing graph compact, so the
+    geometry's intermediate vertices aren't always present in the
+    exported nodes layer. This function creates one node per unique edge
+    vertex and classifies it as an endpoint, linear vertex or
+    intersection. If a derived node matches an original OSMnx node, its
+    metadata is kept.
     """
     import geopandas as gpd
     from shapely.geometry import Point
@@ -181,7 +184,7 @@ def derive_topology_nodes_from_edges(
                         int(entry["endpoint_occurrences"]) + 1
                     )
             # part[1:] is always one shorter, by design
-            for start, end in zip(part, part[1:], strict=False):  
+            for start, end in zip(part, part[1:], strict=False):
                 start_key = _coord_key(start[0], start[1], round_digits)
                 end_key = _coord_key(end[0], end[1], round_digits)
                 if start_key == end_key:
@@ -244,7 +247,7 @@ def derive_topology_nodes_from_edges(
 
 
 # ---------------------------------------------------------------------------
-# Division de aristas por nodos topologicos reales
+# Splitting edges at real topology nodes
 # ---------------------------------------------------------------------------
 def split_edges_with_topology_nodes(
     edges: gpd.GeoDataFrame,
@@ -257,35 +260,36 @@ def split_edges_with_topology_nodes(
         "linear_vertex",
     ),
 ) -> gpd.GeoDataFrame:
-    """Divide cada arista en tramos entre nodos topologicos "reales".
+    """Split each edge into segments between "real" topology nodes.
 
-    Un grafo simplificado de OSMnx solo conserva como nodos los extremos
-    (``u``/``v``) de cada arista. Si dentro de esa geometria hay un punto en el
-    que en realidad cruza o termina otra calle (p. ej. una calle sin salida que
-    conecta a mitad de manzana), ese punto queda "escondido" como un vertice mas
-    de la geometria. Esta funcion usa la capa de nodos topologicos (ver
-    ``derive_topology_nodes_from_edges``) para cortar la arista justo en esos
-    puntos, generando tramos mas cortos con su propio ``from_node_id`` /
-    ``to_node_id`` y una ``length`` repartida proporcionalmente a la longitud
-    original de la arista.
+    A simplified OSMnx graph only keeps the endpoints (``u``/``v``) of
+    each edge as nodes. If there's a point within that geometry where
+    another street actually crosses or ends (e.g. a dead-end street that
+    connects mid-block), that point stays "hidden" as just another
+    vertex of the geometry. This function uses the topology nodes layer
+    (see ``derive_topology_nodes_from_edges``) to cut the edge exactly at
+    those points, generating shorter segments with their own
+    ``from_node_id`` / ``to_node_id`` and a ``length`` distributed
+    proportionally to the edge's original length.
 
-    ``split_roles`` controla que tipos de nodo topologico se consideran puntos
-    de corte validos. Por defecto se corta en:
+    ``split_roles`` controls which topology-node types count as valid
+    cut points. By default it cuts at:
 
-    - "intersection": varias aristas convergen ahi.
-    - "through_endpoint": un extremo de otra arista cae ahi, aunque el grado
-      sea 2.
-    - "linear_vertex": cualquier otro vertice intermedio de la geometria (un
-      simple punto de forma, sin otra arista tocandolo). Se incluye para
-      obtener el tramo mas fino posible por cada vertice original de la
-      geometria; esto tambien acerca la particion a los limites reales entre
-      las 'ways' de OSM que se fusionaron en una misma arista simplificada
-      (informacion que, de otro modo, se pierde). Nota: al cortar en cada
-      vertice, aristas con geometrias muy detalladas (calles curvas, etc.)
-      generaran muchos mas tramos y nodos que antes.
+    - "intersection": several edges converge there.
+    - "through_endpoint": another edge's endpoint falls there, even if
+      the degree is 2.
+    - "linear_vertex": any other intermediate vertex of the geometry (a
+      plain shape point, with no other edge touching it). Included to
+      get the finest possible segment at every original geometry
+      vertex; this also brings the split closer to the real boundaries
+      between the OSM 'ways' that were merged into the same simplified
+      edge (information that would otherwise be lost). Note: since it
+      cuts at every vertex, edges with very detailed geometries (curvy
+      streets, etc.) will generate many more segments and nodes than
+      before.
 
-    Para volver al comportamiento anterior (sin cortar en simples vertices de
-    forma), pasar ``split_roles=("intersection", "through_endpoint")``.
+    To go back to the previous behavior (not cutting at plain shape
+    vertices), pass ``split_roles=("intersection", "through_endpoint")``.
     """
     import geopandas as gpd
     from shapely.geometry import LineString
@@ -315,8 +319,8 @@ def split_edges_with_topology_nodes(
             if len(part) < 2:
                 continue
 
-            # Puntos de corte: siempre los extremos, mas cualquier vertice
-            # intermedio que corresponda a un nodo topologico "real".
+            # Cut points: always the endpoints, plus any intermediate
+            # vertex that corresponds to a "real" topology node.
             split_indices = {0, len(part) - 1}
             for i in range(1, len(part) - 1):
                 x, y, *_rest = part[i]
@@ -326,8 +330,9 @@ def split_edges_with_topology_nodes(
                     split_indices.add(i)
             ordered_indices = sorted(split_indices)
 
-            # Longitud "planar" de cada micro-segmento, solo para repartir la
-            # longitud real (metros) de forma proporcional entre los tramos.
+            # "Planar" length of each micro-segment, only used to
+            # distribute the real length (meters) proportionally across
+            # the segments.
             seg_planar_lengths = [
                 LineString([part[i], part[i + 1]]).length for i in range(len(part) - 1)
             ]
@@ -335,7 +340,7 @@ def split_edges_with_topology_nodes(
             # sliding window, lengths differ by one on purpose
             for start_idx, end_idx in zip(
                 ordered_indices[:-1], ordered_indices[1:], strict=False
-            ):  
+            ):
                 if start_idx == end_idx:
                     continue
                 sub_coords = part[start_idx : end_idx + 1]
@@ -365,10 +370,10 @@ def split_edges_with_topology_nodes(
 
 
 # ---------------------------------------------------------------------------
-# Velocidades libres y penalizaciones de parada por modo
+# Free-flow speeds and stop penalties by mode
 # ---------------------------------------------------------------------------
-# Velocidades por defecto (km/h) segun tipo de via, usadas para "drive" cuando
-# no hay ``maxspeed`` valido.
+# Default speeds (km/h) by road type, used for "drive" when there's no
+# valid maxspeed.
 DEFAULT_HWY_SPEEDS_KMH: dict[str, float] = {
     "motorway": 100,
     "motorway_link": 70,
@@ -386,9 +391,9 @@ DEFAULT_HWY_SPEEDS_KMH: dict[str, float] = {
     "service": 20,
 }
 
-# Perfil de velocidad libre por modo. "walk" siempre usa una velocidad
-# constante; "bike" tiene un techo maximo aunque el tag sugiera mas velocidad;
-# "drive" usa ``maxspeed`` si es valido y si no, la tabla por tipo de via.
+# Free-flow speed profile per mode. "walk" always uses a constant speed;
+# "bike" has a hard cap even if the tag suggests a higher speed; "drive"
+# uses ``maxspeed`` if valid, otherwise the per-road-type table.
 MODE_SPEED_PROFILES: dict[str, dict[str, object]] = {
     "drive": {
         "hwy_speeds_kmh": DEFAULT_HWY_SPEEDS_KMH,
@@ -399,21 +404,21 @@ MODE_SPEED_PROFILES: dict[str, dict[str, object]] = {
     "bike": {
         "hwy_speeds_kmh": None,
         "fallback_speed_kmh": 15.0,
-        "max_speed_kmh": 25.0,  # tope duro: la bici no puede superar 25-30 km/h
+        "max_speed_kmh": 25.0,  # hard cap: bikes can't exceed 25-30 km/h
         "use_maxspeed_tag": False,
     },
     "walk": {
         "hwy_speeds_kmh": None,
-        "fallback_speed_kmh": 5.0,  # velocidad constante de 5 km/h
+        "fallback_speed_kmh": 5.0,  # constant speed of 5 km/h
         "max_speed_kmh": 5.0,
         "use_maxspeed_tag": False,
     },
 }
 
-# Penalizacion de parada (segundos) aplicada al llegar a un nodo, segun el tag
-# ``highway`` del nodo (semaforo, stop, etc.) o, si no hay tag disponible, segun
-# el rol topologico generico del nodo ("intersection"). "walk" no lleva
-# penalizacion: se prioriza la velocidad constante indicada.
+# Stop penalty (seconds) applied on arrival at a node, based on the
+# node's ``highway`` tag (traffic signals, stop, etc.) or, if no tag is
+# available, the node's generic topological role ("intersection").
+# "walk" carries no penalty: the constant speed given takes priority.
 MODE_STOP_PENALTIES_SEC: dict[str, dict[str, float]] = {
     "drive": {
         "traffic_signals": 15.0,
@@ -436,9 +441,10 @@ MODE_STOP_PENALTIES_SEC: dict[str, dict[str, float]] = {
 
 
 def _parse_maxspeed_kmh(value: object) -> float | None:
-    """Interpreta el tag ``maxspeed`` de OSM (num., texto, listas, "30 mph",
+    """Parse the OSM ``maxspeed`` tag.
 
-    valores ';'-separados como "30;50" o "20;walk").
+    Accepts a number, text, a list, "30 mph", or ';'-separated values
+    like "30;50" or "20;walk".
     """
     if value is None:
         return None
@@ -468,7 +474,7 @@ def _parse_maxspeed_kmh(value: object) -> float | None:
     return max(numeric_values)
 
 
-# Cualquier variante de via peatonal/paso conocida en OSM se colapsa a "footway".
+# Any known pedestrian/walkway variant in OSM collapses to "footway".
 WALKING_HIGHWAY_ALIASES: set[str] = {
     "footway",
     "path",
@@ -483,9 +489,9 @@ WALKING_HIGHWAY_ALIASES: set[str] = {
 
 
 def _normalize_highway(highway_value: object) -> object:
-    """Normaliza tags highway compuestos (';'-separados o listas) y colapsa
+    """Normalize compound highway tags (';'-separated or lists).
 
-    cualquier variante peatonal conocida a 'footway'.
+    Collapses any known pedestrian variant to 'footway'.
     """
     if isinstance(highway_value, (list, tuple)):
         tokens = [str(v) for v in highway_value if v is not None]
@@ -520,24 +526,26 @@ def add_mode_travel_time(
     to_node_col: str = "to_node_id",
     output_col: str = "tts",
 ) -> gpd.GeoDataFrame:
-    """Calcula el tiempo de viaje por arista (``tts``, en segundos).
+    """Compute the travel time per edge (``tts``, in seconds).
 
-    tiempo = tiempo_libre (longitud / velocidad) + penalizacion_de_parada
+    time = free_flow_time (length / speed) + stop_penalty
 
-    - ``walk``: velocidad constante de 5 km/h, sin penalizacion de parada.
-    - ``bike``: velocidad limitada a un maximo de 25 km/h (aunque el tramo
-      sugiera mas), con una penalizacion de parada reducida frente al coche.
-    - ``drive``: velocidad por ``maxspeed``/tipo de via, con penalizacion de
-      parada segun el tipo de nodo de llegada (semaforo, stop, etc., o una
-      penalizacion generica si el nodo es una interseccion sin tag conocido).
+    - ``walk``: constant speed of 5 km/h, no stop penalty.
+    - ``bike``: speed capped at a maximum of 25 km/h (even if the
+      segment suggests more), with a reduced stop penalty compared to
+      driving.
+    - ``drive``: speed from ``maxspeed``/road type, with a stop penalty
+      based on the arrival node's type (traffic signals, stop, etc., or
+      a generic penalty if the node is an intersection with no known
+      tag).
 
-    La penalizacion se aplica en funcion del nodo de **llegada** (``to_node_id``):
-    cada vez que la ruta entra en un nodo con parada, se anade el retardo
-    correspondiente.
+    The penalty is applied based on the **arrival** node
+    (``to_node_id``): every time the route enters a node with a stop,
+    the corresponding delay is added.
     """
     if mode not in MODE_SPEED_PROFILES:
         valid = ", ".join(sorted(MODE_SPEED_PROFILES))
-        raise ValueError(f"Modo '{mode}' no soportado. Valores validos: {valid}")
+        raise ValueError(f"Mode '{mode}' not supported. Valid values: {valid}")
 
     profile = MODE_SPEED_PROFILES[mode]
     penalties = MODE_STOP_PENALTIES_SEC.get(mode, {})
@@ -588,15 +596,15 @@ def add_mode_travel_time(
 
 
 def add_edge_travel_time(graph: object, travel_speed_kmh: float) -> object:
-    """Anade tiempo de viaje (minutos) a las aristas usando longitud y velocidad.
+    """Add travel time (minutes) to the edges using length and speed.
 
-    Version simple (legacy, velocidad constante para todo el grafo, sin
-    penalizacion de parada). Para el calculo por modo con penalizacion de
-    parada, usar ``add_mode_travel_time``.
+    Simple (legacy) version: constant speed for the whole graph, no stop
+    penalty. For the per-mode calculation with a stop penalty, use
+    ``add_mode_travel_time``.
     """
     meters_per_minute = travel_speed_kmh * 1000 / 60
     if meters_per_minute <= 0:
-        raise ValueError("travel_speed_kmh debe ser mayor que cero.")
+        raise ValueError("travel_speed_kmh must be greater than zero.")
 
     for _u, _v, _key, data in graph.edges(data=True, keys=True):
         length = data.get("length")
@@ -614,21 +622,22 @@ def normalize_osm_graph(
     topology_nodes: bool = True,
     clean_edges_for_export: bool = True,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Normaliza un grafo de OSMnx en GeoDataFrames de nodos y aristas.
+    """Normalize an OSMnx graph into node and edge GeoDataFrames.
 
-    Devuelve:
-        nodes_gdf: nodos del grafo OSM (intersecciones/extremos tras la
-            simplificacion de OSMnx, o nodos topologicos completos si
+    Returns
+    -------
+        nodes_gdf: OSM graph nodes (intersections/endpoints after
+            OSMnx's simplification, or full topology nodes if
             ``topology_nodes=True``).
-        edges_gdf: aristas del grafo OSM con sus atributos.
+        edges_gdf: OSM graph edges with their attributes.
 
-    ``clean_edges_for_export=False`` deja las columnas de lista de las aristas
-    (``osmid``, ``highway``, ``lanes``, ``maxspeed``, ``name``, ``reversed``)
-    como listas de Python en vez de convertirlas a texto JSON. Se usa
-    internamente en ``build_final_osm_layers``, que necesita las listas
-    "vivas" para poder explotarlas (``explode('osmid')``) y aplanarlas antes
-    de exportar. Para exportar estas aristas directamente a fichero hay que
-    dejar el valor por defecto (``True``) o limpiarlas despues con
+    ``clean_edges_for_export=False`` leaves the edges' list-valued
+    columns (``osmid``, ``highway``, ``lanes``, ``maxspeed``, ``name``,
+    ``reversed``) as Python lists instead of converting them to JSON
+    text. Used internally by ``build_final_osm_layers``, which needs the
+    "live" lists to explode them (``explode('osmid')``) and flatten them
+    before exporting. To export these edges directly to a file, either
+    keep the default (``True``) or clean them afterward with
     ``_clean_for_file``.
     """
     import osmnx as ox
@@ -658,7 +667,7 @@ def normalize_osm_graph(
 
 
 # ---------------------------------------------------------------------------
-# Pipeline completo: grafo OSMnx -> capas finales de nodos / aristas
+# Full pipeline: OSMnx graph -> final node/edge layers
 # ---------------------------------------------------------------------------
 FINAL_EDGE_COLUMNS = [
     "osmid",
@@ -676,9 +685,9 @@ FINAL_EDGE_COLUMNS = [
     "tts",
     "geometry",
 ]
-# Shapefile truncaba ``from_node_id`` (12 caracteres) a ``from_node_``, con lo
-# que las aristas dejaban de casar con la tabla de nodos. ``to_node_id`` tiene
-# justo 10 y se conserva.
+# Shapefile was truncating ``from_node_id`` (12 characters) to
+# ``from_node_``, so edges no longer matched the nodes table.
+# ``to_node_id`` is exactly 10 characters and is kept as-is.
 FINAL_EDGE_RENAME = {"osmid": "edge_id", "from_node_id": "from_node"}
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
@@ -691,25 +700,26 @@ def build_final_osm_layers(
     output_crs: str = SOURCE_CRS,
     round_digits: int = TOPOLOGY_ROUND_DIGITS,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Pipeline completo: grafo OSMnx -> capas finales de nodos y aristas.
+    """Full pipeline: OSMnx graph -> final node and edge layers.
 
-    Pasos:
+    Steps:
 
-    1. Normaliza el grafo (``normalize_osm_graph``): nodos + aristas + nodos
-       topologicos derivados de la geometria.
-    2. Divide cada arista por los nodos topologicos "reales"
-       (``split_edges_with_topology_nodes``), generando ``from_node_id`` /
-       ``to_node_id``.
-    3. Explota ``osmid`` (una fila por cada osmid original fusionado en la
-       arista simplificada) y convierte a texto las columnas de lista
+    1. Normalize the graph (``normalize_osm_graph``): nodes + edges +
+       topology nodes derived from the geometry.
+    2. Split each edge at the "real" topology nodes
+       (``split_edges_with_topology_nodes``), generating
+       ``from_node_id`` / ``to_node_id``.
+    3. Explode ``osmid`` (one row per original osmid merged into the
+       simplified edge) and convert the list-valued columns to text
        (``highway``, ``lanes``, ``maxspeed``, ``name``).
-    4. Calcula el tiempo de viaje (``tts``, segundos) segun el modo
-       (``drive``/``bike``/``walk``), con velocidad libre + penalizacion de
-       parada basada en el nodo de llegada (``add_mode_travel_time``).
-    5. Selecciona y renombra las columnas finales de nodos
-       (``node_id``, ``node_role``, ``geometry``) y de aristas (``edge_id``,
-       ``from_node_id``, ``to_node_id``, ``highway``, ``lanes``, ``maxspeed``,
-       ``name``, ``oneway``, ``reversed``, ``length``, ``tts``, ``geometry``).
+    4. Compute the travel time (``tts``, seconds) based on the mode
+       (``drive``/``bike``/``walk``), with free-flow speed + a stop
+       penalty based on the arrival node (``add_mode_travel_time``).
+    5. Select and rename the final node columns (``node_id``,
+       ``node_role``, ``geometry``) and edge columns (``edge_id``,
+       ``from_node_id``, ``to_node_id``, ``highway``, ``lanes``,
+       ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
+       ``tts``, ``geometry``).
     """
     nodes, edges = normalize_osm_graph(
         graph,
@@ -733,8 +743,8 @@ def build_final_osm_layers(
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
 
-    # Despues de calcular el tiempo de viaje, para que ese calculo siga viendo
-    # los valores originales.
+    # Done after computing travel time, so that calculation still sees
+    # the original values.
     if "highway" in edges.columns:
         edges["hwy_raw"] = edges["highway"]
         edges["highway"] = edges["highway"].map(_primary_highway)

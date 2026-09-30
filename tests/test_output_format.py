@@ -1,7 +1,7 @@
-"""Tests del formato de salida: carpetas, nombres de columna y etiquetas OSM.
+"""Output-format tests: folders, column names and OSM labels.
 
-Cubren los arreglos del issue #29. La descarga de OSM y GTFS se simula, asi que
-no dependen de red ni de credenciales.
+Covers the fixes from issue #29. OSM and GTFS downloads are mocked, so
+these tests don't depend on the network or on credentials.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from multimodalpy import get_area, get_network, process_gtfs, process_osm
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: datos de ejemplo minimos, sin red
+# Fixtures: minimal sample data, no network
 # ---------------------------------------------------------------------------
 def _layer(columns, geometry):
     return gpd.GeoDataFrame(columns, geometry=geometry, crs="EPSG:4326")
@@ -43,7 +43,7 @@ def fake_osm_layers():
 
 @pytest.fixture
 def fake_gtfs_layers():
-    """Dos datasets, uno de tren y otro de bus, con columnas de nombre largo."""
+    """Two datasets, one train and one bus, with long column names."""
     nodes = _layer(
         {"node_id": ["s1", "s2"], "stop_name": ["A", "B"]}, [Point(0, 0), Point(1, 1)]
     )
@@ -63,7 +63,7 @@ def fake_gtfs_layers():
 
 @pytest.fixture
 def run_main(tmp_path, fake_boundary, fake_osm_layers, fake_gtfs_layers):
-    """Ejecuta main() con la red simulada; la descarga GTFS deja un ZIP en disco."""
+    """Run main() with the mocked network; the GTFS download leaves a zip on disk."""
 
     def fake_download_gtfs(area_name, boundary, zip_dir, **kwargs):
         zip_dir.mkdir(parents=True, exist_ok=True)
@@ -89,7 +89,7 @@ def run_main(tmp_path, fake_boundary, fake_osm_layers, fake_gtfs_layers):
 
 
 # ---------------------------------------------------------------------------
-# Estructura de carpetas
+# Folder structure
 # ---------------------------------------------------------------------------
 def test_layers_are_grouped_in_one_folder_per_mode(tmp_path, run_main):
     manifest = run_main(output_file_type="geojson")
@@ -115,7 +115,7 @@ def test_geopackage_is_a_single_file_at_the_root(tmp_path, run_main):
 
 
 # ---------------------------------------------------------------------------
-# Parametros de main()
+# main() parameters
 # ---------------------------------------------------------------------------
 def test_schedule_and_gtfs_zips_are_off_by_default(tmp_path, run_main):
     run_main(output_file_type="geojson")
@@ -153,7 +153,7 @@ def test_package_logger_is_silent_unless_configured():
 
 
 # ---------------------------------------------------------------------------
-# Nombres de columna (limite de 10 caracteres de Shapefile)
+# Column names (Shapefile's 10-character limit)
 # ---------------------------------------------------------------------------
 def test_column_names_fit_the_shapefile_limit():
     rename = process_osm.FINAL_EDGE_RENAME
@@ -172,7 +172,7 @@ def test_shapefile_keeps_the_column_names(tmp_path, run_main):
 
 
 # ---------------------------------------------------------------------------
-# Etiquetas OSM exportadas
+# Exported OSM labels
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("value", "expected"),
@@ -230,7 +230,7 @@ def test_osm_export_has_single_tags_numeric_maxspeed_and_raw_values():
 
 
 # ---------------------------------------------------------------------------
-# Modo de transporte de un feed GTFS
+# Transport mode of a GTFS feed
 # ---------------------------------------------------------------------------
 def _feed(tmp_path, route_types):
     path = tmp_path / "feed.zip"

@@ -1,22 +1,22 @@
-"""Descarga de datos en local segun indicaciones de la persona usuaria.
+"""Downloads data locally according to what the user requested.
 
-Contiene la funcion principal de la libreria, ``main()``, que orquesta todo el
-pipeline con los parametros minimos que necesita la persona usuaria:
+Contains the library's main function, ``main()``, which orchestrates the
+whole pipeline with the minimal parameters the user needs:
 
     main(
-        area_name,          # str  : municipio a descargar
-        modes,              # list : modos de transporte
-        output_path,        # Path : carpeta local de descarga
-        boundaries_path=None,   # Path: shapefile/geojson de limites (opcional)
-        crs="EPSG:4326",        # str : CRS de salida (por defecto WGS84 universal)
+        area_name,          # str  : municipality to download
+        modes,              # list : transport modes
+        output_path,        # Path : local download folder
+        boundaries_path=None,   # Path: boundaries shapefile/geojson (optional)
+        crs="EPSG:4326",        # str : output CRS (defaults to universal WGS84)
         output_file_type="geojson",  # geopackage | geojson | shapefile | networkx
-                                     # (o una lista de varios de ellos)
+                                     # (or a list of several of them)
     )
 
-Los modos se reparten automaticamente entre OSM y GTFS:
+Modes are automatically split between OSM and GTFS:
 
     OSM  -> "walking", "bike", "driving"
-    GTFS -> "bus_urbano", "bus_interurbano" (bus)  /  "metro", "cercanias" (tren) #Ahora solo será bus y tren en genérico y descargar todo
+    GTFS -> "bus", "trains"
 """
 
 from __future__ import annotations
@@ -33,18 +33,18 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Nombres de columna cortos (limite de 10 caracteres de Shapefile)
+# Short column names (Shapefile's 10-character limit)
 # ---------------------------------------------------------------------------
-# Shapefile trunca los nombres mas largos y resuelve las colisiones con sufijos
-# numericos, asi que una misma columna acababa llamandose distinto segun el
-# formato. Los nombres cortos se aplican a los tres formatos por igual.
-# El diccionario completo esta en DATA_SCHEMA.md.
+# Shapefile truncates longer names and resolves collisions with numeric
+# suffixes, so the same column ended up named differently depending on the
+# format. The short names are applied to all three formats alike.
+# The full mapping is in DATA_SCHEMA.md.
 _GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
 _GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
 
 
 def _build_gtfs_edge_rename() -> dict[str, str]:
-    """Construye el mapa de nombres largos a cortos de la capa de aristas GTFS."""
+    """Build the long-to-short name map for the GTFS edges layer."""
     rename = {
         "from_node_id": "from_node",
         "route_short_name": "route_sh",
@@ -65,8 +65,8 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
     for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
         rename[f"travel_time_seconds_mean_{day_type}"] = f"tts_m_{short_day}"
         rename[f"trip_count_{day_type}"] = f"trips_{short_day}"
-    # Periodo x tipo de dia se abrevia mas (tm_/trp_) porque juntar las cuatro
-    # partes no cabe en diez caracteres de ninguna otra forma.
+    # Period x day-type is abbreviated further (tm_/trp_) because fitting
+    # all four parts doesn't work within ten characters any other way.
     for period, short_period in _GTFS_PERIOD_ABBR.items():
         for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
             suffix = f"{short_period}_{short_day}"
@@ -78,12 +78,12 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
 GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
 
 
-# Reparto de modos de usuario -> backend de descarga. Se acepta cualquier
-# sinonimo reconocido por ``get_area.OSM_NETWORK_TYPES`` (p. ej. "driving",
-# "coche", "car", "drive" son equivalentes); la capa resultante siempre usa
-# la etiqueta canonica en ingles ("walking", "bike", "driving").
+# User mode -> download backend mapping. Any synonym recognized by
+# ``get_area.OSM_NETWORK_TYPES`` is accepted (e.g. "driving", "coche",
+# "car", "drive" are equivalent); the resulting layer always uses the
+# canonical English label ("walking", "bike", "driving").
 OSM_MODES = set(get_area.OSM_NETWORK_TYPES)
-# NAP: 1 = bus, 2 = ferroviario.
+# NAP: 1 = bus, 2 = rail.
 GTFS_MODE_TO_NAP = {
     "bus": 1,
     "train": 2,
@@ -92,7 +92,7 @@ GTFS_MODE_TO_NAP = {
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
 VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx"}
 
-# Extension y driver de OGR de los formatos que se escriben capa a capa.
+# Extension and OGR driver for the formats written layer by layer.
 _FILE_FORMATS = {
     "geojson": (".geojson", "GeoJSON"),
     "shapefile": (".shp", "ESRI Shapefile"),
@@ -100,7 +100,7 @@ _FILE_FORMATS = {
 
 
 # ---------------------------------------------------------------------------
-# Exportacion a NetworkX (JSON node-link)
+# Export to NetworkX (node-link JSON)
 # ---------------------------------------------------------------------------
 def _json_safe(value: object) -> object:
     try:
@@ -117,7 +117,7 @@ def _json_safe(value: object) -> object:
 
 
 def _osm_graph_to_json(graph: object, output_path: Path) -> Path:
-    """Escribe un grafo OSMnx como JSON node-link de NetworkX."""
+    """Write an OSMnx graph as NetworkX node-link JSON."""
     import networkx as nx
     from networkx.readwrite import json_graph
 
@@ -137,10 +137,11 @@ def _osm_graph_to_json(graph: object, output_path: Path) -> Path:
 
 
 def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
-    """Construye un grafo NetworkX de paradas + aristas parada-a-parada y lo escribe.
+    """Build a NetworkX graph of stops + stop-to-stop edges and write it.
 
-    Incluye ``travel_time_seconds_mean`` y ``hour_band`` (si existen) como
-    atributos de arista, ademas de los ya existentes ``route_id`` / ``trip_count``.
+    Includes ``travel_time_seconds_mean`` and ``hour_band`` (if present) as
+    edge attributes, in addition to the existing ``route_id`` /
+    ``trip_count``.
     """
     import networkx as nx
     from networkx.readwrite import json_graph
@@ -179,12 +180,12 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
 
 
 def _relative_name(path: Path, root: Path) -> str:
-    """Ruta de ``path`` respecto a ``root``, siempre con '/' como separador."""
+    """Return path's location relative to root, always using '/' as separator."""
     return path.relative_to(root).as_posix()
 
 
 # ---------------------------------------------------------------------------
-# Escritura de la tabla de horarios (opcion B, tabla plana sin geometria)
+# Writing the schedule table (option B, flat table with no geometry)
 # ---------------------------------------------------------------------------
 def _write_schedule_tables(
     schedule_tables: dict[str, object],
@@ -194,13 +195,12 @@ def _write_schedule_tables(
     area_slug: str,
     layer_paths: dict[str, str],
 ) -> list[str]:
-    """Escribe las tablas de horario (una por dataset GTFS) junto a las capas
-    espaciales.
+    """Write the schedule tables (one per GTFS dataset) next to the spatial layers.
 
-    - geopackage: se anaden como tablas de atributos (sin geometria) dentro del
-      mismo .gpkg, via sqlite3 (un GeoPackage es una base de datos SQLite).
-    - geojson / shapefile / networkx: no admiten tablas no espaciales de forma
-      nativa, asi que se escriben como CSV en la carpeta del dataset.
+    - geopackage: added as attribute tables (no geometry) inside the same
+      .gpkg, via sqlite3 (a GeoPackage is a SQLite database).
+    - geojson / shapefile / networkx: don't natively support non-spatial
+      tables, so they're written as CSV in the dataset's folder.
     """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -231,7 +231,7 @@ def _write_schedule_tables(
 
 
 # ---------------------------------------------------------------------------
-# Escritura de capas segun el formato solicitado
+# Writing layers in the requested format
 # ---------------------------------------------------------------------------
 def _write_layers(
     layers: dict[str, object],
@@ -241,14 +241,14 @@ def _write_layers(
     area_slug: str,
     layer_paths: dict[str, str],
 ) -> list[str]:
-    """Escribe las capas en el formato indicado.
+    """Write the layers in the requested format.
 
-    En GeoJSON y Shapefile cada capa va a su propia carpeta segun el modo
-    (``driving/nodes.geojson``, ``bus/<dataset>/edges.shp``), en vez de dejar
-    decenas de ficheros sueltos en un unico directorio; con Shapefile son
-    ademas cinco ficheros por capa. En GeoPackage no aplica: es un unico
-    fichero con las capas dentro, asi que se deja en la raiz y los nombres de
-    capa se conservan.
+    In GeoJSON and Shapefile, each layer goes into its own folder by mode
+    (``driving/nodes.geojson``, ``bus/<dataset>/edges.shp``), instead of
+    leaving dozens of loose files in a single directory; with Shapefile
+    that's also five files per layer. This doesn't apply to GeoPackage: it's
+    a single file with the layers inside, so it's left at the root and the
+    layer names are kept as-is.
     """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -266,7 +266,7 @@ def _write_layers(
         suffix, driver = _FILE_FORMATS[output_file_type]
     except KeyError:
         raise ValueError(
-            f"Formato no soportado en _write_layers: {output_file_type}"
+            f"Unsupported format in _write_layers: {output_file_type}"
         ) from None
 
     for name, gdf in layers.items():
@@ -280,7 +280,7 @@ def _write_layers(
 
 
 # ---------------------------------------------------------------------------
-# Clasificacion de modos
+# Mode classification
 # ---------------------------------------------------------------------------
 def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
     osm_modes: list[str] = []
@@ -293,12 +293,12 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
             nap_modes.add(GTFS_MODE_TO_NAP[key])
         else:
             valid = ", ".join(sorted(VALID_MODES))
-            raise ValueError(f"Modo desconocido '{mode}'. Modos validos: {valid}")
+            raise ValueError(f"Unknown mode '{mode}'. Valid modes: {valid}")
     return osm_modes, nap_modes
 
 
 # ---------------------------------------------------------------------------
-# Funcion principal
+# Main function
 # ---------------------------------------------------------------------------
 def main(
     area_name: str,
@@ -308,7 +308,7 @@ def main(
     boundaries_path: str | Path | None = None,
     crs: str = "EPSG:4326",
     output_file_type: str | Sequence[str] = "geojson",
-    # Extras opcionales (no imprescindibles para el uso basico):
+    # Optional extras (not essential for basic use):
     area_code: str | None = None,
     api_key: str | None = None,
     gtfs_hour_band_size: int = 1,
@@ -318,90 +318,88 @@ def main(
     schedule: bool = False,
     gtfs_zips: bool = False,
 ) -> dict:
-    """Descarga y estandariza la red multimodal de un municipio.
+    """Download and standardize a municipality's multimodal network.
 
-    Parametros
+    Parameters
     ----------
     area_name : str
-        Nombre del municipio sobre el que se realiza la descarga.
+        Name of the municipality to download.
     modes : list[str]
-        Modos de transporte a descargar. Opciones: "walking", "bike",
-        "driving", "bus_urbano", "bus_interurbano", "metro", "cercanias".
-        (tambien se aceptan sinonimos en castellano para los modos OSM, p.
-        ej. "caminable", "bicicleta", "coche").
+        Transport modes to download. Options: "walking", "bike", "driving",
+        "bus", "train".
     output_path : Path
-        Carpeta local de descarga.
-    boundaries_path : Path, opcional
-        Shapefile (.shp) o GeoJSON (.geojson) con las geometrias a seleccionar.
-        Si no se indica, se usa el shapefile de recintos incluido en el paquete.
+        Local download folder.
+    boundaries_path : Path, optional
+        Shapefile (.shp) or GeoJSON (.geojson) with the geometries to select
+        from. If not given, the packaged boundaries shapefile is used.
     crs : str
-        CRS de salida. Por defecto "EPSG:4326" (WGS84, universal). Indicar otro
-        (p. ej. "EPSG:25830") si se quiere proyectar la red.
+        Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
+        one (e.g. "EPSG:25830") to project the network.
     output_file_type : str | list[str]
-        Formato(s) de descarga: "geopackage", "geojson", "shapefile" o
-        "networkx". Admite una lista para escribir varios de una sola pasada
-        (p. ej. ["geojson", "shapefile", "geopackage"]): la descarga y la
-        normalizacion se hacen una unica vez y solo se repite la escritura,
-        en vez de rehacer todo el pipeline una vez por formato.
-    NOTA sobre las capas OSM (walking/bike/driving): el tiempo de viaje
-        (``tts``, en segundos) se calcula automaticamente segun el modo
-        (velocidad libre + penalizacion de parada; ver
-        ``process_osm.add_mode_travel_time``), asi que ya no se acepta un
-        parametro de velocidad constante para OSM.
-    gtfs_hour_band_size : int, opcional
-        Si se indica (p.ej. 1), las aristas GTFS se calculan por franja horaria
-        de una hora (columna ``hour_band``), en vez de un unico peso agregado.
-    gtfs_hour_range : (int, int), opcional
-        Si se indica (p.ej. (7, 9)), solo se consideran los viajes GTFS cuya
-        salida cae en esa franja horaria (util para hora punta vs valle).
-    gtfs_peak_periods : dict, opcional
-        Periodos punta para el desglose por columnas de la capa de aristas
-        GTFS (opcion A). Por defecto: punta_manana 07-09, punta_tarde 17-20,
-        resto_del_dia el resto.
+        Download format(s): "geopackage", "geojson", "shapefile" or
+        "networkx". Accepts a list to write several in a single pass (e.g.
+        ["geojson", "shapefile", "geopackage"]): the download and
+        normalization only happen once, and only the writing step is
+        repeated, instead of redoing the whole pipeline per format.
+    NOTE on the OSM layers (walking/bike/driving): travel time (``tts``, in
+        seconds) is computed automatically based on the mode (free-flow
+        speed + stop penalty; see ``process_osm.add_mode_travel_time``), so
+        a constant speed parameter is no longer accepted for OSM.
+    gtfs_hour_band_size : int, optional
+        If set (e.g. 1), GTFS edges are computed per one-hour band (the
+        ``hour_band`` column), instead of a single aggregated weight.
+    gtfs_hour_range : (int, int), optional
+        If set (e.g. (7, 9)), only GTFS trips whose departure falls in that
+        hour window are considered (useful for peak vs off-peak).
+    gtfs_peak_periods : dict, optional
+        Peak periods for the per-column breakdown of the GTFS edges layer
+        (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
+        for everything else.
     multimodal : bool
-        Reservado para la red multimodal, aun sin implementar. Solo admite
-        False; con True lanza ``NotImplementedError``.
+        Reserved for the multimodal network, not implemented yet. Only
+        accepts False; True raises ``NotImplementedError``.
     schedule : bool
-        Escribe ademas la tabla de horario viaje a viaje de cada feed GTFS.
-        Desactivado por defecto porque es, con diferencia, lo que mas ocupa de
-        una descarga.
+        Also write the trip-by-trip schedule table for each GTFS feed.
+        Disabled by default, since it's by far the heaviest part of a
+        download.
     gtfs_zips : bool
-        Conserva los ZIP descargados del NAP en ``gtfs_zips/``. Desactivado por
-        defecto: son solo la materia prima de las capas y se pueden volver a
-        descargar.
+        Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
+        Disabled by default: they're just the raw material for the layers
+        and can be downloaded again.
 
-    Devuelve
-    --------
+    Returns
+    -------
     dict
-        Manifiesto con el area, los modos, la carpeta y los ficheros escritos.
+        Manifest with the area, the modes, the folder and the files
+        written.
     """
     if multimodal:
         raise NotImplementedError(
-            "La red multimodal todavia no esta implementada; main() solo admite "
-            "multimodal=False."
+            "The multimodal network isn't implemented yet; main() only "
+            "accepts multimodal=False."
         )
     if isinstance(modes, str):
         modes = [modes]
 
-    # ``output_file_type`` admite una cadena ("geojson") o varias
-    # (["geojson", "shapefile"]). Con varias, los pasos 1-3 se ejecutan una
-    # sola vez y solo se repite la escritura.
+    # ``output_file_type`` accepts a single string ("geojson") or several
+    # (["geojson", "shapefile"]). With several, steps 1-3 run only once and
+    # only the writing step is repeated.
     single_output_type = isinstance(output_file_type, str)
     requested_types = (
         [output_file_type] if single_output_type else list(output_file_type)
     )
     if not requested_types:
-        raise ValueError("output_file_type no puede estar vacio.")
+        raise ValueError("output_file_type cannot be empty.")
 
     output_file_types: list[str] = []
     for file_type in requested_types:
         normalized = str(file_type).strip().lower()
         if normalized not in VALID_OUTPUT_TYPES:
             raise ValueError(
-                f"output_file_type '{file_type}' no valido. "
-                f"Opciones: {', '.join(sorted(VALID_OUTPUT_TYPES))}"
+                f"output_file_type '{file_type}' is not valid. "
+                f"Options: {', '.join(sorted(VALID_OUTPUT_TYPES))}"
             )
-        if normalized not in output_file_types:  # ignora duplicados
+        if normalized not in output_file_types:  # ignore duplicates
             output_file_types.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
@@ -409,7 +407,7 @@ def main(
     output_dir.mkdir(parents=True, exist_ok=True)
     area_slug = get_area.slugify(area_name)
 
-    # 1) Resolver el area de estudio (siempre en WGS84 para osmnx / recorte GTFS).
+    # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping).
     boundary = get_area.find_area_boundary(
         area_name,
         boundaries_path,
@@ -418,7 +416,7 @@ def main(
     )
 
     layers: dict[str, object] = {"study_area_boundary": boundary.to_crs(crs)}
-    # Ruta relativa, sin extension, de cada capa dentro de la carpeta de salida.
+    # Relative path, without extension, of each layer inside the output folder.
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
     gtfs_results: dict[str, dict[str, object]] = {}
@@ -436,14 +434,14 @@ def main(
             layer_paths[f"osm_{mode}_nodes"] = f"{mode}/nodes"
             layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
 
-    # 3) GTFS (bus / tren) via NAP.
+    # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, object] = {}
     gtfs_error: str | None = None
     gtfs_zips_dir = output_dir / "gtfs_zips"
     if nap_modes:
-        # Un fallo aqui (404 del NAP, feed corrupto, caida de red) no debe
-        # tirar las capas OSM que ya se han construido: se avisa, se anota en
-        # el manifiesto y se escribe igualmente lo que si se pudo obtener.
+        # A failure here (NAP 404, corrupt feed, network outage) shouldn't
+        # throw away the OSM layers already built: it's logged, noted in
+        # the manifest, and whatever could be obtained is written anyway.
         try:
             gtfs_results = get_area.download_gtfs_layers(
                 area_name,
@@ -457,12 +455,12 @@ def main(
                 peak_periods=gtfs_peak_periods,
                 include_schedule_table=schedule,
             )
-        except Exception as exc:  # noqa: BLE001 - se informa y se sigue
+        except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
             gtfs_results = {}
             logger.warning(
-                "No se pudieron descargar los datos GTFS: %s. "
-                "Se escriben solo las capas disponibles.",
+                "Could not download GTFS data: %s. "
+                "Only the available layers will be written.",
                 gtfs_error,
             )
     if gtfs_results:
@@ -496,11 +494,11 @@ def main(
             "hourly_trip_counts",
             "geometry",
         ]
-        # Combinacion periodo x laborables/fin de semana (p.ej.
-        # "travel_time_seconds_mean_peak_am_weekday"). Solo cubre los nombres
-        # de periodo por defecto (peak_am/peak_pm/rest_of_day); si se pasa un
-        # ``gtfs_peak_periods`` propio con otros nombres, sus columnas
-        # combinadas no se filtran aqui de forma automatica.
+        # Peak-period x weekday/weekend combination (e.g.
+        # "travel_time_seconds_mean_peak_am_weekday"). Only covers the
+        # default period names (peak_am/peak_pm/rest_of_day); if a custom
+        # ``gtfs_peak_periods`` is passed with other names, its combined
+        # columns aren't filtered here automatically.
         for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
             "rest_of_day"
         ]:
@@ -532,15 +530,17 @@ def main(
     if nap_modes and not gtfs_zips:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
 
-    # 4) Escritura local, una vez por formato solicitado. La descarga y la
-    #    normalizacion (pasos 1-3) ya se han hecho una sola vez, asi que pedir
-    #    varios formatos solo cuesta la escritura, no repetir todo el pipeline.
+    # 4) Local write, once per requested format. The download and
+    #    normalization (steps 1-3) already happened only once, so
+    #    requesting several formats only costs the writing step, not
+    #    redoing the whole pipeline.
     written: list[str] = []
     written_by_format: dict[str, list[str]] = {}
     for file_type in output_file_types:
         if file_type == "networkx":
             files_here: list[str] = []
-            # El limite y las capas GTFS shapes se guardan como GeoJSON de apoyo.
+            # The boundary and the GTFS shapes layers are saved as
+            # supporting GeoJSON.
             boundary.to_crs(crs).to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
@@ -586,8 +586,8 @@ def main(
         "area_name": area_name,
         "modes": list(modes),
         "crs": crs,
-        # Se devuelve tal y como se pidio: str si se paso un unico formato como
-        # cadena, lista si se pidieron varios.
+        # Returned as it was requested: str if a single format string was
+        # passed, list if several were requested.
         "output_file_type": output_file_types[0]
         if single_output_type
         else output_file_types,
@@ -598,65 +598,64 @@ def main(
         **({} if single_output_type else {"files_by_format": written_by_format}),
     }
     if nap_modes and not gtfs_results:
-        # Distinguir "no hay datos publicados" de "la descarga fallo".
-        manifest["gtfs_status"] = gtfs_error or "sin conjuntos de datos publicados"
+        # Distinguish "no published datasets" from "the download failed".
+        manifest["gtfs_status"] = gtfs_error or "no published datasets"
     return manifest
 
 
 # ---------------------------------------------------------------------------
-# CLI opcional: python -m multimodalpy.get_network --area "Valencia" ...
+# Optional CLI: python -m multimodalpy.get_network --area "Valencia" ...
 # ---------------------------------------------------------------------------
 def _cli(argv: list[str] | None = None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Descarga la red multimodal de un municipio."
+        description="Download a municipality's multimodal network."
     )
-    parser.add_argument("--area", required=True, help="Nombre del municipio.")
+    parser.add_argument("--area", required=True, help="Municipality name.")
     parser.add_argument(
-        "--modes", nargs="+", default=["walking"], help="Modos de transporte."
+        "--modes", nargs="+", default=["walking"], help="Transport modes."
     )
-    parser.add_argument("--output", default="output", help="Carpeta local de descarga.")
-    parser.add_argument("--boundaries", help="Shapefile/GeoJSON de limites (opcional).")
+    parser.add_argument("--output", default="output", help="Local download folder.")
+    parser.add_argument("--boundaries", help="Boundaries shapefile/GeoJSON (optional).")
     parser.add_argument(
-        "--crs", default="EPSG:4326", help="CRS de salida (por defecto WGS84)."
+        "--crs", default="EPSG:4326", help="Output CRS (defaults to WGS84)."
     )
     parser.add_argument(
         "--output-file-type",
         default=["geojson"],
         nargs="+",
         choices=sorted(VALID_OUTPUT_TYPES),
-        help="Formato(s) de salida; admite varios en una sola pasada.",
+        help="Output format(s); accepts several in a single pass.",
     )
-    parser.add_argument("--area-code", help="Codigo oficial del municipio (opcional).")
+    parser.add_argument("--area-code", help="Municipality's official code (optional).")
     parser.add_argument(
-        "--clean-gtfs", action="store_true", help="Aplica limpieza de bus/tren."
+        "--clean-gtfs", action="store_true", help="Apply bus/train cleanup."
     )
     parser.add_argument(
         "--gtfs-hour-band-size",
         type=int,
         default=1,
-        help=(
-            "Franja horaria (horas) para el resumen empaquetado de "
-            "aristas GTFS (opcion C)."
-        ),
+        help=("Hour band (in hours) for the packed GTFS edges summary (option C)."),
     )
     parser.add_argument(
         "--gtfs-hour-range",
         type=int,
         nargs=2,
         metavar=("START", "END"),
-        help="Filtra viajes GTFS por ventana horaria, p.ej. --gtfs-hour-range 7 9",
+        help="Filter GTFS trips by hour window, e.g. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
         "--schedule",
         action="store_true",
-        help="Escribir tambien la tabla de horario detallado de cada feed GTFS.",
+        help="Also write the detailed schedule table for each GTFS feed.",
     )
     parser.add_argument(
         "--gtfs-zips",
         action="store_true",
-        help="Conservar los ZIP GTFS descargados del NAP en vez de borrarlos.",
+        help=(
+            "Keep the GTFS zip files downloaded from the NAP instead of deleting them."
+        ),
     )
     args = parser.parse_args(argv)
 

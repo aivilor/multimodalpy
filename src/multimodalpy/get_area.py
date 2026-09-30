@@ -1,19 +1,19 @@
-"""Descarga de datos desde APIs OSM y GTFS + llamada a process_osm / process_gtfs.
+"""Downloads data from the OSM and GTFS APIs, and calls process_osm / process_gtfs.
 
-Este modulo resuelve un area de estudio (municipio) a partir de un fichero de
-limites administrativos y descarga las capas de red:
+This module resolves a study area (municipality) from an administrative
+boundaries file and downloads the network layers:
 
-- OSM (via ``osmnx``) para modos caminable / bicicleta / coche, normalizando el
-  resultado con :mod:`multimodalpy.process_osm`.
-- GTFS oficial (via la API del NAP, Punto de Acceso Nacional) para bus / tren,
-  normalizando el resultado con :mod:`multimodalpy.process_gtfs`.
+- OSM (via ``osmnx``) for walking / bike / driving modes, normalizing the
+  result with :mod:`multimodalpy.process_osm`.
+- Official GTFS (via the NAP API, Spain's National Access Point) for bus /
+  train, normalizing the result with :mod:`multimodalpy.process_gtfs`.
 
-Las funciones devuelven objetos en memoria (GeoDataFrames / grafos). La escritura
-a disco en el formato elegido por la persona usuaria la realiza
+The functions return in-memory objects (GeoDataFrames / graphs). Writing to
+disk in the format chosen by the user is done by
 :mod:`multimodalpy.get_network`.
 
-Credenciales: no se guarda ninguna clave en el codigo. La clave del NAP se lee de
-la variable de entorno ``NAP_API_KEY`` (o de un fichero ``.env`` local).
+Credentials: no key is stored in the code. The NAP key is read from the
+``NAP_API_KEY`` environment variable (or a local ``.env`` file).
 """
 
 from __future__ import annotations
@@ -38,22 +38,22 @@ logger = logging.getLogger(__name__)
 
 NAP_BASE_URL = "https://nap.transportes.gob.es/api/v2"
 
-# Shapefile de recintos municipales. No se distribuye dentro del paquete ni
-# del repositorio (~50 MB); se descarga la primera vez que se necesita desde
-# un release de GitHub y se cachea localmente con ``pooch`` (en el directorio
-# de cache estandar del sistema operativo), asi que las llamadas siguientes
-# reutilizan la copia local en vez de descargar de nuevo.
+# Municipal-boundary shapefile. It isn't distributed inside the package or
+# the repository (~50 MB); it's downloaded the first time it's needed from
+# a GitHub release and cached locally with ``pooch`` (in the OS's standard
+# cache directory), so subsequent calls reuse the local copy instead of
+# downloading again.
 _BOUNDARIES_RELEASE_URL = (
     "https://github.com/aivilor/multimodalpy/releases/download/data-v1/"
     "recintos_municipales_inspire_peninbal_etrs89.zip"
 )
-# TODO: una vez descargado con exito, rellenar con el hash real (ver abajo)
-# para que pooch verifique la integridad del fichero en cada descarga.
+# TODO: once downloaded successfully, fill in the real hash (see below)
+# so pooch can verify the file's integrity on every download.
 _BOUNDARIES_RELEASE_HASH: str | None = None
 
 
 def _default_boundaries_path() -> Path:
-    """Descarga (o recupera de cache) el shapefile de recintos municipales."""
+    """Download (or retrieves from cache) the municipal-boundary shapefile."""
     import pooch
 
     extracted = pooch.retrieve(
@@ -66,14 +66,14 @@ def _default_boundaries_path() -> Path:
     shp_files = [Path(p) for p in extracted if p.endswith(".shp")]
     if not shp_files:
         raise FileNotFoundError(
-            "No se encontro ningun .shp en el recurso descargado desde "
+            "No .shp file found in the resource downloaded from "
             f"{_BOUNDARIES_RELEASE_URL}"
         )
     return shp_files[0]
 
 
-# Solo se aceptan shapefile o geojson como fichero de limites (indicacion de la
-# reunion: nada de geopackage para ``boundaries_path``).
+# Only shapefile or geojson are accepted as the boundaries file (per the
+# meeting notes: no geopackage for ``boundaries_path``).
 ALLOWED_BOUNDARY_SUFFIXES = {".shp", ".geojson", ".json"}
 
 DEFAULT_NAME_COLUMNS = (
@@ -115,31 +115,31 @@ DEFAULT_CODE_COLUMNS = (
     "INE",
 )
 
-# El endpoint ``/conjunto-dato/region/{id}`` del NAP solo entiende ids de
-# provincia: los codigos INE 1-52. El listado ``/region``, en cambio, devuelve
-# ~8300 entradas (municipios, CCAA y provincias) que comparten ese mismo
-# espacio de ids, asi que buscar ahi por nombre es una trampa:
+# The NAP's ``/conjunto-dato/region/{id}`` endpoint only understands province
+# ids: INE codes 1-52. The ``/region`` listing, on the other hand, returns
+# ~8300 entries (municipalities, regions and provinces) that share that same
+# id space, so searching there by name is a trap:
 #
-# - Las entradas de municipio (``tipo=3``) llevan el codigo INE de 5 digitos,
-#   siempre fuera del rango 1-52, y el endpoint responde 404.
-# - Las entradas de CCAA (``tipo=1``) llevan el codigo de CCAA (1-19), que si
-#   cae dentro del rango provincial, asi que el endpoint devuelve en silencio
-#   los datos de OTRA provincia (p. ej. la entrada "Madrid" tiene id=13 y
-#   acaba sirviendo Ciudad Real, que es la provincia 13).
+# - Municipality entries (``tipo=3``) carry the 5-digit INE code, always
+#   outside the 1-52 range, and the endpoint responds 404.
+# - Region/CCAA entries (``tipo=1``) carry the region code (1-19), which
+#   does fall inside the province range, so the endpoint silently returns
+#   the data for a DIFFERENT province (e.g. the "Madrid" entry has id=13
+#   and ends up serving Ciudad Real, which is province 13).
 #
-# Por eso la provincia se deduce del codigo oficial del municipio y no de una
-# comparacion de nombres.
+# For this reason the province is inferred from the municipality's official
+# code, not from comparing names.
 NAP_PROVINCE_IDS = frozenset(range(1, 53))
 
-# Columnas de las que se puede extraer el codigo de provincia, en orden de
-# preferencia. NATCODE (INSPIRE) tiene la forma
-# ``<2 pais><2 ccaa><2 provincia><5 municipio>``.
+# Columns the province code can be extracted from, in order of preference.
+# NATCODE (INSPIRE) has the form
+# ``<2 country><2 region><2 province><5 municipality>``.
 PROVINCE_CODE_COLUMNS = ("NATCODE", "natcode", "cod_mun", "COD_MUN", "ine", "INE")
 
-# Modos OSM soportados (caminando / bicicleta / coche). Se aceptan varios
-# sinonimos de entrada (castellano/ingles), pero la capa resultante y el
-# nombre de fichero siempre usan la etiqueta canonica en ingles: "walking",
-# "bike", "driving" (ver ``NETWORK_TYPE_TO_LAYER_LABEL``).
+# Supported OSM modes (walking / bike / driving). Several input synonyms
+# are accepted (Spanish/English), but the resulting layer and file name
+# always use the canonical English label: "walking", "bike", "driving"
+# (see ``NETWORK_TYPE_TO_LAYER_LABEL``).
 OSM_NETWORK_TYPES = {
     "caminable": "walk",
     "walk": "walk",
@@ -155,7 +155,7 @@ OSM_NETWORK_TYPES = {
     "driving": "drive",
 }
 
-# Etiqueta canonica de capa/fichero para cada ``network_type`` de osmnx.
+# Canonical layer/file label for each osmnx ``network_type``.
 NETWORK_TYPE_TO_LAYER_LABEL = {
     "walk": "walking",
     "bike": "bike",
@@ -164,10 +164,10 @@ NETWORK_TYPE_TO_LAYER_LABEL = {
 
 
 # ---------------------------------------------------------------------------
-# Utilidades de texto / entorno
+# Text / environment utilities
 # ---------------------------------------------------------------------------
 def load_dotenv(env_path: str | Path | None = None) -> None:
-    """Carga variables de un fichero ``.env`` en ``os.environ`` (si existe)."""
+    """Load variables from a ``.env`` file into ``os.environ`` (if it exists)."""
     path = Path(env_path or ".env")
     if not path.exists():
         return
@@ -180,7 +180,7 @@ def load_dotenv(env_path: str | Path | None = None) -> None:
 
 
 def normalize_name(value: object) -> str:
-    """Normaliza texto para comparaciones insensibles a acentos/mayusculas."""
+    """Normalize text for accent-/case-insensitive comparisons."""
     text = "" if value is None else str(value)
     text = unicodedata.normalize("NFKD", text)
     text = text.encode("ascii", "ignore").decode("ascii")
@@ -189,7 +189,7 @@ def normalize_name(value: object) -> str:
 
 
 def levenshtein_distance(left: str, right: str) -> int:
-    """Distancia de edicion de Levenshtein entre dos cadenas normalizadas."""
+    """Levenshtein edit distance between two normalized strings."""
     if left == right:
         return 0
     if not left:
@@ -210,7 +210,7 @@ def levenshtein_distance(left: str, right: str) -> int:
 
 
 def levenshtein_similarity(left: str, right: str) -> float:
-    """Similitud 0-1 basada en la distancia de Levenshtein."""
+    """0-1 similarity score based on the Levenshtein distance."""
     max_length = max(len(left), len(right))
     if max_length == 0:
         return 1.0
@@ -218,25 +218,26 @@ def levenshtein_similarity(left: str, right: str) -> float:
 
 
 def slugify(value: str) -> str:
-    """Genera un slug seguro para nombres de fichero a partir de value."""
+    """Generate a filesystem-safe slug from value."""
     slug = normalize_name(value).replace(" ", "_")
     return slug or "area"
 
 
 def province_code_from_natcode(value: object) -> int | None:
-    """Extrae el codigo INE de provincia (1-52) de un NATCODE INSPIRE.
+    """Extract the INE province code (1-52) from an INSPIRE NATCODE.
 
-    ``NATCODE`` tiene la forma ``<2 pais><2 ccaa><2 provincia><5 municipio>``
-    (p. ej. ``34074040136`` -> provincia 40, Segovia). Los dos digitos de
-    provincia se repiten al inicio del codigo de municipio, asi que se prueban
-    las dos posiciones y se acepta la primera que caiga en el rango valido.
-    Devuelve ``None`` si el codigo no permite deducir la provincia.
+    ``NATCODE`` has the form ``<2 country><2 region><2 province><5
+    municipality>`` (e.g. ``34074040136`` -> province 40, Segovia). The two
+    province digits are repeated at the start of the municipality code, so
+    both positions are tried and the first one that falls in the valid
+    range is accepted. Returns ``None`` if the code doesn't allow the
+    province to be inferred.
     """
     digits = re.sub(r"\D", "", "" if value is None else str(value))
     if len(digits) >= 8:
         candidates = (digits[4:6], digits[6:8])
     elif len(digits) == 5:
-        # Codigo INE de municipio suelto (p. ej. "40136").
+        # Standalone INE municipality code (e.g. "40136").
         candidates = (digits[0:2],)
     else:
         return None
@@ -251,7 +252,7 @@ def province_code_from_natcode(value: object) -> int | None:
 
 
 def _find_province_code(gdf: gpd.GeoDataFrame) -> int | None:
-    """Busca el codigo de provincia en las columnas de codigo del boundary."""
+    """Look up the province code in the boundary's code columns."""
     for column in _existing_columns(gdf, PROVINCE_CODE_COLUMNS):
         for raw_value in gdf[column].dropna().tolist():
             code = province_code_from_natcode(raw_value)
@@ -261,7 +262,7 @@ def _find_province_code(gdf: gpd.GeoDataFrame) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Resolucion del area de estudio (municipio -> poligono)
+# Study-area resolution (municipality -> polygon)
 # ---------------------------------------------------------------------------
 def _existing_columns(gdf: gpd.GeoDataFrame, requested: Iterable[str]) -> list[str]:
     return [column for column in requested if column in gdf.columns]
@@ -281,14 +282,14 @@ def _select_area_rows(
             if exact_mask.any():
                 value = str(gdf.loc[exact_mask, column].iloc[0])
                 return gdf.loc[exact_mask].copy(), column, value
-        raise ValueError(f"No se encontro ningun limite para el codigo '{area_code}'.")
+        raise ValueError(f"No boundary found for code '{area_code}'.")
 
     target = normalize_name(area_name)
     columns = _existing_columns(gdf, name_columns or DEFAULT_NAME_COLUMNS)
     if not columns:
         raise ValueError(
-            "No se encontro ninguna columna de nombre en el fichero de limites. "
-            f"Columnas disponibles: {list(gdf.columns)}"
+            "No name column found in the boundaries file. "
+            f"Available columns: {list(gdf.columns)}"
         )
 
     best_rows = best_column = best_value = None
@@ -323,7 +324,7 @@ def _select_area_rows(
                 best_score = score
 
     if best_rows is None:
-        raise ValueError(f"No se encontro ningun limite para el area '{area_name}'.")
+        raise ValueError(f"No boundary found for area '{area_name}'.")
     return best_rows, best_column, best_value
 
 
@@ -336,11 +337,12 @@ def find_area_boundary(
     code_columns: Iterable[str] | None = None,
     target_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
-    """Devuelve un unico poligono (disuelto) para el municipio indicado.
+    """Return a single (dissolved) polygon for the given municipality.
 
-    ``boundaries_path`` debe ser un shapefile (.shp) o un GeoJSON (.geojson/.json).
-    Si no se indica, se usa el shapefile de recintos municipales incluido en el
-    paquete. La busqueda por nombre es tolerante a acentos y erratas (Levenshtein).
+    ``boundaries_path`` must be a shapefile (.shp) or a GeoJSON
+    (.geojson/.json). If not given, the packaged municipal-boundary
+    shapefile is used. Name matching is tolerant to accents and typos
+    (Levenshtein).
     """
     if boundaries_path is None:
         boundaries_path = _default_boundaries_path()
@@ -348,19 +350,19 @@ def find_area_boundary(
 
     if boundaries_path.suffix.lower() not in ALLOWED_BOUNDARY_SUFFIXES:
         raise ValueError(
-            "boundaries_path solo admite shapefile (.shp) o geojson (.geojson/.json). "
-            f"Se recibio: {boundaries_path.suffix}"
+            "boundaries_path only accepts shapefile (.shp) or geojson "
+            f"(.geojson/.json). Received: {boundaries_path.suffix}"
         )
     if not boundaries_path.exists():
-        raise FileNotFoundError(f"No existe el fichero de limites: {boundaries_path}")
+        raise FileNotFoundError(f"Boundaries file does not exist: {boundaries_path}")
 
     import geopandas as gpd
 
     gdf = gpd.read_file(boundaries_path)
     if gdf.empty:
-        raise ValueError(f"El fichero de limites esta vacio: {boundaries_path}")
+        raise ValueError(f"Boundaries file is empty: {boundaries_path}")
     if gdf.crs is None:
-        raise ValueError("El fichero de limites no tiene CRS definido.")
+        raise ValueError("Boundaries file has no CRS defined.")
 
     rows, matched_column, matched_value = _select_area_rows(
         gdf,
@@ -380,9 +382,9 @@ def find_area_boundary(
                 "matched_value": matched_value,
                 "matched_rows": len(rows),
                 "area_code": area_code,
-                # Codigo INE de provincia (1-52); es el id de region que entiende
-                # la API del NAP. Puede ser None si el fichero de limites no trae
-                # ninguna columna de codigo reconocible.
+                # INE province code (1-52); this is the region id understood
+                # by the NAP API. Can be None if the boundaries file doesn't
+                # include any recognizable code column.
                 "province_code": _find_province_code(rows),
                 "source_path": str(boundaries_path),
             }
@@ -393,7 +395,7 @@ def find_area_boundary(
 
 
 # ---------------------------------------------------------------------------
-# Descarga OSM (osmnx) + estandarizacion (process_osm)
+# OSM download (osmnx) + standardization (process_osm)
 # ---------------------------------------------------------------------------
 def download_osm_layers(
     boundary: gpd.GeoDataFrame,
@@ -403,34 +405,33 @@ def download_osm_layers(
     simplify: bool = True,
     retain_all: bool = True,
 ) -> dict[str, dict[str, object]]:
-    """Descarga capas de red OSM para los modos indicados y las estandariza.
+    """Download OSM network layers for the given modes and standardizes them.
 
-    Devuelve ``{modo: {"nodes": gdf, "edges": gdf, "graph": grafo_osmnx}}``,
-    donde ``modo`` es siempre la etiqueta canonica en ingles ("walking",
-    "bike", "driving"), independientemente del sinonimo usado en ``modes``
-    (p. ej. "coche", "car", "drive" y "driving" producen todos la clave
-    "driving").
+    Returns ``{mode: {"nodes": gdf, "edges": gdf, "graph": osmnx_graph}}``,
+    where ``mode`` is always the canonical English label ("walking", "bike",
+    "driving"), regardless of the synonym used in ``modes`` (e.g. "coche",
+    "car", "drive" and "driving" all produce the "driving" key).
 
-    ``nodes``/``edges`` ya son las capas finales listas para exportar (ver
+    ``nodes``/``edges`` are already the final layers, ready to export (see
     :func:`multimodalpy.process_osm.build_final_osm_layers`):
 
     - ``nodes``: ``node_id``, ``node_role``, ``geometry``.
     - ``edges``: ``edge_id``, ``from_node_id``, ``to_node_id``, ``highway``,
       ``lanes``, ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
-      ``tts`` (tiempo de viaje en segundos: velocidad libre + penalizacion de
-      parada segun el modo), ``geometry``.
+      ``tts`` (travel time in seconds: free-flow speed + stop penalty based
+      on the mode), ``geometry``.
 
-    El tiempo de viaje se calcula automaticamente segun el modo de red
-    (``walking``: 5 km/h constante sin penalizacion; ``bike``: velocidad
-    limitada a 25 km/h con penalizacion de parada reducida; ``driving``:
-    velocidad por ``maxspeed``/tipo de via con penalizacion de parada segun
-    el nodo de llegada). Ya no hace falta indicar ``travel_speed_kmh``.
+    Travel time is computed automatically based on the network mode
+    (``walking``: constant 5 km/h with no penalty; ``bike``: speed capped
+    at 25 km/h with a reduced stop penalty; ``driving``: speed from
+    ``maxspeed``/road type with a stop penalty based on the arrival node).
+    ``travel_speed_kmh`` no longer needs to be specified.
     """
     try:
         import osmnx as ox
     except ImportError as exc:
         raise ImportError(
-            "Instala osmnx para descargar redes OSM: pip install osmnx"
+            "Install osmnx to download OSM networks: pip install osmnx"
         ) from exc
 
     area_wgs84 = boundary.to_crs("EPSG:4326")
@@ -442,7 +443,7 @@ def download_osm_layers(
         network_type = OSM_NETWORK_TYPES.get(input_key)
         if network_type is None:
             valid = ", ".join(sorted(OSM_NETWORK_TYPES))
-            raise ValueError(f"Modo OSM desconocido '{mode}'. Valores validos: {valid}")
+            raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
         layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
 
         graph = ox.graph_from_polygon(
@@ -463,16 +464,16 @@ def download_osm_layers(
 
 
 # ---------------------------------------------------------------------------
-# Descarga GTFS (API NAP) + estandarizacion (process_gtfs)
+# GTFS download (NAP API) + standardization (process_gtfs)
 # ---------------------------------------------------------------------------
 def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
-    """Peticion GET a la API del NAP con gestion clara de errores de red y autenticacion.  # noqa: E501
+    """GET request to the NAP API with clear handling of network/auth errors.
 
-    Gestiona de forma explicita:
-    - ``ConnectionError``: sin conexion a internet o servidor del NAP caido.
-    - ``Timeout``: la API del NAP no respondio a tiempo.
-    - HTTP 401: clave de API ausente, invalida o caducada (texto plano).
-    - HTTP 500: error interno del servidor del NAP.
+    Explicitly handles:
+    - ``ConnectionError``: no internet connection or the NAP server is down.
+    - ``Timeout``: the NAP API didn't respond in time.
+    - HTTP 401: missing, invalid or expired API key (plain text).
+    - HTTP 500: internal NAP server error.
     """
     import requests
 
@@ -480,19 +481,19 @@ def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
         resp = requests.get(url, headers=headers, timeout=timeout)
     except requests.exceptions.ConnectionError:
         raise ConnectionError(
-            f"No se pudo conectar con la API del NAP ({url}). "
-            "Comprueba tu conexion a internet o reintenta mas tarde."
+            f"Could not connect to the NAP API ({url}). "
+            "Check your internet connection or try again later."
         ) from None
     except requests.exceptions.Timeout:
         raise TimeoutError(
-            f"La API del NAP no respondio en {timeout} s ({url}). "
-            "El servidor puede estar sobrecargado; reintenta mas tarde."
+            f"The NAP API did not respond within {timeout}s ({url}). "
+            "The server may be overloaded; try again later."
         ) from None
 
     if resp.status_code == 401:
         raise ValueError(
-            f"Error de autenticacion en la API del NAP: {resp.text.strip()}. "
-            "Comprueba que NAP_API_KEY es valida y no ha caducado."
+            f"Authentication error from the NAP API: {resp.text.strip()}. "
+            "Check that NAP_API_KEY is valid and hasn't expired."
         )
 
     if resp.status_code == 500:
@@ -502,8 +503,8 @@ def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
             server_msg = resp.text
 
         raise RuntimeError(
-            f"Error interno del servidor del NAP (HTTP 500) en {url}: {server_msg}. "
-            "Reintenta mas tarde."
+            f"Internal NAP server error (HTTP 500) at {url}: {server_msg}. "
+            "Try again later."
         )
 
     return resp
@@ -519,21 +520,23 @@ def download_gtfs_nap_zips(
     fail_fast: bool = False,
     province_code: int | None = None,
 ) -> list[Path]:
-    """Descarga los ZIP GTFS del NAP para la provincia del area de estudio.
+    """Download the NAP GTFS zip files for the study area's province.
 
-    IDs de modo del NAP: 1 bus, 2 ferroviario, 3 maritimo, 4 aereo.
-    La clave se toma de ``api_key`` o de la variable de entorno ``NAP_API_KEY``.
+    NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.
+    The key is taken from ``api_key`` or the ``NAP_API_KEY`` environment
+    variable.
 
-    ``province_code`` es el codigo INE de provincia (1-52), que es justo el id
-    de region que entiende la API. Es la via fiable y la que usa
-    :func:`get_network.main`, que lo obtiene del boundary. Si no se indica, se
-    recurre a comparar ``area_name`` con los nombres de las 52 entradas de
-    provincia del listado ``/region``; nunca con las de municipio o CCAA, que
-    devuelven 404 o los datos de otra provincia (ver ``NAP_PROVINCE_IDS``).
+    ``province_code`` is the INE province code (1-52), which is exactly
+    the region id understood by the API. This is the reliable path, and
+    the one used by :func:`get_network.main`, which gets it from the
+    boundary. If not given, ``area_name`` is compared against the names of
+    the 52 province entries in the ``/region`` listing; never against the
+    municipality or region (CCAA) entries, which return 404 or another
+    province's data (see ``NAP_PROVINCE_IDS``).
 
-    Si la provincia no tiene ningun conjunto de datos publicado, la API
-    responde 404: eso no es un error, asi que se avisa y se devuelve una lista
-    vacia en vez de lanzar una excepcion.
+    If the province has no published dataset, the API responds with 404:
+    that isn't an error, so it's logged and an empty list is returned
+    instead of raising an exception.
     """
     import pandas as pd
     import requests
@@ -541,8 +544,9 @@ def download_gtfs_nap_zips(
     api_key = api_key or os.environ.get("NAP_API_KEY")
     if not api_key:
         raise ValueError(
-            "Falta la clave del NAP. Define NAP_API_KEY en el entorno o en un .env, "
-            "o pasa api_key=... (solo necesaria para modos de transporte publico)."
+            "Missing NAP API key. Set NAP_API_KEY in the environment or a "
+            ".env file, or pass api_key=... (only needed for public-"
+            "transport modes)."
         )
 
     output_dir = Path(output_dir)
@@ -551,8 +555,8 @@ def download_gtfs_nap_zips(
 
     if province_code is not None and int(province_code) not in NAP_PROVINCE_IDS:
         raise ValueError(
-            f"province_code '{province_code}' no valido: debe ser un codigo INE "
-            "de provincia entre 1 y 52."
+            f"province_code '{province_code}' is not valid: must be an "
+            "INE province code between 1 and 52."
         )
 
     region_id = int(province_code) if province_code is not None else None
@@ -561,15 +565,13 @@ def download_gtfs_nap_zips(
         regions_response.raise_for_status()
         regions = regions_response.json().get("data", [])
         if not regions:
-            raise ValueError("La API del NAP no devolvio ninguna region.")
+            raise ValueError("The NAP API did not return any region.")
 
-        # Solo las entradas de provincia (``tipo == "0"``) tienen un id que el
-        # endpoint de conjuntos de datos sepa interpretar.
+        # Only province entries (``tipo == "0"``) have an id that the
+        # datasets endpoint knows how to interpret.
         provinces = [item for item in regions if str(item.get("tipo")) == "0"]
         if not provinces:
-            raise ValueError(
-                "La API del NAP no devolvio ninguna region de provincia (tipo=0)."
-            )
+            raise ValueError("The NAP API did not return any province region (tipo=0).")
 
         target = normalize_name(area_name)
         best_region = max(
@@ -580,9 +582,9 @@ def download_gtfs_nap_zips(
         )
         region_id = int(best_region["id"])
         logger.warning(
-            "No se pudo deducir la provincia de '%s' desde el fichero de limites; "
-            "se usa la provincia '%s' por parecido de nombre, que puede no ser "
-            "la correcta.",
+            "Could not infer the province for '%s' from the boundaries "
+            "file; using province '%s' based on name similarity, which "
+            "may not be correct.",
             area_name,
             best_region.get("nombre"),
         )
@@ -599,19 +601,21 @@ def download_gtfs_nap_zips(
         except Exception:
             error_message = ""
 
+        # Do NOT translate this string: it's matched against the NAP API's
+        # own (Spanish-language) error response text, not our own message.
         if "no se ha encontrado ningun conjunto de datos" in normalize_name(
             error_message
         ):
             logger.info(
-                "El NAP no tiene conjuntos de datos publicados para la region %s; "
-                "no se descargara ningun GTFS.",
+                "NAP has no published datasets for region %s; no GTFS "
+                "will be downloaded.",
                 region_id,
             )
             return []
 
-        # 404 no esperado (endpoint roto, etc.)
+        # Unexpected 404 (broken endpoint, etc.)
         logger.error(
-            "404 no esperado en %s: %s",
+            "Unexpected 404 at %s: %s",
             datasets_response.url,
             error_message or datasets_response.text,
         )
@@ -652,7 +656,7 @@ def download_gtfs_nap_zips(
                 file_name = payload.get("nombreFichero") or f"nap_gtfs_{file_id}.zip"
                 row["file_name"] = file_name
                 if not download_url:
-                    raise ValueError("La respuesta del NAP no incluyo enlaceDescarga")
+                    raise ValueError("The NAP response did not include enlaceDescarga")
 
                 zip_response = requests.get(download_url, timeout=120)
                 zip_response.raise_for_status()
@@ -661,7 +665,7 @@ def download_gtfs_nap_zips(
                 downloaded.append(path)
                 row["status"] = "downloaded"
                 row["path"] = str(path)
-            except Exception as exc:  # noqa: BLE001 - se registra y se continua
+            except Exception as exc:  # noqa: BLE001 - logged and execution continues
                 row["status"] = "failed"
                 row["error"] = str(exc)
                 if fail_fast:
@@ -695,18 +699,19 @@ def download_gtfs_layers(
     include_schedule_table: bool = True,
     province_code: int | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Descarga GTFS del NAP y devuelve capas normalizadas por dataset.
+    """Download NAP GTFS data and returns normalized layers per dataset.
 
-    Devuelve ``{dataset: {"nodes_stops": gdf, "edges": gdf,
+    Returns ``{dataset: {"nodes_stops": gdf, "edges": gdf,
     "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
 
-    ``province_code`` es el codigo INE de provincia del area; si no se indica,
-    se toma de la columna ``province_code`` del ``boundary`` (la rellena
-    :func:`find_area_boundary`). Ver :func:`download_gtfs_nap_zips`.
+    ``province_code`` is the area's INE province code; if not given, it's
+    taken from the ``boundary``'s ``province_code`` column (filled in by
+    :func:`find_area_boundary`). See :func:`download_gtfs_nap_zips`.
 
     ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
-    ``include_schedule_table`` se reenvian a ``process_gtfs.normalize_gtfs_feed``
-    (ver esa funcion para el detalle de las opciones A/B/C).
+    ``include_schedule_table`` are forwarded to
+    ``process_gtfs.normalize_gtfs_feed`` (see that function for details on
+    options A/B/C).
     """
     if province_code is None and "province_code" in getattr(boundary, "columns", []):
         value = boundary["province_code"].iloc[0]
@@ -739,15 +744,15 @@ def download_gtfs_layers(
                 peak_periods=peak_periods,
                 include_schedule_table=include_schedule_table,
             )
-        except Exception as exc:  # noqa: BLE001 - un feed corrupto no debe romper todo
-            logger.warning("No se pudo normalizar el feed %s: %s", zip_path.name, exc)
+        except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
+            logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
             continue
         results[dataset_name] = {
             "nodes": stops,
             "edges": stop_edges,
             "schedule": schedule,
-            # "bus" o "train", deducido de los route_type del feed. Lo usa
-            # get_network para decidir la carpeta de salida del dataset.
+            # "bus" or "train", inferred from the feed's route_type. Used
+            # by get_network to decide the dataset's output folder.
             "mode": process_gtfs.infer_transport_mode(zip_path),
         }
     return results
