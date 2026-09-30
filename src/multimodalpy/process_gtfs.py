@@ -4,9 +4,8 @@ This module has two parts:
 
 1. Standardizing a GTFS feed (zip or folder) into GeoPandas layers:
    - ``nodes_stops``              : stops as points.
-   - ``edges``                    : stop-to-stop edges (trip sequence), one
-                                     row per stop pair, with travel time and
-                                     an hour-band breakdown.
+   - ``edges``: stop-to-stop edges (trip sequence), one row per stop pair,
+     with travel time and an hour-band breakdown.
    - ``edges_shapes_reference``   : route geometry (shapes.txt).
    - ``schedule`` (flat, non-spatial table): one record per trip and
      segment, for anyone who needs the full schedule detail without losing
