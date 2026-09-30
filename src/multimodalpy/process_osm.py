@@ -23,10 +23,11 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import geopandas as gpd
+    import networkx as nx
 
 
 # Working CRS. The output CRS is decided in the main function (``main``);
@@ -164,7 +165,8 @@ def derive_topology_nodes_from_edges(
                 _coord_key(part[0][0], part[0][1], round_digits),
                 _coord_key(part[-1][0], part[-1][1], round_digits),
             }
-            for x, y, *_rest in part:
+            for coord in part:
+                x, y = coord[0], coord[1]
                 key = _coord_key(x, y, round_digits)
                 entry = stats.setdefault(
                     key,
@@ -177,12 +179,12 @@ def derive_topology_nodes_from_edges(
                         "vertex_occurrences": 0,
                     },
                 )
-                entry["vertex_occurrences"] = int(entry["vertex_occurrences"]) + 1
+                entry["vertex_occurrences"] = cast(int, entry["vertex_occurrences"]) + 1
                 seen_in_feature.add(key)
                 if key in endpoint_keys:
                     entry["endpoint_occurrences"] = (
-                        int(entry["endpoint_occurrences"]) + 1
-                    )
+                        cast(int, entry["endpoint_occurrences"]) + 1
+                        )
             # part[1:] is always one shorter, by design
             for start, end in zip(part, part[1:], strict=False):
                 start_key = _coord_key(start[0], start[1], round_digits)
@@ -190,23 +192,23 @@ def derive_topology_nodes_from_edges(
                 if start_key == end_key:
                     continue
                 stats[start_key]["incident_segment_count"] = (
-                    int(stats[start_key]["incident_segment_count"]) + 1
+                    cast(int, stats[start_key]["incident_segment_count"]) + 1
                 )
                 stats[end_key]["incident_segment_count"] = (
-                    int(stats[end_key]["incident_segment_count"]) + 1
+                    cast(int, stats[end_key]["incident_segment_count"]) + 1
                 )
 
         for key in seen_in_feature:
             stats[key]["incident_feature_count"] = (
-                int(stats[key]["incident_feature_count"]) + 1
+                cast(int, stats[key]["incident_feature_count"]) + 1
             )
 
     role_counts: Counter[str] = Counter()
     records: list[dict[str, object]] = []
     geometries: list[Point] = []
     for idx, (key, entry) in enumerate(stats.items(), start=1):
-        degree = int(entry["incident_segment_count"])
-        endpoint_occurrences = int(entry["endpoint_occurrences"])
+        degree = cast(int, entry["incident_segment_count"])
+        endpoint_occurrences = cast(int, entry["endpoint_occurrences"])
         if degree <= 0:
             node_role = "isolated_vertex"
         elif degree == 1:
@@ -233,13 +235,14 @@ def derive_topology_nodes_from_edges(
             "node_role": node_role,
             "node_origin": "osm_node" if original else "derived_from_edge_geometry",
             "incident_segment_count": degree,
-            "incident_feature_count": int(entry["incident_feature_count"]),
+            "incident_feature_count": cast(int, entry["incident_feature_count"]),
             "endpoint_occurrences": endpoint_occurrences,
-            "vertex_occurrences": int(entry["vertex_occurrences"]),
+            "vertex_occurrences": cast(int, entry["vertex_occurrences"]),
             "coordinate_round_digits": round_digits,
         }
         records.append(record)
-        geometries.append(Point(float(entry["x"]), float(entry["y"])))
+        geometries.append(Point(cast(float, entry["x"]), cast(float, entry["y"])))
+
 
     topology_nodes = gpd.GeoDataFrame(records, geometry=geometries, crs=edges.crs)
     topology_nodes.attrs["node_role_counts"] = dict(sorted(role_counts.items()))
@@ -323,7 +326,8 @@ def split_edges_with_topology_nodes(
             # vertex that corresponds to a "real" topology node.
             split_indices = {0, len(part) - 1}
             for i in range(1, len(part) - 1):
-                x, y, *_rest = part[i]
+                coord = part[i]
+                x, y = coord[0], coord[1]
                 key = _coord_key(x, y, round_digits)
                 node = node_lookup.get(key)
                 if node is not None and node.get("node_role") in split_roles:
@@ -568,13 +572,13 @@ def add_mode_travel_time(
             if not speed_kmh:
                 speed_kmh = _hwy_free_flow_speed_kmh(edge.get("highway"), profile)
         else:
-            speed_kmh = float(profile["fallback_speed_kmh"])
+            speed_kmh = cast(float, profile["fallback_speed_kmh"])
 
         max_speed_kmh = profile.get("max_speed_kmh")
         if max_speed_kmh is not None:
-            speed_kmh = min(speed_kmh, float(max_speed_kmh))
+            speed_kmh = min(speed_kmh, cast(float, max_speed_kmh))
         if not speed_kmh or speed_kmh <= 0:
-            speed_kmh = float(profile["fallback_speed_kmh"])
+            speed_kmh = cast(float, profile["fallback_speed_kmh"])
 
         meters_per_sec = speed_kmh * 1000 / 3600
         free_flow_sec = length_m / meters_per_sec if meters_per_sec > 0 else 0.0
@@ -595,7 +599,9 @@ def add_mode_travel_time(
     return edges
 
 
-def add_edge_travel_time(graph: object, travel_speed_kmh: float) -> object:
+def add_edge_travel_time(
+    graph: nx.MultiDiGraph, travel_speed_kmh: float
+) -> nx.MultiDiGraph:
     """Add travel time (minutes) to the edges using length and speed.
 
     Simple (legacy) version: constant speed for the whole graph, no stop
@@ -614,7 +620,7 @@ def add_edge_travel_time(graph: object, travel_speed_kmh: float) -> object:
 
 
 def normalize_osm_graph(
-    graph: object,
+    graph: nx.MultiDiGraph,
     *,
     layer_id: str,
     output_crs: str = SOURCE_CRS,
@@ -693,7 +699,7 @@ FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
 
 def build_final_osm_layers(
-    graph: object,
+    graph: nx.MultiDiGraph,
     *,
     layer_id: str,
     mode: str,
