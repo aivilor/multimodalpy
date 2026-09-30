@@ -77,6 +77,7 @@ def _iter_line_coords(geometry) -> list[list[tuple[float, float]]]:
 
 def _flatten_to_string(value: object, sep: str = ";") -> object:
     """Convierte columnas con listas (``highway``, ``lanes``, ``maxspeed``, ``name``)
+
     en una cadena simple, uniendo los valores con ``sep``.
 
     OSMnx guarda una lista en estos campos cuando una arista simplificada
@@ -94,7 +95,7 @@ def _flatten_to_string(value: object, sep: str = ";") -> object:
 
 
 def _first_if_list(value: object) -> object:
-    """Se queda con el primer elemento si el valor es una lista (p. ej. ``oneway``/``reversed``)."""
+    """Se queda con el primer elemento si el valor es una lista (p. ej. ``oneway``/``reversed``)."""  # noqa: E501
     if isinstance(value, (list, tuple)):
         return value[0] if value else None
     return value
@@ -179,8 +180,8 @@ def derive_topology_nodes_from_edges(
                     entry["endpoint_occurrences"] = (
                         int(entry["endpoint_occurrences"]) + 1
                     )
-
-            for start, end in zip(part, part[1:]):
+            # part[1:] is always one shorter, by design
+            for start, end in zip(part, part[1:], strict=False):  
                 start_key = _coord_key(start[0], start[1], round_digits)
                 end_key = _coord_key(end[0], end[1], round_digits)
                 if start_key == end_key:
@@ -331,8 +332,10 @@ def split_edges_with_topology_nodes(
                 LineString([part[i], part[i + 1]]).length for i in range(len(part) - 1)
             ]
             total_planar = sum(seg_planar_lengths) or 1e-12
-
-            for start_idx, end_idx in zip(ordered_indices[:-1], ordered_indices[1:]):
+            # sliding window, lengths differ by one on purpose
+            for start_idx, end_idx in zip(
+                ordered_indices[:-1], ordered_indices[1:], strict=False
+            ):  
                 if start_idx == end_idx:
                     continue
                 sub_coords = part[start_idx : end_idx + 1]
@@ -434,6 +437,7 @@ MODE_STOP_PENALTIES_SEC: dict[str, dict[str, float]] = {
 
 def _parse_maxspeed_kmh(value: object) -> float | None:
     """Interpreta el tag ``maxspeed`` de OSM (num., texto, listas, "30 mph",
+
     valores ';'-separados como "30;50" o "20;walk").
     """
     if value is None:
@@ -480,6 +484,7 @@ WALKING_HIGHWAY_ALIASES: set[str] = {
 
 def _normalize_highway(highway_value: object) -> object:
     """Normaliza tags highway compuestos (';'-separados o listas) y colapsa
+
     cualquier variante peatonal conocida a 'footway'.
     """
     if isinstance(highway_value, (list, tuple)):

@@ -194,7 +194,8 @@ def _write_schedule_tables(
     area_slug: str,
     layer_paths: dict[str, str],
 ) -> list[str]:
-    """Escribe las tablas de horario (una por dataset GTFS) junto a las capas espaciales.
+    """Escribe las tablas de horario (una por dataset GTFS) junto a las capas
+    espaciales.
 
     - geopackage: se anaden como tablas de atributos (sin geometria) dentro del
       mismo .gpkg, via sqlite3 (un GeoPackage es una base de datos SQLite).
@@ -635,7 +636,10 @@ def _cli(argv: list[str] | None = None) -> None:
         "--gtfs-hour-band-size",
         type=int,
         default=1,
-        help="Franja horaria (horas) para el resumen empaquetado de aristas GTFS (opcion C).",
+        help=(
+            "Franja horaria (horas) para el resumen empaquetado de "
+            "aristas GTFS (opcion C)."
+        ),
     )
     parser.add_argument(
         "--gtfs-hour-range",

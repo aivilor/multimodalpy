@@ -181,6 +181,7 @@ def classify_period(
     seconds, peak_periods: dict[str, tuple[int, int]] | None = None
 ) -> str | None:
     """Clasifica un instante (segundos desde medianoche) en punta_manana /
+
     punta_tarde / resto_del_dia, segun ``peak_periods`` (por defecto
     ``DEFAULT_PEAK_PERIODS``). Devuelve ``None`` si no hay hora disponible.
     """
@@ -209,6 +210,7 @@ _WEEKDAY_ORDER = [
 
 def _union_days_of_week(values) -> str | None:
     """Une varios textos 'lunes|martes' (uno por viaje) en un unico resumen,
+
     ordenado de lunes a domingo, sin duplicados.
     """
     import math
@@ -225,7 +227,7 @@ def _union_days_of_week(values) -> str | None:
 
 
 def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
-    """Empaqueta pares (etiqueta, valor) ordenados en 'etiqueta:valor|etiqueta:valor'."""
+    """Empaqueta pares (etiqueta, valor) ordenados en 'etiqueta:valor|etiqueta:valor'."""  # noqa: E501
     import math
 
     items = []
@@ -291,7 +293,7 @@ def _attach_service_days(
     calendar: pd.DataFrame | None,
     calendar_dates: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Anade a ``trips`` columnas sobre en que dias circula el servicio:
+    """Anade a ``trips`` columnas sobre en que dias circula el servicio.
 
     - ``days_active``: num. dias/semana con servicio (recuento, como antes).
     - ``active_days_of_week``: texto tipo ``"friday|monday|thursday"`` con los
@@ -475,7 +477,9 @@ def _build_stop_to_stop_trip_records(
     peak_periods: dict[str, tuple[int, int]] | None = None,
 ) -> pd.DataFrame:
     """Construye la tabla intermedia, sin agregar, de un registro por (viaje,
-    tramo entre paradas consecutivas). La reutilizan tanto la capa agregada de
+
+    tramo entre paradas consecutivas).
+    La reutilizan tanto la capa agregada de
     aristas (``build_gtfs_stop_to_stop_edges_gdf``) como la tabla plana de
     horarios (``build_gtfs_schedule_table``), para no duplicar la logica de
     calculo de tiempos y merges.
@@ -678,8 +682,10 @@ def _period_pivot_columns(
     peak_periods: dict[str, tuple[int, int]] | None,
     *,
     suffix: str = "",
+
 ) -> pd.DataFrame:
     """Agrega ``travel_time_seconds_mean`` / ``trip_count`` por periodo
+
     (punta_manana / punta_tarde / resto_del_dia), pivotando ``period`` a
     columnas tipo ``travel_time_seconds_mean_peak_am``. ``suffix`` se anade al
     final de cada nombre de columna (p.ej. ``"_weekday"``) para poder
@@ -812,7 +818,8 @@ def build_gtfs_stop_to_stop_edges_gdf(
     }
     grouped = edges.groupby(group_cols, dropna=False).agg(**aggregations).reset_index()
 
-    # --- Opcion A: columnas por periodo (punta_manana / punta_tarde / resto_del_dia) ---
+    # --- Opcion A: columnas por periodo
+    # (punta_manana / punta_tarde / resto_del_dia) ---
     period_pivot = _period_pivot_columns(edges, group_cols, peak_periods)
     grouped = grouped.merge(period_pivot, on=group_cols, how="left")
 
@@ -852,7 +859,9 @@ def build_gtfs_stop_to_stop_edges_gdf(
             .reset_index()
             .rename(
                 columns={
-                    "travel_time_seconds_mean": f"travel_time_seconds_mean_{day_type_name}",
+                    "travel_time_seconds_mean": (
+                        f"travel_time_seconds_mean_{day_type_name}"
+                    ),
                     "trip_count": f"trip_count_{day_type_name}",
                 }
             )

@@ -31,6 +31,7 @@ from . import process_gtfs, process_osm
 
 if TYPE_CHECKING:
     import geopandas as gpd
+    import requests
 
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,7 @@ def levenshtein_similarity(left: str, right: str) -> float:
 
 
 def slugify(value: str) -> str:
+    """Genera un slug seguro para nombres de fichero a partir de value."""
     slug = normalize_name(value).replace(" ", "_")
     return slug or "area"
 
@@ -464,7 +466,7 @@ def download_osm_layers(
 # Descarga GTFS (API NAP) + estandarizacion (process_gtfs)
 # ---------------------------------------------------------------------------
 def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
-    """Peticion GET a la API del NAP con gestion clara de errores de red y autenticacion.
+    """Peticion GET a la API del NAP con gestion clara de errores de red y autenticacion.  # noqa: E501
 
     Gestiona de forma explicita:
     - ``ConnectionError``: sin conexion a internet o servidor del NAP caido.

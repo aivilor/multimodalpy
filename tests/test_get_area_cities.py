@@ -16,7 +16,8 @@ from shapely.geometry import box
 
 from multimodalpy import get_area
 
-# name, NATCODE (INSPIRE, <2 pais><2 ccaa><2 provincia><5 municipio>), expected province.
+# name, NATCODE (INSPIRE, <2 pais><2 ccaa><2 provincia><5 municipio>),
+# expected province.
 # The 5-digit municipio segment starts with the same 2 provincia digits, matching
 # the real format (see the "34074040136" -> Segovia example in get_area.py).
 CITIES = [
@@ -149,9 +150,8 @@ def test_province_code_from_natcode_accepts_bare_five_digit_ine_code():
     assert get_area.province_code_from_natcode("40136") == 40
 
 
-# ---------------------------------------------------------------------------
-# Multiple name columns: the first column with a hit wins, per DEFAULT_NAME_COLUMNS order
-# ---------------------------------------------------------------------------
+# Multiple name columns: the first column with a hit wins, per
+# DEFAULT_NAME_COLUMNS order
 def test_find_area_boundary_falls_back_to_second_name_column(tmp_path):
     gdf = gpd.GeoDataFrame(
         {
