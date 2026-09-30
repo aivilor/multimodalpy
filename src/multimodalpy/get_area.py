@@ -543,6 +543,11 @@ def download_gtfs_nap_zips(
     import pandas as pd
     import requests
 
+    if not api_key and not os.environ.get("NAP_API_KEY"):
+        # The key can live in a local .env file (see the module docstring);
+        # without this call it was never read. Variables already set in
+        # the environment take priority over the file.
+        load_dotenv()
     api_key = api_key or os.environ.get("NAP_API_KEY")
     if not api_key:
         raise ValueError(

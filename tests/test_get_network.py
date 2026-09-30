@@ -646,6 +646,86 @@ def test_main_reports_when_nap_has_no_published_datasets(tmp_path, backends):
     assert manifest["files"] == ["study_area_boundary.geojson"]
 
 
+def test_main_warns_when_no_gtfs_layers_are_written(tmp_path, backends):
+    backends["gtfs_error"] = ValueError("Missing NAP API key.")
+    with pytest.warns(UserWarning, match="No bus/train layers were written"):
+        manifest = get_network.main(
+            "Valencia", modes=["walking", "bus"], output_path=tmp_path
+        )
+    assert manifest["gtfs_status"] == "ValueError: Missing NAP API key."
+
+
+def test_main_does_not_warn_without_gtfs_modes(tmp_path, backends, recwarn):
+    get_network.main("Valencia", modes=["walking"], output_path=tmp_path)
+    assert not [w for w in recwarn if "bus/train" in str(w.message)]
+
+
+# ---------------------------------------------------------------------------
+# NAP API key: environment variable or local .env file
+# ---------------------------------------------------------------------------
+class _NoDatasetsResponse:
+    """NAP reply for a province with nothing published (a 404, not an error)."""
+
+    status_code = 404
+    url = "https://nap.example/conjunto-dato/region/46"
+    text = ""
+
+    def json(self):
+        return {"message": "No se ha encontrado ningún conjunto de datos"}
+
+    def raise_for_status(self):
+        raise AssertionError("a 'no datasets' 404 must not raise")
+
+
+@pytest.fixture
+def no_env_key(monkeypatch, tmp_path):
+    """Run in an empty folder with NAP_API_KEY unset; restore it afterwards."""
+    monkeypatch.setenv("NAP_API_KEY", "placeholder")
+    monkeypatch.delenv("NAP_API_KEY")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def sent_keys(monkeypatch):
+    keys: list[str] = []
+
+    def fake_nap_get(url, headers, timeout=60):
+        keys.append(headers["ApiKey"])
+        return _NoDatasetsResponse()
+
+    monkeypatch.setattr(get_network.get_area, "_nap_get", fake_nap_get)
+    return keys
+
+
+def test_nap_key_is_read_from_dotenv_file(no_env_key, sent_keys):
+    (no_env_key / ".env").write_text('NAP_API_KEY="from-dotenv"\n', "utf-8")
+    zips = get_network.get_area.download_gtfs_nap_zips(
+        "Valencia", no_env_key / "zips", province_code=46
+    )
+    assert zips == []
+    assert sent_keys == ["from-dotenv"]
+
+
+def test_environment_variable_takes_priority_over_dotenv(
+    no_env_key, sent_keys, monkeypatch
+):
+    (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
+    monkeypatch.setenv("NAP_API_KEY", "from-env")
+    get_network.get_area.download_gtfs_nap_zips(
+        "Valencia", no_env_key / "zips", province_code=46
+    )
+    assert sent_keys == ["from-env"]
+
+
+def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
+    with pytest.raises(ValueError, match="Missing NAP API key"):
+        get_network.get_area.download_gtfs_nap_zips(
+            "Valencia", no_env_key / "zips", province_code=46
+        )
+    assert sent_keys == []
+
+
 # ---------------------------------------------------------------------------
 # Command-line interface
 # ---------------------------------------------------------------------------
