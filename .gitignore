@@ -7,4 +7,4 @@ __pycache__/
 .coverage
 
 # Datos generados
-data/outputs/
+data/outputs/dist/

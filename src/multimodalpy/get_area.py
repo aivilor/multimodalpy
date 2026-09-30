@@ -235,7 +235,7 @@ def province_code_from_natcode(value: object) -> int | None:
     """
     digits = re.sub(r"\D", "", "" if value is None else str(value))
     if len(digits) >= 8:
-        candidates = (digits[4:6], digits[6:8])
+        candidates: tuple[str, ...] = (digits[4:6], digits[6:8])
     elif len(digits) == 5:
         # Standalone INE municipality code (e.g. "40136").
         candidates = (digits[0:2],)
@@ -325,6 +325,8 @@ def _select_area_rows(
 
     if best_rows is None:
         raise ValueError(f"No boundary found for area '{area_name}'.")
+    assert best_column is not None
+    assert best_value is not None
     return best_rows, best_column, best_value
 
 
