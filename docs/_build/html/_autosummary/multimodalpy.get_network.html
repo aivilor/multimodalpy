@@ -365,26 +365,22 @@
 <p>Downloads data locally according to what the user requested.</p>
 <p>Contains the library’s main function, <code class="docutils literal notranslate"><span class="pre">main()</span></code>, which orchestrates the
 whole pipeline with the minimal parameters the user needs:</p>
-<blockquote>
-<div><dl>
-<dt>main(</dt><dd><p>area_name,          # str  : municipality to download
-modes,              # list : transport modes
-output_path,        # Path : local download folder
-boundaries_path=None,   # Path: boundaries shapefile/geojson (optional)
-crs=”EPSG:4326”,        # str : output CRS (defaults to universal WGS84)
-output_file_type=”geojson”,  # geopackage | geojson | shapefile | networkx</p>
-<blockquote>
-<div><p># (or a list of several of them)</p>
-</div></blockquote>
-</dd>
-</dl>
-<p>)</p>
-</div></blockquote>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">main</span><span class="p">(</span>
+    <span class="n">area_name</span><span class="p">,</span>          <span class="c1"># str  : municipality to download</span>
+    <span class="n">modes</span><span class="p">,</span>              <span class="c1"># list : transport modes</span>
+    <span class="n">output_path</span><span class="p">,</span>        <span class="c1"># Path : local download folder</span>
+    <span class="n">boundaries_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>   <span class="c1"># Path: boundaries shapefile/geojson (optional)</span>
+    <span class="n">crs</span><span class="o">=</span><span class="s2">&quot;EPSG:4326&quot;</span><span class="p">,</span>        <span class="c1"># str : output CRS (defaults to universal WGS84)</span>
+    <span class="n">output_file_type</span><span class="o">=</span><span class="s2">&quot;geojson&quot;</span><span class="p">,</span>  <span class="c1"># geopackage | geojson | shapefile | networkx</span>
+                                 <span class="c1"># (or a list of several of them)</span>
+<span class="p">)</span>
+</pre></div>
+</div>
 <p>Modes are automatically split between OSM and GTFS:</p>
-<blockquote>
-<div><p>OSM  -&gt; “walking”, “bike”, “driving”
-GTFS -&gt; “bus”, “trains”</p>
-</div></blockquote>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">OSM</span>  <span class="o">-&gt;</span> <span class="s2">&quot;walking&quot;</span><span class="p">,</span> <span class="s2">&quot;bike&quot;</span><span class="p">,</span> <span class="s2">&quot;driving&quot;</span>
+<span class="n">GTFS</span> <span class="o">-&gt;</span> <span class="s2">&quot;bus&quot;</span><span class="p">,</span> <span class="s2">&quot;trains&quot;</span>
+</pre></div>
+</div>
 <p class="rubric">Functions</p>
 <div class="pst-scrollable-table-container"><table class="autosummary longtable table">
 <tbody>

@@ -363,21 +363,14 @@
 <span id="multimodalpy-process-gtfs"></span><h1>multimodalpy.process_gtfs<a class="headerlink" href="#module-multimodalpy.process_gtfs" title="Link to this heading">#</a></h1>
 <p>GTFS data standardization. Cleans bus + train data.</p>
 <p>This module has two parts:</p>
-<ol class="arabic">
-<li><p>Standardizing a GTFS feed (zip or folder) into GeoPandas layers:
-- <code class="docutils literal notranslate"><span class="pre">nodes_stops</span></code>              : stops as points.
-- <code class="docutils literal notranslate"><span class="pre">edges</span></code>                    : stop-to-stop edges (trip sequence), one</p>
-<blockquote>
-<div><p>row per stop pair, with travel time and
-an hour-band breakdown.</p>
-</div></blockquote>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">edges_shapes_reference</span></code>   : route geometry (shapes.txt).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">schedule</span></code> (flat, non-spatial table): one record per trip and
+<ol class="arabic simple">
+<li><p>Standardization: turns a GTFS feed (zip or folder) into GeoPandas
+layers – <code class="docutils literal notranslate"><span class="pre">nodes_stops</span></code> (stops as points), <code class="docutils literal notranslate"><span class="pre">edges</span></code> (stop-to-stop
+edges with travel time and an hour-band breakdown),
+<code class="docutils literal notranslate"><span class="pre">edges_shapes_reference</span></code> (route geometry from shapes.txt), and
+<code class="docutils literal notranslate"><span class="pre">schedule</span></code> (a flat, non-spatial table with one record per trip and
 segment, for anyone who needs the full schedule detail without losing
-granularity.</p></li>
-</ul>
-</li>
+granularity).</p></li>
 <li><p>Bus + train cleanup: snapping stops onto the route geometry and
 splitting the route lines into segments between consecutive stops, to
 get a coherent stop-segment-stop topology.</p></li>

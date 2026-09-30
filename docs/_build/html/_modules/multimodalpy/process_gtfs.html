@@ -337,16 +337,13 @@
 
 <span class="sd">This module has two parts:</span>
 
-<span class="sd">1. Standardizing a GTFS feed (zip or folder) into GeoPandas layers:</span>
-<span class="sd">   - ``nodes_stops``              : stops as points.</span>
-<span class="sd">   - ``edges``                    : stop-to-stop edges (trip sequence), one</span>
-<span class="sd">                                     row per stop pair, with travel time and</span>
-<span class="sd">                                     an hour-band breakdown.</span>
-<span class="sd">   - ``edges_shapes_reference``   : route geometry (shapes.txt).</span>
-<span class="sd">   - ``schedule`` (flat, non-spatial table): one record per trip and</span>
-<span class="sd">     segment, for anyone who needs the full schedule detail without losing</span>
-<span class="sd">     granularity.</span>
-
+<span class="sd">1. Standardization: turns a GTFS feed (zip or folder) into GeoPandas</span>
+<span class="sd">   layers -- ``nodes_stops`` (stops as points), ``edges`` (stop-to-stop</span>
+<span class="sd">   edges with travel time and an hour-band breakdown),</span>
+<span class="sd">   ``edges_shapes_reference`` (route geometry from shapes.txt), and</span>
+<span class="sd">   ``schedule`` (a flat, non-spatial table with one record per trip and</span>
+<span class="sd">   segment, for anyone who needs the full schedule detail without losing</span>
+<span class="sd">   granularity).</span>
 <span class="sd">2. Bus + train cleanup: snapping stops onto the route geometry and</span>
 <span class="sd">   splitting the route lines into segments between consecutive stops, to</span>
 <span class="sd">   get a coherent stop-segment-stop topology.</span>
