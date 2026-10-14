@@ -206,12 +206,16 @@ def _osm_layers_to_graph_json(
     return _write_node_link_json(graph, output_path)
 
 
-def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
+def _gtfs_to_graph_json(
+    stops, edges, output_path: Path, edge_columns: Sequence[str] | None = None
+) -> Path:
     """Build a NetworkX graph of stops + stop-to-stop edges and write it.
 
-    Includes ``travel_time_seconds_mean`` and ``hour_band`` (if present) as
-    edge attributes, in addition to the existing ``route_id`` /
-    ``trip_count``.
+    Every edge carries ``edge_columns`` as attributes (by default, every
+    column of ``edges``), with ``geometry`` as WKT, the same as the OSM
+    graphs. ``main()`` passes the columns kept in the GTFS edge layers, so
+    the graph holds the same data as the other formats, under the long
+    column names (JSON has no name length limit).
     """
     import networkx as nx
     from networkx.readwrite import json_graph
@@ -239,18 +243,16 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
                 stop_name=_json_safe(row.get("stop_name")),
             )
     if edges is not None and not edges.empty:
+        columns = list(edges.columns if edge_columns is None else edge_columns)
         for _, row in edges.iterrows():
-            graph.add_edge(
-                str(row.get("from_node")),
-                str(row.get("to_node")),
-                route_id=_json_safe(row.get("route_id")),
-                route_short_name=_json_safe(row.get("route_short_name")),
-                trip_count=_json_safe(row.get("trip_count")),
-                travel_time_seconds_mean=_json_safe(
-                    row.get("travel_time_seconds_mean")
-                ),
-                hour_band=_json_safe(row.get("hour_band")),
-            )
+            attrs = {}
+            for column in columns:
+                if column == "geometry":
+                    geom = row.geometry
+                    attrs[column] = geom.wkt if geom is not None else None
+                else:
+                    attrs[column] = _graph_value(row.get(column))
+            graph.add_edge(str(row.get("from_node")), str(row.get("to_node")), **attrs)
 
     return _write_node_link_json(graph, output_path)
 
@@ -509,6 +511,9 @@ def main(
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
     gtfs_results: dict[str, dict[str, Any]] = {}
+    # Edge columns kept in each GTFS dataset's layers, reused by the
+    # networkx export so the graph carries the same attributes.
+    gtfs_edge_columns: dict[str, list[str]] = {}
 
     # 2) OSM.
     if osm_modes:
@@ -611,7 +616,7 @@ def main(
 
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
-            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
+            gtfs_edge_columns[dataset] = keep_cols
 
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
             layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
@@ -647,7 +652,12 @@ def main(
                 files_here.append(relative)
             for dataset, gtfs_out in gtfs_results.items():
                 relative = f"{gtfs_out.get('mode') or 'bus'}/{dataset}/graph.json"
-                _gtfs_to_graph_json(gtfs_out["nodes"], gtfs_out["edges"], output_dir / relative)
+                _gtfs_to_graph_json(
+                    gtfs_out["nodes"],
+                    gtfs_out["edges"],
+                    output_dir / relative,
+                    edge_columns=gtfs_edge_columns.get(dataset),
+                )
                 files_here.append(relative)
             files_here.extend(
                 _write_schedule_tables(

@@ -394,8 +394,40 @@ def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     assert link["route_id"] == "R1"
     assert float(link["trip_count"]) == 12
     assert float(link["travel_time_seconds_mean"]) == pytest.approx(95.0)
-    assert link["hour_band"] is None  # column absent -> null, not an error
+    assert link["edge_id"] == "ds1_s1_s2"
+    assert link["geometry"] == "LINESTRING (-0.4 39.4, -0.39 39.41)"
+    assert "hour_band" not in link  # never a column of the aggregated edges
 
+def test_gtfs_graph_json_keeps_only_the_given_edge_columns(tmp_path):
+    result = make_gtfs_result()
+    columns = ["edge_id", "from_node", "to_node", "trip_count", "geometry"]
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json", edge_columns=columns
+    )
+
+    (link,) = _links(json.loads(path.read_text(encoding="utf-8")))
+    assert [k for k in link if k not in {"source", "target", "key"}] == columns
+
+
+def test_main_networkx_gtfs_graph_has_the_layer_edge_columns(tmp_path, backends):
+    backends["gtfs_result"] = {"ds1": make_gtfs_result()}
+    get_network.main(
+        "Valencia", modes=["bus"], output_path=tmp_path, output_file_type="networkx"
+    )
+    data = json.loads((tmp_path / "bus" / "ds1" / "graph.json").read_text("utf-8"))
+
+    (link,) = _links(data)
+    attrs = [k for k in link if k not in {"source", "target", "key"}]
+    assert attrs == [
+        "edge_id",
+        "from_node",
+        "to_node",
+        "route_id",
+        "trip_count",
+        "travel_time_seconds_mean",
+        "geometry",
+    ]
+    assert "not_in_whitelist" not in link
 
 # ---------------------------------------------------------------------------
 # main(): argument validation (fails before any backend is called)
