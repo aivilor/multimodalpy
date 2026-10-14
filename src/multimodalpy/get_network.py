@@ -141,6 +141,37 @@ def _json_safe(value: object) -> object:
     except TypeError:
         return str(value)
 
+def read_graph_json(
+    path: str | Path, *, parse_geometry: bool = True
+) -> nx.MultiDiGraph:
+    """Read a ``graph.json`` written by the networkx export.
+
+    Accepts files with the edge list under ``"edges"`` (current) or
+    ``"links"`` (files written with networkx < 3.6 before the key was
+    fixed). With ``parse_geometry=True`` each edge's ``geometry`` WKT text
+    is turned into a shapely geometry. The CRS of the node ``x`` / ``y``
+    and the edge geometries is in ``graph.graph["crs"]``.
+
+    Examples
+    --------
+    >>> G = read_graph_json("output/walking/graph.json")  # doctest: +SKIP
+    >>> G.graph["crs"]  # doctest: +SKIP
+    'EPSG:4326'
+    """
+    from networkx.readwrite import json_graph
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    edges_key = GRAPH_JSON_EDGES_KEY if GRAPH_JSON_EDGES_KEY in data else "links"
+    graph = json_graph.node_link_graph(data, edges=edges_key)
+
+    if parse_geometry:
+        from shapely import wkt
+
+        for _u, _v, attrs in graph.edges(data=True):
+            geom = attrs.get("geometry")
+            if isinstance(geom, str):
+                attrs["geometry"] = wkt.loads(geom)
+    return graph
 
 def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
     """Write an OSMnx graph as NetworkX node-link JSON."""

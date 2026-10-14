@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, box
 
+import multimodalpy
 from multimodalpy import get_network
 
 # Captured at import time, before any test monkeypatches it.
@@ -452,6 +453,37 @@ def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
     assert nodes["s3"]["y"] == pytest.approx(39.70)
     assert nodes["s3"]["stop_name"] == "Stop C"
     assert nodes["s1"]["stop_name"] == "Stop A"  # stops-layer node left as is
+
+
+def test_read_graph_json_round_trip(tmp_path):
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
+    graph = multimodalpy.read_graph_json(path)
+
+    assert isinstance(graph, nx.MultiDiGraph)
+    assert graph.graph["crs"] == "EPSG:4326"
+    assert graph.nodes["s1"]["stop_name"] == "Stop A"
+    ((u, v, attrs),) = graph.edges(data=True)
+    assert (u, v) == ("s1", "s2")
+    assert isinstance(attrs["geometry"], LineString)
+    assert attrs["geometry"].coords[0] == pytest.approx((-0.40, 39.40))
+
+
+def test_read_graph_json_reads_legacy_links_key(tmp_path):
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["links"] = data.pop("edges")  # as written by networkx < 3.6
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    graph = get_network.read_graph_json(path, parse_geometry=False)
+    assert graph.number_of_edges() == 1
+    ((_, _, attrs),) = graph.edges(data=True)
+    assert isinstance(attrs["geometry"], str)
 
 # ---------------------------------------------------------------------------
 # main(): argument validation (fails before any backend is called)
