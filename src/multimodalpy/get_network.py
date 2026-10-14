@@ -216,7 +216,18 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
     import networkx as nx
     from networkx.readwrite import json_graph
 
-    graph = nx.MultiDiGraph()
+    # Same graph attribute as the OSM graphs, so readers know the CRS of
+    # the node ``x`` / ``y`` without having to guess it.
+    crs = next(
+        (
+            layer.crs
+            for layer in (stops, edges)
+            if layer is not None and getattr(layer, "crs", None) is not None
+        ),
+        None,
+    )
+    graph = nx.MultiDiGraph(crs=str(crs) if crs is not None else None)
+    
     if stops is not None and not stops.empty:
         for _, row in stops.iterrows():
             node_id = row.get("stop_id") or row.get("node_id")

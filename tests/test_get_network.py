@@ -354,6 +354,14 @@ def test_graph_json_stores_edges_under_edges_key(tmp_path):
     assert "edges" in data
     assert "links" not in data
 
+def test_gtfs_graph_json_records_the_crs(tmp_path):
+    result = make_gtfs_result()
+    nodes = result["nodes"].to_crs("EPSG:25830")
+    edges = result["edges"].to_crs("EPSG:25830")
+    path = get_network._gtfs_to_graph_json(nodes, edges, tmp_path / "graph.json")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["graph"]["crs"] == "EPSG:25830"
 
 def test_osm_graph_to_json_serialises_list_attributes(tmp_path):
     graph = make_osm_result()["graph"]
