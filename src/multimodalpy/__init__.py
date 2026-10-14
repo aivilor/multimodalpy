@@ -1,29 +1,31 @@
-"""multimodalpy - libreria para descargar y estandarizar redes multimodales.
+"""multimodalpy - library to download and standardize multimodal networks.
 
-Uso basico:
+Basic usage:
 
     from multimodalpy import main
 
-    main("Valencia", modes=["caminable", "bicicleta"], output_path="salida")
+    main("Valencia", modes=["walking", "bike"], output_path="output")
 
-Modulos:
-    - process_osm    : estandarizacion de datos OSM (creacion de intersecciones).
-    - process_gtfs   : estandarizacion de datos GTFS + limpieza de bus/tren.
-    - get_area       : descarga desde APIs OSM y GTFS.
-    - get_network    : descarga en local segun indicaciones del usuario (main()).
+Modules:
+    - process_osm    : OSM data standardization (building intersections).
+    - process_gtfs   : GTFS data standardization + bus/train cleanup.
+    - get_area       : downloads from OSM and GTFS APIs.
+    - get_network    : local download per the user's settings (main()).
 """
 
 from __future__ import annotations
-from importlib.metadata import PackageNotFoundError, version
+
 import logging
+from importlib.metadata import PackageNotFoundError, version
 
 from . import get_area, get_network, process_gtfs, process_osm
 from .get_area import find_area_boundary
 from .get_network import main
 
-# Una libreria no debe escribir en la terminal por su cuenta: sin este handler,
-# Python mostraria por stderr los avisos de nivel WARNING aunque la aplicacion
-# no haya configurado logging. Se activan con logging.basicConfig(level=...).
+# A library shouldn't write to the terminal on its own: without this
+# handler, Python would print WARNING-level alerts to stderr even if the
+# application hasn't configured logging. Enable them with
+# logging.basicConfig(level=...).
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 try:
