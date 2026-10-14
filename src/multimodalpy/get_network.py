@@ -655,6 +655,7 @@ def main(
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
             gtfs_edge_columns[dataset] = keep_cols
+            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
 
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
             layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
