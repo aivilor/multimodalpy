@@ -14,7 +14,7 @@ Modulos:
 """
 
 from __future__ import annotations
-
+from importlib.metadata import PackageNotFoundError, version
 import logging
 
 from . import get_area, get_network, process_gtfs, process_osm
@@ -26,7 +26,10 @@ from .get_network import main
 # no haya configurado logging. Se activan con logging.basicConfig(level=...).
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.1.3"
+try:
+    __version__ = version("multimodalpy")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "main",
