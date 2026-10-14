@@ -534,7 +534,7 @@ def _build_stop_to_stop_trip_records(
 
     from_lookup = stop_lookup.rename(
         columns={
-            "stop_id": "from_node_id",
+            "stop_id": "from_node",
             "stop_name": "from_stop_name",
             "stop_lat": "from_stop_lat",
             "stop_lon": "from_stop_lon",
@@ -542,7 +542,7 @@ def _build_stop_to_stop_trip_records(
     )
     to_lookup = stop_lookup.rename(
         columns={
-            "stop_id": "to_node_id",
+            "stop_id": "to_node",
             "stop_name": "to_stop_name",
             "stop_lat": "to_stop_lat",
             "stop_lon": "to_stop_lon",
@@ -550,7 +550,7 @@ def _build_stop_to_stop_trip_records(
     )
 
     edges = work.rename(
-        columns={"stop_id": "from_node_id", "next_stop_id": "to_node_id"}
+        columns={"stop_id": "from_node", "next_stop_id": "to_node"}
     ).copy()
 
     trips_work = _attach_service_days(trips, calendar, calendar_dates)
@@ -600,17 +600,17 @@ def _build_stop_to_stop_trip_records(
         edges = edges.merge(
             routes[route_cols].drop_duplicates(), on="route_id", how="left"
         )
-    edges = edges.merge(from_lookup, on="from_node_id", how="left")
-    edges = edges.merge(to_lookup, on="to_node_id", how="left")
+    edges = edges.merge(from_lookup, on="from_node", how="left")
+    edges = edges.merge(to_lookup, on="to_node", how="left")
     edges = edges.dropna(
         subset=["from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat"]
     ).copy()
     edges["edge_id"] = (
         dataset_name
         + "_"
-        + edges["from_node_id"].astype(str)
+        + edges["from_node"].astype(str)
         + "_"
-        + edges["to_node_id"].astype(str)
+        + edges["to_node"].astype(str)
     )
     return edges
 
@@ -656,8 +656,8 @@ def build_gtfs_schedule_table(
             "route_id",
             "route_short_name",
             "trip_headsign",
-            "from_node_id",
-            "to_node_id",
+            "from_node",
+            "to_node",
             "departure_time",
             "arrival_time",
             "travel_time_seconds",
@@ -795,8 +795,8 @@ def build_gtfs_stop_to_stop_edges_gdf(
     group_cols = _existing_columns(
         edges,
         [
-            "from_node_id",
-            "to_node_id",
+            "from_node",
+            "to_node",
             "route_id",
             "route_short_name",
             "route_long_name",
@@ -939,9 +939,9 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf["edge_id"] = (
         dataset_name
         + "_"
-        + gdf["from_node_id"].astype(str)
+        + gdf["from_node"].astype(str)
         + "_"
-        + gdf["to_node_id"].astype(str)
+        + gdf["to_node"].astype(str)
     )
     return gdf
 

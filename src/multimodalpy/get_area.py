@@ -418,8 +418,9 @@ def download_osm_layers(
     :func:`multimodalpy.process_osm.build_final_osm_layers`):
 
     - ``nodes``: ``node_id``, ``node_role``, ``geometry``.
-    - ``edges``: ``edge_id``, ``from_node_id``, ``to_node_id``, ``highway``,
-      ``lanes``, ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
+    - ``edges``: ``edge_id``, ``from_node``, ``to_node``, ``highway``,
+      ``hwy_raw``, ``lanes``, ``maxspeed``, ``spd_raw``, ``name``, ``oneway``,
+      ``reversed``, ``length``,
       ``tts`` (travel time in seconds: free-flow speed + stop penalty based
       on the mode), ``geometry``.
 

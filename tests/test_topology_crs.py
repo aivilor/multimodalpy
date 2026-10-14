@@ -85,7 +85,7 @@ def test_topology_is_identical_for_every_output_crs():
             sorted(
                 zip(
                     edges["from_node"].astype(str),
-                    edges["to_node_id"].astype(str),
+                    edges["to_node"].astype(str),
                     edges["length"].round(6),
                     strict=True,
                 )
@@ -103,9 +103,9 @@ def test_edges_only_reference_existing_nodes(output_crs):
     )
     node_ids = set(nodes["node_id"].astype(str))
     assert set(edges["from_node"].astype(str)) <= node_ids
-    assert set(edges["to_node_id"].astype(str)) <= node_ids
+    assert set(edges["to_node"].astype(str)) <= node_ids
     # Every edge connects two different intersections.
-    assert (edges["from_node"].astype(str) != edges["to_node_id"].astype(str)).all()
+    assert (edges["from_node"].astype(str) != edges["to_node"].astype(str)).all()
 
 
 def test_nodes_keep_their_real_position_after_reprojection():
