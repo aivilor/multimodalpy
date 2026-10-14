@@ -10,7 +10,7 @@ authors:
     given-names: "Aida"
     email: "aivilor@upv.es"
     affiliation: "Universitat Politècnica de València"
-version: 0.1.1
+version: 0.1.3
 date-released: 2026-09-30
 url: "https://github.com/aivilor/multimodalpy"
 repository-code: "https://github.com/aivilor/multimodalpy"
