@@ -17,3 +17,4 @@ docs/_autosummary/
 
 # Datos generados
 data/outputs/
+data/ # replace the narrower data/outputs/ line
