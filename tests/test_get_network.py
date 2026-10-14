@@ -364,19 +364,6 @@ def test_gtfs_graph_json_records_the_crs(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["graph"]["crs"] == "EPSG:25830"
 
-def test_osm_graph_to_json_serialises_list_attributes(tmp_path):
-    graph = make_osm_result()["graph"]
-    path = get_network._osm_graph_to_json(graph, tmp_path / "walking" / "graph.json")
-
-    assert path.is_file()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    assert {node["id"] for node in data["nodes"]} == {"n1", "n2"}
-    links = _links(data)
-    assert len(links) == 1
-    assert links[0]["length"] == 100.0
-    assert json.loads(links[0]["highway"]) == ["residential", "tertiary"]
-
-
 def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     result = make_gtfs_result()
     path = get_network._gtfs_to_graph_json(

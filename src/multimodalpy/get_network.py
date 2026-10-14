@@ -173,22 +173,6 @@ def read_graph_json(
                 attrs["geometry"] = wkt.loads(geom)
     return graph
 
-def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
-    """Write an OSMnx graph as NetworkX node-link JSON."""
-    import networkx as nx
-    from networkx.readwrite import json_graph
-
-    safe = nx.MultiDiGraph()
-    safe.graph.update({k: _json_safe(v) for k, v in graph.graph.items()})
-    for node, attrs in graph.nodes(data=True):
-        safe.add_node(node, **{k: _json_safe(v) for k, v in attrs.items()})
-    for u, v, key, attrs in graph.edges(keys=True, data=True):
-        safe.add_edge(u, v, key=key, **{k: _json_safe(val) for k, val in attrs.items()})
-
-    return _write_node_link_json(safe, output_path)
-
-
-
 def _graph_value(value: object) -> object:
     """JSON-safe value for a graph attribute (numpy scalars -> Python)."""
     if hasattr(value, "item") and not isinstance(value, (list, tuple, dict)):
