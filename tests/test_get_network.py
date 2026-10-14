@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, box
 
+import multimodalpy
 from multimodalpy import get_network
 
 # Captured at import time, before any test monkeypatches it.
@@ -340,22 +341,28 @@ def test_write_schedule_tables_geopackage_uses_plain_sqlite_table(tmp_path):
 # NetworkX / JSON exports
 # ---------------------------------------------------------------------------
 def _links(data: dict) -> list[dict]:
-    # networkx renamed "links" to "edges" in node_link_data (3.4+).
-    return data.get("links") or data.get("edges")
+    return data[get_network.GRAPH_JSON_EDGES_KEY]
 
 
-def test_osm_graph_to_json_serialises_list_attributes(tmp_path):
-    graph = make_osm_result()["graph"]
-    path = get_network._osm_graph_to_json(graph, tmp_path / "walking" / "graph.json")
-
-    assert path.is_file()
+def test_graph_json_stores_edges_under_edges_key(tmp_path):
+    # The key is fixed by multimodalpy, not by the installed networkx
+    # version (which wrote "links" before 3.6).
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert {node["id"] for node in data["nodes"]} == {"n1", "n2"}
-    links = _links(data)
-    assert len(links) == 1
-    assert links[0]["length"] == 100.0
-    assert json.loads(links[0]["highway"]) == ["residential", "tertiary"]
+    assert "edges" in data
+    assert "links" not in data
 
+def test_gtfs_graph_json_records_the_crs(tmp_path):
+    result = make_gtfs_result()
+    nodes = result["nodes"].to_crs("EPSG:25830")
+    edges = result["edges"].to_crs("EPSG:25830")
+    path = get_network._gtfs_to_graph_json(nodes, edges, tmp_path / "graph.json")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["graph"]["crs"] == "EPSG:25830"
 
 def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     result = make_gtfs_result()
@@ -375,8 +382,95 @@ def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     assert link["route_id"] == "R1"
     assert float(link["trip_count"]) == 12
     assert float(link["travel_time_seconds_mean"]) == pytest.approx(95.0)
-    assert link["hour_band"] is None  # column absent -> null, not an error
+    assert link["edge_id"] == "ds1_s1_s2"
+    assert link["geometry"] == "LINESTRING (-0.4 39.4, -0.39 39.41)"
+    assert "hour_band" not in link  # never a column of the aggregated edges
 
+def test_gtfs_graph_json_keeps_only_the_given_edge_columns(tmp_path):
+    result = make_gtfs_result()
+    columns = ["edge_id", "from_node", "to_node", "trip_count", "geometry"]
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json", edge_columns=columns
+    )
+
+    (link,) = _links(json.loads(path.read_text(encoding="utf-8")))
+    assert [k for k in link if k not in {"source", "target", "key"}] == columns
+
+
+def test_main_networkx_gtfs_graph_has_the_layer_edge_columns(tmp_path, backends):
+    backends["gtfs_result"] = {"ds1": make_gtfs_result()}
+    get_network.main(
+        "Valencia", modes=["bus"], output_path=tmp_path, output_file_type="networkx"
+    )
+    data = json.loads((tmp_path / "bus" / "ds1" / "graph.json").read_text("utf-8"))
+
+    (link,) = _links(data)
+    attrs = [k for k in link if k not in {"source", "target", "key"}]
+    assert attrs == [
+        "edge_id",
+        "from_node",
+        "to_node",
+        "route_id",
+        "trip_count",
+        "travel_time_seconds_mean",
+        "geometry",
+    ]
+    assert "not_in_whitelist" not in link
+
+def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
+    # The edge s1 -> s3 crosses the boundary: s3 is not in the stops layer.
+    result = make_gtfs_result()
+    edges = gpd.GeoDataFrame(
+        {
+            "edge_id": ["ds1_s1_s3"],
+            "from_node": ["s1"],
+            "to_node": ["s3"],
+            "from_stop_name": ["Stop A"],
+            "to_stop_name": ["Stop C"],
+        },
+        geometry=[LineString([(-0.40, 39.40), (-0.10, 39.70)])],
+        crs="EPSG:4326",
+    )
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], edges, tmp_path / "graph.json"
+    )
+
+    nodes = {n["id"]: n for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]}
+    assert nodes["s3"]["x"] == pytest.approx(-0.10)
+    assert nodes["s3"]["y"] == pytest.approx(39.70)
+    assert nodes["s3"]["stop_name"] == "Stop C"
+    assert nodes["s1"]["stop_name"] == "Stop A"  # stops-layer node left as is
+
+
+def test_read_graph_json_round_trip(tmp_path):
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
+    graph = multimodalpy.read_graph_json(path)
+
+    assert isinstance(graph, nx.MultiDiGraph)
+    assert graph.graph["crs"] == "EPSG:4326"
+    assert graph.nodes["s1"]["stop_name"] == "Stop A"
+    ((u, v, attrs),) = graph.edges(data=True)
+    assert (u, v) == ("s1", "s2")
+    assert isinstance(attrs["geometry"], LineString)
+    assert attrs["geometry"].coords[0] == pytest.approx((-0.40, 39.40))
+
+
+def test_read_graph_json_reads_legacy_links_key(tmp_path):
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["links"] = data.pop("edges")  # as written by networkx < 3.6
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    graph = get_network.read_graph_json(path, parse_geometry=False)
+    assert graph.number_of_edges() == 1
+    ((_, _, attrs),) = graph.edges(data=True)
+    assert isinstance(attrs["geometry"], str)
 
 # ---------------------------------------------------------------------------
 # main(): argument validation (fails before any backend is called)

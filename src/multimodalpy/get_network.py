@@ -108,6 +108,26 @@ _FILE_FORMATS = {
 # ---------------------------------------------------------------------------
 # Export to NetworkX (node-link JSON)
 # ---------------------------------------------------------------------------
+# Key under which the edge list is stored in graph.json. Passed explicitly
+# so the file does not depend on the installed networkx version: before
+# 3.6, node_link_data() wrote "links" by default; from 3.6 it writes "edges".
+GRAPH_JSON_EDGES_KEY = "edges"
+
+
+def _write_node_link_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
+    """Write ``graph`` as NetworkX node-link JSON (edge list under "edges")."""
+    from networkx.readwrite import json_graph
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(
+            json_graph.node_link_data(graph, edges=GRAPH_JSON_EDGES_KEY),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return output_path
+
 def _json_safe(value: object) -> object:
     try:
         if value != value:
@@ -121,26 +141,37 @@ def _json_safe(value: object) -> object:
     except TypeError:
         return str(value)
 
+def read_graph_json(
+    path: str | Path, *, parse_geometry: bool = True
+) -> nx.MultiDiGraph:
+    """Read a ``graph.json`` written by the networkx export.
 
-def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
-    """Write an OSMnx graph as NetworkX node-link JSON."""
-    import networkx as nx
+    Accepts files with the edge list under ``"edges"`` (current) or
+    ``"links"`` (files written with networkx < 3.6 before the key was
+    fixed). With ``parse_geometry=True`` each edge's ``geometry`` WKT text
+    is turned into a shapely geometry. The CRS of the node ``x`` / ``y``
+    and the edge geometries is in ``graph.graph["crs"]``.
+
+    Examples
+    --------
+    >>> G = read_graph_json("output/walking/graph.json")  # doctest: +SKIP
+    >>> G.graph["crs"]  # doctest: +SKIP
+    'EPSG:4326'
+    """
     from networkx.readwrite import json_graph
 
-    safe = nx.MultiDiGraph()
-    safe.graph.update({k: _json_safe(v) for k, v in graph.graph.items()})
-    for node, attrs in graph.nodes(data=True):
-        safe.add_node(node, **{k: _json_safe(v) for k, v in attrs.items()})
-    for u, v, key, attrs in graph.edges(keys=True, data=True):
-        safe.add_edge(u, v, key=key, **{k: _json_safe(val) for k, val in attrs.items()})
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    edges_key = GRAPH_JSON_EDGES_KEY if GRAPH_JSON_EDGES_KEY in data else "links"
+    graph = json_graph.node_link_graph(data, edges=edges_key)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(safe), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return output_path
+    if parse_geometry:
+        from shapely import wkt
 
+        for _u, _v, attrs in graph.edges(data=True):
+            geom = attrs.get("geometry")
+            if isinstance(geom, str):
+                attrs["geometry"] = wkt.loads(geom)
+    return graph
 
 def _graph_value(value: object) -> object:
     """JSON-safe value for a graph attribute (numpy scalars -> Python)."""
@@ -187,25 +218,55 @@ def _osm_layers_to_graph_json(
                 attrs[column] = _graph_value(row.get(column))
         graph.add_edge(attrs["from_node"], attrs["to_node"], **attrs)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
-        encoding="utf-8",
+    return _write_node_link_json(graph, output_path)
+
+def _add_missing_gtfs_endpoint(graph, node, row, end: int, name_column: str) -> None:
+    """Give an edge endpoint coordinates when it is not in the stops layer.
+
+    Stops and stop-to-stop edges are clipped separately (each must
+    intersect the study area), so an edge crossing the boundary keeps a
+    stop that the stops layer dropped. Without this, ``add_edge`` would
+    create that node with no ``x`` / ``y``. Its position is taken from the
+    matching end of the edge geometry (``end=0`` start, ``end=-1`` end),
+    already in the output CRS.
+    """
+    if node in graph and graph.nodes[node].get("x") is not None:
+        return
+    geom = row.geometry
+    coords = list(geom.coords) if geom is not None and not geom.is_empty else None
+    graph.add_node(
+        node,
+        x=float(coords[end][0]) if coords else None,
+        y=float(coords[end][1]) if coords else None,
+        stop_name=_json_safe(row.get(name_column)),
     )
-    return output_path
 
-
-def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
+def _gtfs_to_graph_json(
+    stops, edges, output_path: Path, edge_columns: Sequence[str] | None = None
+) -> Path:
     """Build a NetworkX graph of stops + stop-to-stop edges and write it.
 
-    Includes ``travel_time_seconds_mean`` and ``hour_band`` (if present) as
-    edge attributes, in addition to the existing ``route_id`` /
-    ``trip_count``.
+    Every edge carries ``edge_columns`` as attributes (by default, every
+    column of ``edges``), with ``geometry`` as WKT, the same as the OSM
+    graphs. ``main()`` passes the columns kept in the GTFS edge layers, so
+    the graph holds the same data as the other formats, under the long
+    column names (JSON has no name length limit).
     """
     import networkx as nx
     from networkx.readwrite import json_graph
 
-    graph = nx.MultiDiGraph()
+    # Same graph attribute as the OSM graphs, so readers know the CRS of
+    # the node ``x`` / ``y`` without having to guess it.
+    crs = next(
+        (
+            layer.crs
+            for layer in (stops, edges)
+            if layer is not None and getattr(layer, "crs", None) is not None
+        ),
+        None,
+    )
+    graph = nx.MultiDiGraph(crs=str(crs) if crs is not None else None)
+    
     if stops is not None and not stops.empty:
         for _, row in stops.iterrows():
             node_id = row.get("stop_id") or row.get("node_id")
@@ -217,25 +278,21 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
                 stop_name=_json_safe(row.get("stop_name")),
             )
     if edges is not None and not edges.empty:
+        columns = list(edges.columns if edge_columns is None else edge_columns)
         for _, row in edges.iterrows():
-            graph.add_edge(
-                str(row.get("from_node")),
-                str(row.get("to_node")),
-                route_id=_json_safe(row.get("route_id")),
-                route_short_name=_json_safe(row.get("route_short_name")),
-                trip_count=_json_safe(row.get("trip_count")),
-                travel_time_seconds_mean=_json_safe(
-                    row.get("travel_time_seconds_mean")
-                ),
-                hour_band=_json_safe(row.get("hour_band")),
-            )
+            attrs = {}
+            for column in columns:
+                if column == "geometry":
+                    geom = row.geometry
+                    attrs[column] = geom.wkt if geom is not None else None
+                else:
+                    attrs[column] = _graph_value(row.get(column))
+            u, v = str(row.get("from_node")), str(row.get("to_node"))
+            _add_missing_gtfs_endpoint(graph, u, row, 0, "from_stop_name")
+            _add_missing_gtfs_endpoint(graph, v, row, -1, "to_stop_name")
+            graph.add_edge(u, v, **attrs)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return output_path
+    return _write_node_link_json(graph, output_path)
 
 
 def _relative_name(path: Path, root: Path) -> str:
@@ -492,6 +549,9 @@ def main(
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
     gtfs_results: dict[str, dict[str, Any]] = {}
+    # Edge columns kept in each GTFS dataset's layers, reused by the
+    # networkx export so the graph carries the same attributes.
+    gtfs_edge_columns: dict[str, list[str]] = {}
 
     # 2) OSM.
     if osm_modes:
@@ -594,6 +654,7 @@ def main(
 
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
+            gtfs_edge_columns[dataset] = keep_cols
             edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
 
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
@@ -630,7 +691,12 @@ def main(
                 files_here.append(relative)
             for dataset, gtfs_out in gtfs_results.items():
                 relative = f"{gtfs_out.get('mode') or 'bus'}/{dataset}/graph.json"
-                _gtfs_to_graph_json(gtfs_out["nodes"], gtfs_out["edges"], output_dir / relative)
+                _gtfs_to_graph_json(
+                    gtfs_out["nodes"],
+                    gtfs_out["edges"],
+                    output_dir / relative,
+                    edge_columns=gtfs_edge_columns.get(dataset),
+                )
                 files_here.append(relative)
             files_here.extend(
                 _write_schedule_tables(
