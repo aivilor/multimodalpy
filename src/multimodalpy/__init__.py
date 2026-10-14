@@ -20,7 +20,8 @@ from importlib.metadata import PackageNotFoundError, version
 
 from . import get_area, get_network, process_gtfs, process_osm
 from .get_area import find_area_boundary
-from .get_network import main
+from .get_network import main, read_graph_json
+
 
 # A library shouldn't write to the terminal on its own: without this
 # handler, Python would print WARNING-level alerts to stderr even if the
@@ -35,6 +36,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "main",
+    "read_graph_json",
     "find_area_boundary",
     "get_network",
     "get_area",

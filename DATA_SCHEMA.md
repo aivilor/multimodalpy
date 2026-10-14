@@ -20,7 +20,11 @@ output_path/
 GeoJSON and Shapefile write one file per layer inside its mode folder (a
 Shapefile is five files: `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`). GeoPackage is a
 single file at the root holding every layer, so it is not split into folders.
-`schedule.csv` is only written with `schedule=True`.
+`schedule.csv` is only written with `schedule=True`. NetworkX writes one `graph.json`
+ per mode folder instead of `nodes` and `edges`
+(see [NetworkX graphs](#networkx-graphs-graphjson)).
+
+
 
 The same layer has a file path in GeoJSON and Shapefile and a layer name inside
 the GeoPackage:
@@ -276,6 +280,59 @@ Written only with `schedule=True`: one row per trip and edge, with no geometry.
 It is **not** clipped to the study area, so it holds the full timetable of every
 downloaded feed, including operators with no stop inside the area.
 
+## NetworkX graphs (`graph.json`)
+
+With `output_file_type="networkx"` each network is written as one
+`graph.json`: `<mode>/graph.json` for OSM and `<bus|train>/<dataset>/graph.json`
+for GTFS, next to `study_area_boundary.geojson`. Each file is a NetworkX
+`MultiDiGraph` in node-link JSON:
+
+```json
+{
+  "directed": true,
+  "multigraph": true,
+  "graph": {"crs": "EPSG:4326"},
+  "nodes": [{"id": 1, "x": -0.37, "y": 39.47, "node_role": "intersection"}],
+  "edges": [{"source": 1, "target": 2, "key": 0, "edge_id": 10, "...": "...",
+             "geometry": "LINESTRING (-0.37 39.47, -0.36 39.47)"}]
+}
+```
+
+- The edge list is always under `"edges"`, whatever networkx version wrote it.
+  Files written before this was fixed may use `"links"`.
+- `graph.crs` is the CRS of the node `x` / `y` and of the edge geometries, the
+  same as the `crs` passed to `main()`.
+- `geometry` is WKT text.
+- Several edges can join the same pair of nodes; `key` tells them apart.
+
+| | OSM graph | GTFS graph |
+|---|---|---|
+| Node `id` | `node_id` (integer) | `stop_id` (text) |
+| Node attributes | `x`, `y`, `node_role` | `x`, `y`, `stop_name` |
+| Edge attributes | the 14 [OSM edge](#osm-edges) columns | the [GTFS edge](#gtfs-edges) columns, with their long names |
+
+`from_node` / `to_node` repeat `source` / `target`. They are kept so every edge
+carries the same columns as in the other formats.
+
+A GTFS edge that crosses the study-area boundary keeps its stop outside the
+area, which the stops layer drops. In the graph that stop is still a node, with
+its position taken from the edge geometry and its name from the feed.
+
+Read a file with `multimodalpy.read_graph_json`, which accepts either edge key
+and turns `geometry` into shapely objects:
+
+```python
+from multimodalpy import read_graph_json
+
+G = read_graph_json("output/walking/graph.json")
+G.graph["crs"]                          # 'EPSG:4326'
+u, v, k, attrs = next(iter(G.edges(keys=True, data=True)))
+attrs["geometry"]                       # shapely LineString
+```
+
+Without multimodalpy, use networkx directly:
+`json_graph.node_link_graph(json.load(f), edges="edges")`.
+
 ---
 
 ## From municipality to data
@@ -321,6 +378,8 @@ directly as the region id.
   limit. OSM graphs follow the edge schema above.
 - The **GTFS schedule** is not clipped to the study area (see above).
 - `lanes` is still exported as text and can hold `;`-joined values.
+- In the **networkx** export, OSM node ids are integers and GTFS node ids are
+  text, so the graphs cannot be joined on node id as they are.
 
 ## Abbreviations
 
