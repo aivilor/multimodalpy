@@ -1,7 +1,7 @@
 # multimodalpy
 
 [![Tests](https://github.com/aivilor/multimodalpy/actions/workflows/tests.yml/badge.svg)](https://github.com/aivilor/multimodalpy/actions/workflows/tests.yml)
-[![TestPyPI version](https://img.shields.io/badge/TestPyPI-0.1.1-blue.svg)](https://test.pypi.org/project/multimodalpy/) <!-- swap for a real PyPI badge once published there -->
+[![PyPI version](https://img.shields.io/pypi/v/multimodalpy.svg)](https://pypi.org/project/multimodalpy/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Easy creation of multimodal transport networks from OpenStreetMap and GTFS data.
@@ -10,10 +10,8 @@ Easy creation of multimodal transport networks from OpenStreetMap and GTFS data.
 
 ## Installation
 
-`multimodalpy` is currently available on [TestPyPI](https://test.pypi.org/project/multimodalpy/) while it goes through review. To install it, you also need the real PyPI for its dependencies:
-
 ```bash
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ multimodalpy
+pip install multimodalpy
 ```
 
 <!-- Once published on the real PyPI, replace the above with:
@@ -59,11 +57,9 @@ manifest = get_network.main(
 )
 ```
 
-<!-- TODO: verify this matches the actual public API/signature exactly. -->
-
 ## Documentation
 
-Full documentation, tutorials, and API reference: <https://multimodalpy.readthedocs.io> <!-- TODO: confirm this is live -->
+Full documentation, tutorials, and API reference: <https://multimodalpy.readthedocs.io> 
 
 ## Getting help & contributing
 
@@ -74,8 +70,4 @@ Full documentation, tutorials, and API reference: <https://multimodalpy.readthed
 
 ## Citation
 
-If you use `multimodalpy` in your research, please cite it as: <!-- TODO: add citation / DOI once available, e.g. via Zenodo -->
-
-```
-<citation placeholder — author(s), year, title, version, DOI>
-```
+If you use `multimodalpy` in your research, please cite it. Citation metadata is in [`CITATION.cff`](CITATION.cff) — on GitHub, use the "Cite this repository" button in the sidebar to get a formatted citation (APA, BibTeX, etc.).
