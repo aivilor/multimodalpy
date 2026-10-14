@@ -36,7 +36,7 @@ def fake_boundary():
 def fake_osm_layers():
     nodes = _layer({"node_id": ["n1", "n2"]}, [Point(0, 0), Point(1, 1)])
     edges = _layer(
-        {"from_node": ["n1"], "to_node_id": ["n2"]}, [LineString([(0, 0), (1, 1)])]
+        {"from_node": ["n1"], "to_node": ["n2"]}, [LineString([(0, 0), (1, 1)])]
     )
     return {"walking": {"nodes": nodes, "edges": edges, "graph": object()}}
 
@@ -49,8 +49,8 @@ def fake_gtfs_layers():
     )
     edges = _layer(
         {
-            "from_node_id": ["s1"],
-            "to_node_id": ["s2"],
+            "from_node": ["s1"],
+            "to_node": ["s2"],
             "trip_count": [3],
             "trip_count_rest_of_day_weekend": [1],
         },
@@ -265,3 +265,73 @@ def test_unreadable_feed_is_treated_as_bus(tmp_path):
 
     assert process_gtfs.infer_transport_mode(missing_routes) == "bus"
     assert process_gtfs.infer_transport_mode(corrupt) == "bus"
+
+
+# ---------------------------------------------------------------------------
+# Standard OSM edge schema, identical in every output format
+# ---------------------------------------------------------------------------
+STANDARD_EDGE_COLUMNS = [
+    "edge_id", "from_node", "to_node", "highway", "hwy_raw", "lanes",
+    "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
+    "geometry",
+]
+
+
+def _walk_graph_without_optional_tags() -> nx.MultiDiGraph:
+    # No lanes / maxspeed / name: those columns must still be exported.
+    graph = nx.MultiDiGraph(crs="EPSG:4326")
+    graph.add_node(1, x=0.0, y=0.0)
+    graph.add_node(2, x=0.001, y=0.0)
+    graph.add_edge(
+        1, 2, osmid=10, highway="footway", length=111.0,
+        oneway=False, reversed=False, geometry=LineString([(0, 0), (0.001, 0)]),
+    )
+    return graph
+
+
+def test_osm_edges_always_have_the_standard_columns_in_order():
+    assert process_osm.STANDARD_EDGE_COLUMNS == STANDARD_EDGE_COLUMNS
+    _, edges = process_osm.build_final_osm_layers(
+        _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
+    )
+    assert list(edges.columns) == STANDARD_EDGE_COLUMNS
+
+
+@pytest.mark.parametrize("output_file_type", ["geopackage", "geojson", "shapefile"])
+def test_osm_edges_keep_the_standard_columns_in_every_file_format(
+    tmp_path, output_file_type
+):
+    nodes, edges = process_osm.build_final_osm_layers(
+        _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
+    )
+    get_network._write_layers(
+        {"osm_walking_edges": edges},
+        tmp_path,
+        output_file_type,
+        area_slug="test",
+        layer_paths={"osm_walking_edges": "walking/edges"},
+    )
+    if output_file_type == "geopackage":
+        (gpkg,) = tmp_path.glob("*.gpkg")
+        written = gpd.read_file(gpkg, layer="osm_walking_edges")
+    else:
+        (path,) = (tmp_path / "walking").glob("edges.*[!xfgj]")  # .geojson / .shp
+        written = gpd.read_file(path)
+    assert list(written.columns) == STANDARD_EDGE_COLUMNS
+
+
+def test_osm_networkx_edges_carry_the_standard_attributes(tmp_path):
+    import json
+
+    nodes, edges = process_osm.build_final_osm_layers(
+        _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
+    )
+    path = get_network._osm_layers_to_graph_json(
+        nodes, edges, tmp_path / "walking" / "graph.json"
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    links = data.get("links") or data.get("edges")
+    attrs = [k for k in links[0] if k not in {"source", "target", "key"}]
+    assert attrs == STANDARD_EDGE_COLUMNS
+    assert links[0]["edge_id"] == 10
+    assert {links[0]["source"], links[0]["target"]} <= {n["id"] for n in data["nodes"]}

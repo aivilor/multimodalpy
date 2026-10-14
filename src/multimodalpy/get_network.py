@@ -53,7 +53,6 @@ _GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
 def _build_gtfs_edge_rename() -> dict[str, str]:
     """Build the long-to-short name map for the GTFS edges layer."""
     rename = {
-        "from_node_id": "from_node",
         "route_short_name": "route_sh",
         "route_long_name": "route_ln",
         "trip_count": "trips",
@@ -143,6 +142,59 @@ def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
     return output_path
 
 
+def _graph_value(value: object) -> object:
+    """JSON-safe value for a graph attribute (numpy scalars -> Python)."""
+    if hasattr(value, "item") and not isinstance(value, (list, tuple, dict)):
+        try:
+            value = value.item()
+        except (TypeError, ValueError):
+            pass
+    return _json_safe(value)
+
+
+def _osm_layers_to_graph_json(
+    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, output_path: Path
+) -> Path:
+    """Write the final OSM layers as NetworkX node-link JSON.
+
+    Built from the same standardized layers written to GeoPackage /
+    GeoJSON / Shapefile, so every edge carries exactly the standard edge
+    columns (``process_osm.STANDARD_EDGE_COLUMNS``) as attributes, with
+    ``geometry`` as WKT. Graph nodes are the layer's ``node_id`` with
+    ``x``, ``y`` and ``node_role``.
+    """
+    import networkx as nx
+    from networkx.readwrite import json_graph
+
+    from .process_osm import STANDARD_EDGE_COLUMNS
+
+    graph = nx.MultiDiGraph(crs=str(edges.crs) if edges.crs is not None else None)
+    for _, row in nodes.iterrows():
+        geom = row.geometry
+        graph.add_node(
+            _graph_value(row.get("node_id")),
+            x=float(geom.x) if geom is not None else None,
+            y=float(geom.y) if geom is not None else None,
+            node_role=_graph_value(row.get("node_role")),
+        )
+    for _, row in edges.iterrows():
+        attrs = {}
+        for column in STANDARD_EDGE_COLUMNS:
+            if column == "geometry":
+                geom = row.geometry
+                attrs[column] = geom.wkt if geom is not None else None
+            else:
+                attrs[column] = _graph_value(row.get(column))
+        graph.add_edge(attrs["from_node"], attrs["to_node"], **attrs)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return output_path
+
+
 def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
     """Build a NetworkX graph of stops + stop-to-stop edges and write it.
 
@@ -167,8 +219,8 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
     if edges is not None and not edges.empty:
         for _, row in edges.iterrows():
             graph.add_edge(
-                str(row.get("from_node_id")),
-                str(row.get("to_node_id")),
+                str(row.get("from_node")),
+                str(row.get("to_node")),
                 route_id=_json_safe(row.get("route_id")),
                 route_short_name=_json_safe(row.get("route_short_name")),
                 trip_count=_json_safe(row.get("trip_count")),
@@ -475,8 +527,8 @@ def main(
     if gtfs_results:
         GTFS_EDGES_COLUMNS = [
             "edge_id",
-            "from_node_id",
-            "to_node_id",
+            "from_node",
+            "to_node",
             "route_id",
             "route_short_name",
             "route_long_name",
@@ -559,7 +611,9 @@ def main(
             files_here.append("study_area_boundary.geojson")
             for mode, out in osm_results.items():
                 relative = f"{mode}/graph.json"
-                _osm_graph_to_json(out["graph"], output_dir / relative)
+                _osm_layers_to_graph_json(
+                    out["nodes"], out["edges"], output_dir / relative
+                )
                 files_here.append(relative)
             for dataset, gtfs_out in gtfs_results.items():
                 relative = f"{gtfs_out.get('mode') or 'bus'}/{dataset}/graph.json"

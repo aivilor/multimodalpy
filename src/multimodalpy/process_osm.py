@@ -321,7 +321,7 @@ def split_edges_with_topology_nodes(
     vertex of the geometry. This function uses the topology nodes layer
     (see ``derive_topology_nodes_from_edges``) to cut the edge exactly at
     those points, generating shorter segments with their own
-    ``from_node_id`` / ``to_node_id`` and a ``length`` distributed
+    ``from_node`` / ``to_node`` and a ``length`` distributed
     proportionally to the edge's original length.
 
     ``split_roles`` controls which topology-node types count as valid
@@ -427,10 +427,10 @@ def split_edges_with_topology_nodes(
                 end_node = node_lookup.get(end_key, {})
 
                 record = dict(base_attrs)
-                record["from_node_id"] = start_node.get(
+                record["from_node"] = start_node.get(
                     "node_id", base_attrs.get("from")
                 )
-                record["to_node_id"] = end_node.get("node_id", base_attrs.get("to"))
+                record["to_node"] = end_node.get("node_id", base_attrs.get("to"))
                 record["length"] = sub_length_m
                 record["geometry"] = sub_geom
                 records.append(record)
@@ -595,7 +595,7 @@ def add_mode_travel_time(
     *,
     mode: str,
     length_col: str = "length",
-    to_node_col: str = "to_node_id",
+    to_node_col: str = "to_node",
     output_col: str = "tts",
 ) -> gpd.GeoDataFrame:
     """Compute the travel time per edge (``tts``, in seconds).
@@ -612,7 +612,7 @@ def add_mode_travel_time(
       tag).
 
     The penalty is applied based on the **arrival** node
-    (``to_node_id``): every time the route enters a node with a stop,
+    (``to_node``): every time the route enters a node with a stop,
     the corresponding delay is added.
     """
     if mode not in MODE_SPEED_PROFILES:
@@ -653,9 +653,9 @@ def add_mode_travel_time(
 
         penalty_sec = 0.0
         if penalties:
-            to_node_id = edge.get(to_node_col)
-            node_highway_tag = node_highway_by_id.get(to_node_id)
-            node_role = node_role_by_id.get(to_node_id)
+            to_node = edge.get(to_node_col)
+            node_highway_tag = node_highway_by_id.get(to_node)
+            node_role = node_role_by_id.get(to_node)
             if node_highway_tag in penalties:
                 penalty_sec = penalties[node_highway_tag]
             elif node_role == "intersection":
@@ -756,8 +756,8 @@ def normalize_osm_graph(
 # ---------------------------------------------------------------------------
 FINAL_EDGE_COLUMNS = [
     "osmid",
-    "from_node_id",
-    "to_node_id",
+    "from_node",
+    "to_node",
     "highway",
     "hwy_raw",
     "lanes",
@@ -770,10 +770,11 @@ FINAL_EDGE_COLUMNS = [
     "tts",
     "geometry",
 ]
-# Shapefile was truncating ``from_node_id`` (12 characters) to
-# ``from_node_``, so edges no longer matched the nodes table.
-# ``to_node_id`` is exactly 10 characters and is kept as-is.
-FINAL_EDGE_RENAME = {"osmid": "edge_id", "from_node_id": "from_node"}
+FINAL_EDGE_RENAME = {"osmid": "edge_id"}
+# Standard schema of the exported OSM edges, identical in every output
+# format (GeoPackage, GeoJSON, Shapefile and NetworkX): same names, same
+# order, and always present (empty when the network has no such tag).
+STANDARD_EDGE_COLUMNS = [FINAL_EDGE_RENAME.get(c, c) for c in FINAL_EDGE_COLUMNS]
 FINAL_NODE_COLUMNS = ["node_id", "node_role", "geometry"]
 
 
@@ -793,7 +794,7 @@ def build_final_osm_layers(
        topology nodes derived from the geometry.
     2. Split each edge at the "real" topology nodes
        (``split_edges_with_topology_nodes``), generating
-       ``from_node_id`` / ``to_node_id``.
+       ``from_node`` / ``to_node``.
     3. Explode ``osmid`` (one row per original osmid merged into the
        simplified edge) and convert the list-valued columns to text
        (``highway``, ``lanes``, ``maxspeed``, ``name``).
@@ -801,10 +802,11 @@ def build_final_osm_layers(
        (``drive``/``bike``/``walk``), with free-flow speed + a stop
        penalty based on the arrival node (``add_mode_travel_time``).
     5. Select and rename the final node columns (``node_id``,
-       ``node_role``, ``geometry``) and edge columns (``edge_id``,
-       ``from_node_id``, ``to_node_id``, ``highway``, ``lanes``,
-       ``maxspeed``, ``name``, ``oneway``, ``reversed``, ``length``,
-       ``tts``, ``geometry``).
+       ``node_role``, ``geometry``) and edge columns, always all of
+       them and in this order (``STANDARD_EDGE_COLUMNS``): ``edge_id``,
+       ``from_node``, ``to_node``, ``highway``, ``hwy_raw``, ``lanes``,
+       ``maxspeed``, ``spd_raw``, ``name``, ``oneway``, ``reversed``,
+       ``length``, ``tts``, ``geometry``.
 
     Steps 1-2 run in a projected CRS in metres chosen from the graph
     (``_metric_crs``); both layers are reprojected to ``output_crs`` only
@@ -841,8 +843,15 @@ def build_final_osm_layers(
         edges["spd_raw"] = edges["maxspeed"]
         edges["maxspeed"] = edges["maxspeed"].map(_parse_maxspeed_kmh)
 
-    edge_cols = [c for c in FINAL_EDGE_COLUMNS if c in edges.columns]
-    edges_final = _clean_for_file(edges[edge_cols]).rename(columns=FINAL_EDGE_RENAME)
+    # Every standard column is always present, in the standard order,
+    # even if this network has no such tag (e.g. no ``lanes`` on a
+    # walking network): missing ones are added empty.
+    for col in FINAL_EDGE_COLUMNS:
+        if col not in edges.columns:
+            edges[col] = None
+    edges_final = _clean_for_file(edges[FINAL_EDGE_COLUMNS]).rename(
+        columns=FINAL_EDGE_RENAME
+    )
 
     node_cols = [c for c in FINAL_NODE_COLUMNS if c in nodes.columns]
     nodes_final = _clean_for_file(nodes[node_cols])

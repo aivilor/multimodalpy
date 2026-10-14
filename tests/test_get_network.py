@@ -41,7 +41,7 @@ def make_osm_result() -> dict:
         {
             "edge_id": [1],
             "from_node": ["n1"],
-            "to_node_id": ["n2"],
+            "to_node": ["n2"],
             "length": [100.0],
             "tts": [72.0],
         },
@@ -68,8 +68,8 @@ def make_gtfs_result(mode: str = "bus") -> dict:
     edges = gpd.GeoDataFrame(
         {
             "edge_id": ["ds1_s1_s2"],
-            "from_node_id": ["s1"],
-            "to_node_id": ["s2"],
+            "from_node": ["s1"],
+            "to_node": ["s2"],
             "route_id": ["R1"],
             "trip_count": [12],
             "travel_time_seconds_mean": [95.0],
@@ -165,7 +165,7 @@ def test_gtfs_edge_rename_targets_are_unique():
 
 def test_gtfs_edge_rename_expected_examples():
     rename = get_network.GTFS_EDGE_RENAME
-    assert rename["from_node_id"] == "from_node"
+    assert "from_node" not in rename  # already short, produced as-is
     assert rename["trip_count"] == "trips"
     assert rename["travel_time_seconds_mean"] == "tts_m"
     assert rename["travel_time_seconds_mean_peak_am"] == "tts_m_pam"
@@ -593,10 +593,11 @@ def test_main_gtfs_writes_filtered_and_renamed_layers(tmp_path, backends, mode, 
 
     # Edge columns are whitelisted and then renamed to shapefile-safe names.
     edges = gpd.read_file(tmp_path / mode / "ds1" / "edges.geojson")
-    assert {"edge_id", "from_node", "to_node_id", "trips", "tts_m"} <= set(
+    assert {"edge_id", "from_node", "to_node", "trips", "tts_m"} <= set(
         edges.columns
     )
     assert "from_node_id" not in edges.columns
+    assert "to_node_id" not in edges.columns
     assert "not_in_whitelist" not in edges.columns
 
 
