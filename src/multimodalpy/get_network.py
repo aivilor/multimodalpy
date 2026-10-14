@@ -376,6 +376,8 @@ def main(
     multimodal: bool = False,
     schedule: bool = False,
     gtfs_zips: bool = False,
+    province: int | str | None = None,
+    buffer_m: float = 0.0,
 ) -> dict:
     """Download and standardize a municipality's multimodal network.
 
@@ -425,6 +427,14 @@ def main(
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
         and can be downloaded again.
+    province : str | int, optional
+        Province name or INE code (1-52), to choose between municipalities
+        that share a name (e.g. "Castejón" exists in Cuenca and Navarra).
+    buffer_m : float
+        Widen the download area by this many metres so streets and transit
+        routes crossing the municipal boundary are not cut at it. The
+        exported ``study_area_boundary`` stays the exact boundary.
+        Defaults to 0 (no buffer).
 
     Returns
     -------
@@ -471,6 +481,7 @@ def main(
         area_name,
         boundaries_path,
         area_code=area_code,
+        province=province,
         target_crs="EPSG:4326",
     )
 
@@ -488,6 +499,7 @@ def main(
             boundary,
             modes=osm_modes,
             output_crs=crs,
+            buffer_m=buffer_m,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
@@ -515,6 +527,7 @@ def main(
                 hour_range=gtfs_hour_range,
                 peak_periods=gtfs_peak_periods,
                 include_schedule_table=schedule,
+                buffer_m=buffer_m,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -652,6 +665,7 @@ def main(
         "area_name": area_name,
         "modes": list(modes),
         "crs": crs,
+        "buffer_m": buffer_m,
         # Returned as it was requested: str if a single format string was
         # passed, list if several were requested.
         "output_file_type": output_file_types[0]
@@ -703,7 +717,20 @@ def _cli(argv: list[str] | None = None) -> None:
         choices=sorted(VALID_OUTPUT_TYPES),
         help="Output format(s); accepts several in a single pass.",
     )
-    parser.add_argument("--area-code", help="Municipality's official code (optional).")
+    parser.add_argument(
+        "--area-code",
+        help="Municipality's 5-digit INE code or INSPIRE NATCODE (optional).",
+    )
+    parser.add_argument(
+        "--province",
+        help="Province name or INE code, to choose between same-name towns.",
+    )
+    parser.add_argument(
+        "--buffer-m",
+        type=float,
+        default=0.0,
+        help="Widen the download area by this many metres (default 0).",
+    )
     parser.add_argument(
         "--clean-gtfs", action="store_true", help="Apply bus/train cleanup."
     )
@@ -742,6 +769,8 @@ def _cli(argv: list[str] | None = None) -> None:
         crs=args.crs,
         output_file_type=args.output_file_type,
         area_code=args.area_code,
+        province=args.province,
+        buffer_m=args.buffer_m,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         schedule=args.schedule,

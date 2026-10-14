@@ -94,7 +94,7 @@ The abbreviations are listed at the end of this document.
 |---|---|---|
 | `edge_id` | text | OSM way id (`osmid`), see note below |
 | `from_node` | text | `node_id` of the start node |
-| `to_node_id` | text | `node_id` of the end node |
+| `to_node` | text | `node_id` of the end node |
 | `highway` | text | A single valid OSM `highway` tag |
 | `hwy_raw` | text | Original tag(s), joined with `;` when there were several |
 | `lanes` | text | Number of lanes as tagged in OSM, possibly `;`-joined |
@@ -106,6 +106,11 @@ The abbreviations are listed at the end of this document.
 | `length` | number | Length in metres |
 | `tts` | number | Travel time in seconds, see below |
 | `geometry` | LineString | Edge geometry |
+
+These 14 columns are always present, in this order, in every output format
+(GeoPackage, GeoJSON, Shapefile and the NetworkX `graph.json`, where they are
+the edge attributes and `geometry` is WKT). A column the network has no tag for
+(e.g. `lanes` on a walking network) is written empty rather than dropped.
 
 **One row per OSM way.** When osmnx simplifies the graph it can merge several OSM
 ways into a single edge. That edge is written once per original way, each row
@@ -194,8 +199,8 @@ long name.
 | Column | Former name | Meaning |
 |---|---|---|
 | `edge_id` | — | Edge identifier |
-| `from_node` | `from_node_id` | Origin stop |
-| `to_node_id` | — | Destination stop |
+| `from_node` | — | Origin stop |
+| `to_node` | — | Destination stop |
 | `route_id` | — | Route identifier |
 | `route_sh` | `route_short_name` | Short route name (e.g. `"L1"`) |
 | `route_ln` | `route_long_name` | Long route name |
@@ -275,9 +280,30 @@ downloaded feed, including operators with no stop inside the area.
 
 ## From municipality to data
 
-**Municipality → polygon.** The name is looked up in the boundaries file,
-tolerating accents and typos, and every matching row is dissolved into a single
-polygon.
+**Municipality → polygon.** The name is looked up in the boundaries file in
+increasingly loose steps, and the first step with a hit decides: the whole name,
+one part of a bilingual name (`Elche` → `Elx/Elche`), whole words inside a name
+(`Castellón` → `Castelló de la Plana/Castellón de la Plana`, not `Castellonet`),
+any substring, and finally a small typo (at least 80% similar, a swap of two
+adjacent letters counting as one edit). Accents and case are ignored.
+
+The rows found must be **one** municipality (same `NATCODE`); a municipality
+drawn as several polygons is dissolved into one. If a name matches several
+different municipalities (`Castejón` exists in Cuenca and Navarra, `Alcalá` is in
+16 names), the lookup fails with `AmbiguousAreaError` listing them, instead of
+merging them into one area spanning several provinces. Pass `province=` (name or
+INE code) or `area_code=` (5-digit INE code or full `NATCODE`) to choose. Matches
+looser than an official name emit a `UserWarning` naming the area picked, and so
+do the 7 non-municipal territories in the file (Gibraltar, Isla del Perejil, …),
+which belong to no province.
+
+The default file covers peninsular Spain, the Balearic Islands, Ceuta and
+Melilla, **not the Canary Islands**; use `boundaries_path=` for other areas.
+
+**Boundary buffer.** The exported `study_area_boundary` is always the exact
+municipal boundary. `buffer_m` (default 0) widens only the area used to download
+OSM and clip GTFS, so streets and routes crossing the boundary are not cut. OSM
+streets with at least one end inside the area are kept (`truncate_by_edge`).
 
 **Municipality → GTFS feeds.** The NAP endpoint `/conjunto-dato/region/{id}`
 only accepts **INE province codes, 1 to 52**. The `/region` listing also returns
@@ -290,9 +316,9 @@ directly as the region id.
 
 ## Known limitations
 
-- The **networkx** export does not follow this schema. OSM graphs are the raw
-  osmnx graph and GTFS graphs keep the long attribute names (`trip_count`,
-  `travel_time_seconds_mean`, …), since JSON has no name length limit.
+- In the **networkx** export, GTFS graphs keep the long attribute names
+  (`trip_count`, `travel_time_seconds_mean`, …), since JSON has no name length
+  limit. OSM graphs follow the edge schema above.
 - The **GTFS schedule** is not clipped to the study area (see above).
 - `lanes` is still exported as text and can hold `;`-joined values.
 
