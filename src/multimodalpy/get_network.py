@@ -108,6 +108,26 @@ _FILE_FORMATS = {
 # ---------------------------------------------------------------------------
 # Export to NetworkX (node-link JSON)
 # ---------------------------------------------------------------------------
+# Key under which the edge list is stored in graph.json. Passed explicitly
+# so the file does not depend on the installed networkx version: before
+# 3.6, node_link_data() wrote "links" by default; from 3.6 it writes "edges".
+GRAPH_JSON_EDGES_KEY = "edges"
+
+
+def _write_node_link_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
+    """Write ``graph`` as NetworkX node-link JSON (edge list under "edges")."""
+    from networkx.readwrite import json_graph
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(
+            json_graph.node_link_data(graph, edges=GRAPH_JSON_EDGES_KEY),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return output_path
+
 def _json_safe(value: object) -> object:
     try:
         if value != value:
@@ -134,12 +154,8 @@ def _osm_graph_to_json(graph: nx.MultiDiGraph, output_path: Path) -> Path:
     for u, v, key, attrs in graph.edges(keys=True, data=True):
         safe.add_edge(u, v, key=key, **{k: _json_safe(val) for k, val in attrs.items()})
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(safe), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return output_path
+    return _write_node_link_json(safe, output_path)
+
 
 
 def _graph_value(value: object) -> object:
@@ -187,12 +203,7 @@ def _osm_layers_to_graph_json(
                 attrs[column] = _graph_value(row.get(column))
         graph.add_edge(attrs["from_node"], attrs["to_node"], **attrs)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return output_path
+    return _write_node_link_json(graph, output_path)
 
 
 def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
@@ -230,12 +241,7 @@ def _gtfs_to_graph_json(stops, edges, output_path: Path) -> Path:
                 hour_band=_json_safe(row.get("hour_band")),
             )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(json_graph.node_link_data(graph), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return output_path
+    return _write_node_link_json(graph, output_path)
 
 
 def _relative_name(path: Path, root: Path) -> str:

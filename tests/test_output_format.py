@@ -330,7 +330,7 @@ def test_osm_networkx_edges_carry_the_standard_attributes(tmp_path):
         nodes, edges, tmp_path / "walking" / "graph.json"
     )
     data = json.loads(path.read_text(encoding="utf-8"))
-    links = data.get("links") or data.get("edges")
+    links = data["edges"]
     attrs = [k for k in links[0] if k not in {"source", "target", "key"}]
     assert attrs == STANDARD_EDGE_COLUMNS
     assert links[0]["edge_id"] == 10

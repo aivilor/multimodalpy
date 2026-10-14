@@ -340,8 +340,19 @@ def test_write_schedule_tables_geopackage_uses_plain_sqlite_table(tmp_path):
 # NetworkX / JSON exports
 # ---------------------------------------------------------------------------
 def _links(data: dict) -> list[dict]:
-    # networkx renamed "links" to "edges" in node_link_data (3.4+).
-    return data.get("links") or data.get("edges")
+    return data[get_network.GRAPH_JSON_EDGES_KEY]
+
+
+def test_graph_json_stores_edges_under_edges_key(tmp_path):
+    # The key is fixed by multimodalpy, not by the installed networkx
+    # version (which wrote "links" before 3.6).
+    result = make_gtfs_result()
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], result["edges"], tmp_path / "graph.json"
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "edges" in data
+    assert "links" not in data
 
 
 def test_osm_graph_to_json_serialises_list_attributes(tmp_path):
