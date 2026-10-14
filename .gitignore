@@ -15,6 +15,5 @@ build/
 docs/_build/
 docs/_autosummary/
 
-# Datos generados
-data/outputs/
-data/ # replace the narrower data/outputs/ line
+# Data created / downloaded in running time
+data/
