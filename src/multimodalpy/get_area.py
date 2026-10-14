@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import unicodedata
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +32,7 @@ from . import process_gtfs, process_osm
 
 if TYPE_CHECKING:
     import geopandas as gpd
+    import pandas as pd
     import requests
 
 
@@ -47,9 +49,10 @@ _BOUNDARIES_RELEASE_URL = (
     "https://github.com/aivilor/multimodalpy/releases/download/data-v1/"
     "recintos_municipales_inspire_peninbal_etrs89.zip"
 )
-# TODO: once downloaded successfully, fill in the real hash (see below)
-# so pooch can verify the file's integrity on every download.
-_BOUNDARIES_RELEASE_HASH: str | None = None
+# SHA-256 of the release zip, so pooch verifies the file on download.
+_BOUNDARIES_RELEASE_HASH: str | None = (
+    "sha256:05a872f215bc72bcd84c37810010b2fc391c9066a67fb9dc60abd43c358f56aa"
+)
 
 
 def _default_boundaries_path() -> Path:
@@ -63,13 +66,13 @@ def _default_boundaries_path() -> Path:
         path=pooch.os_cache("multimodalpy"),
         processor=pooch.Unzip(),
     )
-    shp_files = [Path(p) for p in extracted if p.endswith(".shp")]
-    if not shp_files:
+    shp_file = _pick_shapefile(extracted)
+    if shp_file is None:
         raise FileNotFoundError(
             "No .shp file found in the resource downloaded from "
             f"{_BOUNDARIES_RELEASE_URL}"
         )
-    return shp_files[0]
+    return shp_file
 
 
 # Only shapefile or geojson are accepted as the boundaries file (per the
@@ -135,6 +138,64 @@ NAP_PROVINCE_IDS = frozenset(range(1, 53))
 # NATCODE (INSPIRE) has the form
 # ``<2 country><2 region><2 province><5 municipality>``.
 PROVINCE_CODE_COLUMNS = ("NATCODE", "natcode", "cod_mun", "COD_MUN", "ine", "INE")
+
+# INE province code -> names (first one is the display name). Includes
+# the Spanish and co-official forms so either can be passed as
+# ``province=...``.
+PROVINCE_NAMES: dict[int, tuple[str, ...]] = {
+    1: ("Araba/Álava", "Álava", "Araba"),
+    2: ("Albacete",),
+    3: ("Alicante/Alacant", "Alicante", "Alacant"),
+    4: ("Almería",),
+    5: ("Ávila",),
+    6: ("Badajoz",),
+    7: ("Illes Balears", "Islas Baleares", "Baleares", "Balears"),
+    8: ("Barcelona",),
+    9: ("Burgos",),
+    10: ("Cáceres",),
+    11: ("Cádiz",),
+    12: ("Castellón/Castelló", "Castellón", "Castelló"),
+    13: ("Ciudad Real",),
+    14: ("Córdoba",),
+    15: ("A Coruña", "La Coruña", "Coruña"),
+    16: ("Cuenca",),
+    17: ("Girona", "Gerona"),
+    18: ("Granada",),
+    19: ("Guadalajara",),
+    20: ("Gipuzkoa", "Guipúzcoa"),
+    21: ("Huelva",),
+    22: ("Huesca",),
+    23: ("Jaén",),
+    24: ("León",),
+    25: ("Lleida", "Lérida"),
+    26: ("La Rioja", "Rioja"),
+    27: ("Lugo",),
+    28: ("Madrid",),
+    29: ("Málaga",),
+    30: ("Murcia",),
+    31: ("Navarra", "Nafarroa"),
+    32: ("Ourense", "Orense"),
+    33: ("Asturias",),
+    34: ("Palencia",),
+    35: ("Las Palmas",),
+    36: ("Pontevedra",),
+    37: ("Salamanca",),
+    38: ("Santa Cruz de Tenerife",),
+    39: ("Cantabria",),
+    40: ("Segovia",),
+    41: ("Sevilla",),
+    42: ("Soria",),
+    43: ("Tarragona",),
+    44: ("Teruel",),
+    45: ("Toledo",),
+    46: ("Valencia/València", "Valencia", "València"),
+    47: ("Valladolid",),
+    48: ("Bizkaia", "Vizcaya"),
+    49: ("Zamora",),
+    50: ("Zaragoza",),
+    51: ("Ceuta",),
+    52: ("Melilla",),
+}
 
 # Supported OSM modes (walking / bike / driving). Several input synonyms
 # are accepted (Spanish/English), but the resulting layer and file name
@@ -264,8 +325,167 @@ def _find_province_code(gdf: gpd.GeoDataFrame) -> int | None:
 # ---------------------------------------------------------------------------
 # Study-area resolution (municipality -> polygon)
 # ---------------------------------------------------------------------------
+class AmbiguousAreaError(ValueError):
+    """Raised when a name matches several different municipalities.
+
+    Merging them silently produced study areas spanning several provinces
+    (e.g. "San Sebastián" took Donostia, San Sebastián de los Reyes and San
+    Sebastián de los Ballesteros) and a GTFS download for the wrong
+    province. ``candidates`` lists them as ``"Name (Province, code)"``.
+    """
+
+    def __init__(self, area_name: str, candidates: list[str]) -> None:
+        self.area_name = area_name
+        self.candidates = candidates
+        shown = "; ".join(candidates[:15])
+        if len(candidates) > 15:
+            shown += f"; ... ({len(candidates)} in total)"
+        super().__init__(
+            f"'{area_name}' matches {len(candidates)} different areas: {shown}. "
+            "Pass area_code=... (5-digit INE code or NATCODE) or province=... "
+            "to choose one."
+        )
+
+
+# Similarity needed for a fuzzy (typo-tolerant) name match. 0.7 accepted
+# unrelated towns: "Las Palmas" -> Las Valeras (0.73), "Santa Cruz de
+# Tenerife" -> Santa Cruz de Grío (0.73). Adjacent transpositions count as
+# a single edit (see ``_typo_distance``), so real typos such as
+# "Valencai" (0.875) or "Sevila" (0.86) are still accepted.
+FUZZY_MIN_SIMILARITY = 0.8
+
+
 def _existing_columns(gdf: gpd.GeoDataFrame, requested: Iterable[str]) -> list[str]:
     return [column for column in requested if column in gdf.columns]
+
+
+def _typo_distance(left: str, right: str) -> int:
+    """Edit distance counting adjacent transpositions as one edit (OSA)."""
+    if left == right:
+        return 0
+    rows = len(left) + 1
+    cols = len(right) + 1
+    dist = [[0] * cols for _ in range(rows)]
+    for i in range(rows):
+        dist[i][0] = i
+    for j in range(cols):
+        dist[0][j] = j
+    for i in range(1, rows):
+        for j in range(1, cols):
+            cost = left[i - 1] != right[j - 1]
+            dist[i][j] = min(
+                dist[i - 1][j] + 1,
+                dist[i][j - 1] + 1,
+                dist[i - 1][j - 1] + cost,
+            )
+            if (
+                i > 1
+                and j > 1
+                and left[i - 1] == right[j - 2]
+                and left[i - 2] == right[j - 1]
+            ):
+                dist[i][j] = min(dist[i][j], dist[i - 2][j - 2] + 1)
+    return dist[-1][-1]
+
+
+def _typo_similarity(left: str, right: str) -> tuple[float, int]:
+    """0-1 similarity (and distance) based on :func:`_typo_distance`."""
+    max_length = max(len(left), len(right))
+    if max_length == 0:
+        return 1.0, 0
+    distance = _typo_distance(left, right)
+    return 1 - distance / max_length, distance
+
+
+def _name_parts(value: object) -> list[str]:
+    """Return the normalized whole name and each of its bilingual parts.
+
+    Official names are often bilingual, separated by '/'
+    ("Elx/Elche", "Donostia/San Sebastián"); each part is a valid name.
+    """
+    text = "" if value is None else str(value)
+    parts = [normalize_name(text)]
+    if "/" in text:
+        parts.extend(normalize_name(part) for part in text.split("/"))
+    return [part for part in dict.fromkeys(parts) if part]
+
+
+def _row_province_codes(gdf: gpd.GeoDataFrame) -> pd.Series | None:
+    """INE province code of every row, or ``None`` with no code column."""
+    columns = _existing_columns(gdf, PROVINCE_CODE_COLUMNS)
+    if not columns:
+        return None
+    return gdf[columns[0]].map(province_code_from_natcode)
+
+
+def resolve_province_code(province: int | str) -> int:
+    """Turn a province name or INE code (1-52) into the INE code.
+
+    Accepts Spanish and co-official names, with or without accents
+    ("Valencia", "València", "Gerona", "Girona", "Vizcaya", "Bizkaia").
+    """
+    text = str(province).strip()
+    if text.isdigit():
+        code = int(text)
+        if code not in NAP_PROVINCE_IDS:
+            raise ValueError(
+                f"province '{province}' is not valid: INE province codes go "
+                "from 1 to 52."
+            )
+        return code
+    target = normalize_name(text)
+    for code, names in PROVINCE_NAMES.items():
+        if any(target == normalize_name(name) for name in names):
+            return code
+    raise ValueError(
+        f"Unknown province '{province}'. Use the INE code (1-52) or a name "
+        "such as 'Valencia', 'Navarra' or 'A Coruña'."
+    )
+
+
+def _area_label(
+    gdf: gpd.GeoDataFrame,
+    index: object,
+    column: str,
+    id_column: str | None,
+    provinces: pd.Series | None,
+) -> str:
+    """Readable ``"Name (Province, code)"`` label for one boundary row."""
+    details = []
+    if provinces is not None:
+        code = provinces.loc[index]
+        if code is not None and code == code:
+            details.append(PROVINCE_NAMES.get(int(code), (str(code),))[0])
+    if id_column is not None:
+        details.append(str(gdf.loc[index, id_column]))
+    name = str(gdf.loc[index, column])
+    return f"{name} ({', '.join(details)})" if details else name
+
+
+def _pick_single_area(
+    gdf: gpd.GeoDataFrame,
+    mask: pd.Series,
+    column: str,
+    area_name: str,
+    id_column: str | None,
+    provinces: pd.Series | None,
+) -> tuple[gpd.GeoDataFrame, str, str]:
+    """Return the matching rows if they are one area, or raise if several.
+
+    Rows are the same area when they share the official code (a
+    municipality split into several polygons). Without a code column, rows
+    are grouped by the matched name, as before.
+    """
+    rows = gdf.loc[mask]
+    key = rows[id_column].astype(str) if id_column else rows[column].astype(str)
+    if key.nunique() > 1:
+        first_rows = rows.loc[~key.duplicated()]
+        labels = [
+            _area_label(gdf, index, column, id_column, provinces)
+            for index in first_rows.index
+        ]
+        raise AmbiguousAreaError(area_name, labels)
+    return rows.copy(), column, str(rows[column].iloc[0])
 
 
 def _select_area_rows(
@@ -274,14 +494,66 @@ def _select_area_rows(
     area_code: str | None = None,
     name_columns: Iterable[str] | None = None,
     code_columns: Iterable[str] | None = None,
+    province: int | str | None = None,
 ) -> tuple[gpd.GeoDataFrame, str, str]:
+    """Find the boundary rows of exactly one area.
+
+    With ``area_code``, the code must equal a code column's value or, for
+    a 5-digit INE municipality code, be the last five digits of an
+    INSPIRE NATCODE. Otherwise the name is matched in increasingly loose
+    steps, and the first step with a hit decides:
+
+    1. the whole name ("Gijón");
+    2. one part of a bilingual name ("Elche" -> "Elx/Elche");
+    3. whole words inside a name ("Castellón" -> "Castelló de la
+       Plana/Castellón de la Plana", but not "Castellonet");
+    4. any substring;
+    5. a small typo (similarity >= ``FUZZY_MIN_SIMILARITY``).
+
+    Within each step, name columns are tried in order. If the hit covers
+    several different municipalities, :class:`AmbiguousAreaError` is
+    raised instead of merging them; ``province`` (name or INE code)
+    narrows the search to one province first.
+    """
+    code_cols = _existing_columns(gdf, code_columns or DEFAULT_CODE_COLUMNS)
+    id_column = code_cols[0] if code_cols else None
+    provinces = _row_province_codes(gdf)
+
+    if province is not None:
+        province_code = resolve_province_code(province)
+        if provinces is None:
+            raise ValueError(
+                "province=... needs a code column to read the province from "
+                f"({', '.join(PROVINCE_CODE_COLUMNS)}); none is in the file."
+            )
+        in_province = provinces == province_code
+        if not in_province.any():
+            raise ValueError(
+                f"No boundary in the file belongs to province {province_code} "
+                f"({PROVINCE_NAMES[province_code][0]})."
+            )
+        gdf = gdf.loc[in_province]
+        provinces = provinces.loc[in_province]
+
     if area_code:
-        for column in _existing_columns(gdf, code_columns or DEFAULT_CODE_COLUMNS):
-            normalized = gdf[column].astype(str).str.strip()
-            exact_mask = normalized == str(area_code).strip()
+        code = str(area_code).strip()
+        for column in code_cols:
+            values = gdf[column].astype(str).str.strip()
+            exact_mask = values == code
             if exact_mask.any():
-                value = str(gdf.loc[exact_mask, column].iloc[0])
-                return gdf.loc[exact_mask].copy(), column, value
+                return _pick_single_area(
+                    gdf, exact_mask, column, str(area_code), id_column, provinces
+                )
+        if code.isdigit() and len(code) == 5:
+            # INE municipality code: the last five digits of a NATCODE
+            # (``<2 country><2 region><2 province><5 municipality>``).
+            for column in code_cols:
+                values = gdf[column].astype(str).str.strip()
+                ine_mask = (values.str.len() >= 8) & values.str.endswith(code)
+                if ine_mask.any():
+                    return _pick_single_area(
+                        gdf, ine_mask, column, str(area_code), id_column, provinces
+                    )
         raise ValueError(f"No boundary found for code '{area_code}'.")
 
     target = normalize_name(area_name)
@@ -291,43 +563,115 @@ def _select_area_rows(
             "No name column found in the boundaries file. "
             f"Available columns: {list(gdf.columns)}"
         )
+    if not target:
+        raise ValueError("area_name is empty.")
 
-    best_rows = best_column = best_value = None
+    parts_by_column = {column: gdf[column].map(_name_parts) for column in columns}
+    word_pattern = re.compile(rf"(?:^| ){re.escape(target)}(?: |$)")
+    steps = (
+        ("exact", lambda parts: bool(parts) and parts[0] == target),
+        ("bilingual part", lambda parts: target in parts),
+        ("whole words", lambda parts: any(word_pattern.search(p) for p in parts)),
+        ("substring", lambda parts: any(target in p for p in parts)),
+    )
+    for step, matches in steps:
+        for column in columns:
+            mask = parts_by_column[column].map(matches).astype(bool)
+            if mask.any():
+                rows, matched_column, matched_value = _pick_single_area(
+                    gdf, mask, column, area_name, id_column, provinces
+                )
+                # A bilingual part is an official name, as exact as the
+                # whole one; only looser steps are worth a warning.
+                if step not in {"exact", "bilingual part"}:
+                    _warn_inexact_match(area_name, matched_value, step)
+                return rows, matched_column, matched_value
+
+    # 5) Fuzzy match: best similarity over every column and name part.
     best_score = 0.0
-
+    best_masks: list[tuple[str, pd.Series]] = []
     for column in columns:
-        normalized = gdf[column].map(normalize_name)
+        for raw_value in gdf[column].dropna().unique().tolist():
+            score = 0.0
+            for part in _name_parts(raw_value):
+                max_distance = max(2, round(max(len(target), len(part)) * 0.3))
+                if abs(len(target) - len(part)) > max_distance:
+                    continue  # cannot be within reach; skip the full DP
+                part_score, distance = _typo_similarity(target, part)
+                if distance <= max_distance:
+                    score = max(score, part_score)
+            if score < FUZZY_MIN_SIMILARITY or score < best_score - 1e-9:
+                continue
+            mask = gdf[column] == raw_value
+            if score > best_score + 1e-9:
+                best_score, best_masks = score, []
+            best_masks.append((column, mask))
 
-        exact_mask = normalized == target
-        if exact_mask.any():
-            value = str(gdf.loc[exact_mask, column].iloc[0])
-            return gdf.loc[exact_mask].copy(), column, value
-
-        contains_mask = normalized.str.contains(target, regex=False, na=False)
-        if contains_mask.any():
-            value = str(gdf.loc[contains_mask, column].iloc[0])
-            return gdf.loc[contains_mask].copy(), column, value
-
-        for value in normalized.dropna().unique().tolist():
-            distance = levenshtein_distance(target, value)
-            score = levenshtein_similarity(target, value)
-            max_allowed_distance = max(2, round(max(len(target), len(value)) * 0.3))
-            if (
-                distance <= max_allowed_distance
-                and score >= 0.70
-                and score > best_score
-            ):
-                mask = normalized == value
-                best_rows = gdf.loc[mask].copy()
-                best_column = column
-                best_value = str(gdf.loc[mask, column].iloc[0])
-                best_score = score
-
-    if best_rows is None:
+    if not best_masks:
         raise ValueError(f"No boundary found for area '{area_name}'.")
-    assert best_column is not None
-    assert best_value is not None
-    return best_rows, best_column, best_value
+
+    # Every name tied for the best score counts: if they are different
+    # municipalities (e.g. "Gerona" is one edit from both Girona and
+    # Gerena), that is ambiguous rather than a coin toss.
+    column = best_masks[0][0]
+    combined = best_masks[0][1].copy()
+    for _, mask in best_masks[1:]:
+        combined |= mask
+    rows, matched_column, matched_value = _pick_single_area(
+        gdf, combined, column, area_name, id_column, provinces
+    )
+    _warn_inexact_match(area_name, matched_value, f"typo, {best_score:.0%} similar")
+    return rows, matched_column, matched_value
+
+
+def _warn_inexact_match(area_name: str, matched_value: str, how: str) -> None:
+    """Say which area was picked when the name was not an exact match.
+
+    A ``UserWarning`` rather than a log line, because the package logger is
+    silent unless the application configures logging, and a substitution
+    such as "Gerona" -> "Gerena" must not go unnoticed.
+    """
+    warnings.warn(
+        f"'{area_name}' matched '{matched_value}' ({how}). If this is not the "
+        "intended area, pass area_code=... or province=....",
+        UserWarning,
+        stacklevel=4,
+    )
+
+
+def _pick_shapefile(paths: Iterable[str | Path]) -> Path | None:
+    """First real ``.shp`` among extracted paths, skipping macOS metadata.
+
+    Zips made on macOS carry ``__MACOSX/._name.shp`` stubs (a few bytes of
+    resource-fork data) that also end in ``.shp`` but cannot be read.
+    """
+    for raw in paths:
+        path = Path(raw)
+        if (
+            path.suffix.lower() == ".shp"
+            and "__MACOSX" not in path.parts
+            and not path.name.startswith("._")
+        ):
+            return path
+    return None
+
+
+def study_area_geometry(
+    boundary: gpd.GeoDataFrame, *, buffer_m: float = 0.0, crs: str = "EPSG:4326"
+):
+    """Study-area polygon used to download/clip data, optionally buffered.
+
+    ``buffer_m`` widens the area by that many metres (buffered in the local
+    UTM zone), so streets and transit routes that cross the municipal
+    boundary are not cut at it. The exported ``study_area_boundary`` layer
+    is never buffered.
+    """
+    if buffer_m is None or buffer_m == 0:
+        return boundary.to_crs(crs).geometry.iloc[0]
+    if buffer_m < 0:
+        raise ValueError("buffer_m must be zero or positive (metres).")
+    metric = boundary.to_crs(boundary.estimate_utm_crs())
+    return metric.geometry.buffer(buffer_m).to_crs(crs).iloc[0]
 
 
 def find_area_boundary(
@@ -335,6 +679,7 @@ def find_area_boundary(
     boundaries_path: str | Path | None = None,
     *,
     area_code: str | None = None,
+    province: int | str | None = None,
     name_columns: Iterable[str] | None = None,
     code_columns: Iterable[str] | None = None,
     target_crs: str = "EPSG:4326",
@@ -343,9 +688,18 @@ def find_area_boundary(
 
     ``boundaries_path`` must be a shapefile (.shp) or a GeoJSON
     (.geojson/.json). If not given, the packaged municipal-boundary
-    shapefile is used. Name matching is tolerant to accents and typos
-    (Levenshtein).
+    shapefile is used (peninsular Spain, Balearic Islands, Ceuta and
+    Melilla; not the Canary Islands).
+
+    ``area_code`` takes a 5-digit INE municipality code ("46250") or the
+    full INSPIRE NATCODE ("34104646250"). ``province`` (name or INE code)
+    picks between municipalities that share a name, e.g.
+    ``find_area_boundary("Castejón", province="Navarra")``. Name matching
+    is tolerant to accents, bilingual names and small typos; see
+    :func:`_select_area_rows`. If a name matches several municipalities,
+    :class:`AmbiguousAreaError` lists them.
     """
+    using_default_file = boundaries_path is None
     if boundaries_path is None:
         boundaries_path = _default_boundaries_path()
     boundaries_path = Path(boundaries_path)
@@ -366,13 +720,37 @@ def find_area_boundary(
     if gdf.crs is None:
         raise ValueError("Boundaries file has no CRS defined.")
 
-    rows, matched_column, matched_value = _select_area_rows(
-        gdf,
-        area_name,
-        area_code=area_code,
-        name_columns=name_columns,
-        code_columns=code_columns,
-    )
+    try:
+        rows, matched_column, matched_value = _select_area_rows(
+            gdf,
+            area_name,
+            area_code=area_code,
+            name_columns=name_columns,
+            code_columns=code_columns,
+            province=province,
+        )
+    except AmbiguousAreaError:
+        raise
+    except ValueError as exc:
+        if using_default_file and str(exc).startswith("No boundary found"):
+            raise ValueError(
+                f"{exc} The default boundaries file covers peninsular Spain, "
+                "the Balearic Islands, Ceuta and Melilla, but not the Canary "
+                "Islands; for other areas pass boundaries_path=...."
+            ) from None
+        raise
+
+    if "NATLEVNAME" in rows.columns:
+        levels = set(rows["NATLEVNAME"].dropna().astype(str))
+        if levels and levels != {"Municipio"}:
+            warnings.warn(
+                f"'{matched_value}' is not a municipality "
+                f"(NATLEVNAME={', '.join(sorted(levels))}); it belongs to no "
+                "province, so no GTFS data can be downloaded for it.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     rows = rows.to_crs(target_crs)
     geometry = rows.geometry.union_all()
 
@@ -406,6 +784,8 @@ def download_osm_layers(
     output_crs: str = "EPSG:4326",
     simplify: bool = True,
     retain_all: bool = True,
+    buffer_m: float = 0.0,
+    truncate_by_edge: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Download OSM network layers for the given modes and standardizes them.
 
@@ -429,6 +809,11 @@ def download_osm_layers(
     at 25 km/h with a reduced stop penalty; ``driving``: speed from
     ``maxspeed``/road type with a stop penalty based on the arrival node).
     ``travel_speed_kmh`` no longer needs to be specified.
+
+    ``buffer_m`` widens the download area by that many metres (see
+    :func:`study_area_geometry`). ``truncate_by_edge=True`` keeps streets
+    that cross the area's edge (at least one end inside) instead of
+    dropping them, so the network is not disconnected at the boundary.
     """
     try:
         import osmnx as ox
@@ -437,8 +822,7 @@ def download_osm_layers(
             "Install osmnx to download OSM networks: pip install osmnx"
         ) from exc
 
-    area_wgs84 = boundary.to_crs("EPSG:4326")
-    polygon = area_wgs84.geometry.iloc[0]
+    polygon = study_area_geometry(boundary, buffer_m=buffer_m)
     results: dict[str, dict[str, object]] = {}
 
     for mode in modes:
@@ -454,6 +838,7 @@ def download_osm_layers(
             network_type=network_type,
             simplify=simplify,
             retain_all=retain_all,
+            truncate_by_edge=truncate_by_edge,
         )
         nodes, edges = process_osm.build_final_osm_layers(
             graph,
@@ -706,6 +1091,7 @@ def download_gtfs_layers(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_schedule_table: bool = True,
     province_code: int | None = None,
+    buffer_m: float = 0.0,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -720,6 +1106,10 @@ def download_gtfs_layers(
     ``include_schedule_table`` are forwarded to
     ``process_gtfs.normalize_gtfs_feed`` (see that function for details on
     options A/B/C).
+
+    ``buffer_m`` widens the clipping area by that many metres (see
+    :func:`study_area_geometry`), so stops just across the municipal
+    boundary are kept.
     """
     if province_code is None and "province_code" in getattr(boundary, "columns", []):
         value = boundary["province_code"].iloc[0]
@@ -735,7 +1125,7 @@ def download_gtfs_layers(
 
     filter_geometry = None
     if clip_to_boundary and not boundary.empty:
-        filter_geometry = boundary.to_crs("EPSG:4326").geometry.iloc[0]
+        filter_geometry = study_area_geometry(boundary, buffer_m=buffer_m)
 
     results: dict[str, dict[str, object]] = {}
     for zip_path in zips:

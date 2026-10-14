@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Changed
+- OSM edges now use one standard schema in every output format:
+  `edge_id`, `from_node`, `to_node`, `highway`, `hwy_raw`, `lanes`,
+  `maxspeed`, `spd_raw`, `name`, `oneway`, `reversed`, `length`, `tts`,
+  `geometry`.
+- OSM and GTFS edges both produce `from_node` / `to_node` directly
+  (formerly `from_node_id` / `to_node_id`), so both networks use the
+  same names, including the GTFS NetworkX graph and schedule table.
+- All standard edge columns are always written, in that order; columns the
+  network has no tag for are left empty instead of being dropped.
+- The NetworkX `graph.json` for OSM modes is now built from the final
+  standardized layers (split edges, `tts`, standard attribute names)
+  instead of the raw osmnx graph.
+- Area names are matched in steps (whole name, bilingual part, whole
+  words, substring, typo), and a name matching several different
+  municipalities raises `AmbiguousAreaError` listing them instead of
+  merging them. Before, `Elche` merged Elx/Elche with Elche de la Sierra
+  and `San Sebastián` merged three towns in three provinces, and the GTFS
+  province was taken from whichever came first.
+- Fuzzy matching needs 80% similarity (was 70%) and counts adjacent
+  transpositions as one edit, so `Las Palmas` no longer resolves to Las
+  Valeras; a tie between two towns (`Gerona`: Girona / Gerena) is reported
+  as ambiguous.
+- OSM downloads keep streets that cross the study-area edge
+  (`truncate_by_edge=True`).
+- `geopandas>=1.0` is required (`union_all`).
+
+### Added
+- `province=` in `find_area_boundary`, `get_network.main` and `--province`
+  in the CLI, to choose between municipalities that share a name.
+- `area_code` accepts the 5-digit INE municipality code as well as the
+  full NATCODE.
+- `buffer_m=` / `--buffer-m` widens the download and GTFS clipping area;
+  the exported boundary stays exact. Recorded in the manifest.
+- `UserWarning` when the match is looser than an official name, or the area
+  is a non-municipal territory; the not-found error mentions that the
+  default file has no Canary Islands.
+
+### Fixed
+- The boundaries download now has its SHA-256 hash, so pooch verifies it.
+- `__MACOSX/._*.shp` metadata files in the release zip are skipped when
+  picking the shapefile.
+
+
 ## [0.1.3] - 2026-09-30
 
 ### Fixed

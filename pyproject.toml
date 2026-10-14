@@ -34,7 +34,7 @@ classifiers = [
 dependencies = [
   "numpy>=1.26",
   "networkx",
-  "geopandas",
+  "geopandas>=1.0",
   "osmnx",
   "pandas",
   "requests",
