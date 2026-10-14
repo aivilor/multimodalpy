@@ -429,6 +429,30 @@ def test_main_networkx_gtfs_graph_has_the_layer_edge_columns(tmp_path, backends)
     ]
     assert "not_in_whitelist" not in link
 
+def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
+    # The edge s1 -> s3 crosses the boundary: s3 is not in the stops layer.
+    result = make_gtfs_result()
+    edges = gpd.GeoDataFrame(
+        {
+            "edge_id": ["ds1_s1_s3"],
+            "from_node": ["s1"],
+            "to_node": ["s3"],
+            "from_stop_name": ["Stop A"],
+            "to_stop_name": ["Stop C"],
+        },
+        geometry=[LineString([(-0.40, 39.40), (-0.10, 39.70)])],
+        crs="EPSG:4326",
+    )
+    path = get_network._gtfs_to_graph_json(
+        result["nodes"], edges, tmp_path / "graph.json"
+    )
+
+    nodes = {n["id"]: n for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]}
+    assert nodes["s3"]["x"] == pytest.approx(-0.10)
+    assert nodes["s3"]["y"] == pytest.approx(39.70)
+    assert nodes["s3"]["stop_name"] == "Stop C"
+    assert nodes["s1"]["stop_name"] == "Stop A"  # stops-layer node left as is
+
 # ---------------------------------------------------------------------------
 # main(): argument validation (fails before any backend is called)
 # ---------------------------------------------------------------------------

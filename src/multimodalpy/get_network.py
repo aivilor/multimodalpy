@@ -205,6 +205,26 @@ def _osm_layers_to_graph_json(
 
     return _write_node_link_json(graph, output_path)
 
+def _add_missing_gtfs_endpoint(graph, node, row, end: int, name_column: str) -> None:
+    """Give an edge endpoint coordinates when it is not in the stops layer.
+
+    Stops and stop-to-stop edges are clipped separately (each must
+    intersect the study area), so an edge crossing the boundary keeps a
+    stop that the stops layer dropped. Without this, ``add_edge`` would
+    create that node with no ``x`` / ``y``. Its position is taken from the
+    matching end of the edge geometry (``end=0`` start, ``end=-1`` end),
+    already in the output CRS.
+    """
+    if node in graph and graph.nodes[node].get("x") is not None:
+        return
+    geom = row.geometry
+    coords = list(geom.coords) if geom is not None and not geom.is_empty else None
+    graph.add_node(
+        node,
+        x=float(coords[end][0]) if coords else None,
+        y=float(coords[end][1]) if coords else None,
+        stop_name=_json_safe(row.get(name_column)),
+    )
 
 def _gtfs_to_graph_json(
     stops, edges, output_path: Path, edge_columns: Sequence[str] | None = None
@@ -252,7 +272,10 @@ def _gtfs_to_graph_json(
                     attrs[column] = geom.wkt if geom is not None else None
                 else:
                     attrs[column] = _graph_value(row.get(column))
-            graph.add_edge(str(row.get("from_node")), str(row.get("to_node")), **attrs)
+            u, v = str(row.get("from_node")), str(row.get("to_node"))
+            _add_missing_gtfs_endpoint(graph, u, row, 0, "from_stop_name")
+            _add_missing_gtfs_endpoint(graph, v, row, -1, "to_stop_name")
+            graph.add_edge(u, v, **attrs)
 
     return _write_node_link_json(graph, output_path)
 
