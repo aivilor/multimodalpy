@@ -26,7 +26,7 @@ from .get_network import main
 # no haya configurado logging. Se activan con logging.basicConfig(level=...).
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 __all__ = [
     "main",

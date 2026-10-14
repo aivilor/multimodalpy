@@ -14,10 +14,6 @@ Easy creation of multimodal transport networks from OpenStreetMap and GTFS data.
 pip install multimodalpy
 ```
 
-<!-- Once published on the real PyPI, replace the above with:
-pip install multimodalpy
--->
-
 Or install from source:
 
 ```bash
@@ -64,8 +60,8 @@ Full documentation, tutorials, and API reference: <https://multimodalpy.readthed
 ## Getting help & contributing
 
 - Found a bug or have a feature request? [Open an issue](https://github.com/aivilor/multimodalpy/issues).
-- Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the contribution process. <!-- TODO: create this file -->
-- This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). <!-- TODO: create this file -->
+- Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the contribution process. 
+- This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). 
 - Licensed under the [MIT License](LICENSE).
 
 ## Citation
