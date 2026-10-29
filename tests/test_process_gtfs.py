@@ -148,3 +148,91 @@ def test_hourly_summary_kept_when_route_has_no_short_name(feed):
     assert pd.isna(row["route_short_name"])
     assert row["hourly_trip_counts"] == "17-18:1"
     assert row["hourly_travel_times"] == "17-18:240"
+
+
+# ---------------------------------------------------------------------------
+# Clipping to the study area before aggregating
+# ---------------------------------------------------------------------------
+def test_clip_keeps_segments_crossing_the_area_without_a_stop(feed):
+    edges = _edges(feed, filter_geometry=AREA)
+    assert ("W", "E", "R3") in edges.index
+    assert edges.loc[("W", "E", "R3"), "trip_count"] == 1
+
+
+def test_clip_drops_trips_outside_the_area(feed):
+    edges = _edges(feed, filter_geometry=AREA)
+    assert ("X", "Y", "R4") not in edges.index
+    assert set(edges.index.get_level_values("route_id")) == {"R1", "R2", "R3"}
+
+
+def test_clip_gives_the_same_edges_as_clipping_after_aggregating(feed):
+    clipped = _edges(feed, filter_geometry=AREA)
+    everything = _edges(feed)
+    expected = everything[everything.geometry.intersects(AREA)]
+    pd.testing.assert_frame_equal(
+        clipped.drop(columns="geometry"), expected.drop(columns="geometry")
+    )
+
+
+def test_area_without_transit_gives_an_empty_layer_with_all_columns(feed):
+    _, edges, _ = process_gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", filter_geometry=box(10, 10, 11, 11)
+    )
+    assert edges.empty
+    assert {"edge_id", "trip_count", "hourly_trip_counts", "geometry"} <= set(
+        edges.columns
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trip records shared by the edges layer and the schedule table
+# ---------------------------------------------------------------------------
+def _tables(feed):
+    return {
+        name: process_gtfs.read_gtfs_table(feed, f"{name}.txt")
+        for name in ("stop_times", "stops", "trips", "routes", "calendar")
+    }
+
+
+def test_trip_records_are_built_once_with_the_schedule_table(feed, monkeypatch):
+    calls = []
+    build = process_gtfs._build_stop_to_stop_trip_records
+
+    def counting_build(*args, **kwargs):
+        calls.append(1)
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        process_gtfs, "_build_stop_to_stop_trip_records", counting_build
+    )
+    process_gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", include_schedule_table=True
+    )
+    assert len(calls) == 1
+
+
+def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
+    _, edges, schedule = process_gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=True,
+        target_crs=None,
+    )
+    t = _tables(feed)
+    args = (t["stop_times"], t["stops"], t["trips"], t["routes"])
+    standalone_edges = process_gtfs.build_gtfs_stop_to_stop_edges_gdf(
+        *args,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        calendar=t["calendar"],
+    )
+    standalone_schedule = process_gtfs.build_gtfs_schedule_table(
+        *args, dataset_name="ds", calendar=t["calendar"]
+    )
+    pd.testing.assert_frame_equal(
+        edges.reset_index(drop=True), standalone_edges.reset_index(drop=True)
+    )
+    pd.testing.assert_frame_equal(schedule, standalone_schedule)
