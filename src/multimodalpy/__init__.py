@@ -6,11 +6,13 @@ Basic usage:
 
     main("Valencia", modes=["walking", "bike"], output_path="output")
 
-Modules:
-    - process_osm    : OSM data standardization (building intersections).
-    - process_gtfs   : GTFS data standardization + bus/train cleanup.
-    - get_area       : downloads from OSM and GTFS APIs.
-    - get_network    : local download per the user's settings (main()).
+Public modules:
+    - get_network    : main() entry point; downloads, standardizes and writes
+                       the networks per the user's settings.
+    - get_area       : study-area boundary lookup and OSM / GTFS downloads.
+
+OSM and GTFS standardization happen in private modules (``_process_osm``,
+``_process_gtfs``) that are not part of the public API.
 """
 
 from __future__ import annotations

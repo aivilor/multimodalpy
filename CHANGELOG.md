@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Breaking:** `process_osm` and `process_gtfs` are now private modules
+  (`_process_osm`, `_process_gtfs`) and are no longer part of the public API:
+  `multimodalpy.process_osm` and `multimodalpy.process_gtfs` no longer exist,
+  and both modules are gone from the API reference. The public API is
+  `get_network`, `get_area` and the names in `multimodalpy.__all__`. Code that
+  imported them directly should use `get_network.main()` or the `get_area`
+  download functions, which return the standardized layers.
 
 ## [0.2.0] - 2026-10-29
 

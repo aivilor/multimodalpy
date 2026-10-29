@@ -1,5 +1,8 @@
 """GTFS data standardization. Cleans bus + train data.
 
+Private module: not part of the public API, used by ``get_area`` and
+``get_network``.
+
 This module has two parts:
 
 1. Standardization: turns a GTFS feed (zip or folder) into GeoPandas

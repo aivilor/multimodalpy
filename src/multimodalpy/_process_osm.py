@@ -6,7 +6,9 @@ explicit creation of topology nodes (intersections, endpoints and linear
 vertices) from the edges' geometry, so the network stays complete even
 when ``osmnx`` simplifies the routing graph.
 
-Main public functions:
+Private module: not part of the public API, used by ``get_area``.
+
+Main functions:
 
 - ``normalize_osm_graph(graph, ...)``              -> ``(nodes_gdf, edges_gdf)``
 - ``derive_topology_nodes_from_edges(...)``        -> topology nodes layer

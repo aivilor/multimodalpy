@@ -473,7 +473,7 @@ def main(
         repeated, instead of redoing the whole pipeline per format.
     NOTE on the OSM layers (walking/bike/driving): travel time (``tts``, in
         seconds) is computed automatically based on the mode (free-flow
-        speed + stop penalty; see ``process_osm.add_mode_travel_time``), so
+        speed + stop penalty; see "Travel time" in ``DATA_SCHEMA.md``), so
         a constant speed parameter is no longer accepted for OSM.
     gtfs_hour_band_size : int, optional
         If set (e.g. 1), GTFS edges are computed per one-hour band (the
