@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- New output format `matrix` (#63): `output_file_type="matrix"` (or
+  `--output-file-type matrix`) writes each network as one `matrix.npz`, a
+  directed sparse adjacency matrix in CSR form for shortest-path calculations.
+  Walking, bike and driving matrices carry `tts` and `length`; bus and train
+  matrices carry the 18 travel-time columns of the GTFS edge layer. Parallel
+  edges keep the minimum of each weight, and GTFS periods without service are
+  `inf`. The file opens with `scipy.sparse.load_npz`. The layout is described
+  in the "Matrix" section of `DATA_SCHEMA.md`.
+- `multimodalpy.read_matrix()` reads a `matrix.npz` (or its folder) and returns
+  the matrix of one weight as a `scipy.sparse.csr_array`, the node table and
+  the metadata.
+- `scipy` is now a required dependency.
+
 ### Changed
 - **Breaking:** `process_osm` and `process_gtfs` are now private modules
   (`_process_osm`, `_process_gtfs`) and are no longer part of the public API:

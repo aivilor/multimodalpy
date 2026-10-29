@@ -751,7 +751,50 @@ def test_cli_accepts_the_matrix_format(monkeypatch):
     get_network._cli(["--area", "Valencia", "--output-file-type", "matrix"])
 
     assert captured["output_file_type"] == ["matrix"]
-    
+
+
+# ---------------------------------------------------------------------------
+# read_matrix
+# ---------------------------------------------------------------------------
+def test_read_matrix_reads_the_file_or_its_folder(tmp_path, backends):
+    get_network.main(
+        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    )
+
+    by_folder = multimodalpy.read_matrix(tmp_path / "walking")
+    by_file = multimodalpy.read_matrix(tmp_path / "walking" / "matrix.npz")
+
+    assert by_folder.weight == by_file.weight == "tts"
+    assert by_folder.matrix.shape == (2, 2)
+    assert by_folder.matrix.toarray().tolist() == [[0.0, 72.0], [0.0, 0.0]]
+    assert by_folder.nodes["node_id"].tolist() == ["n1", "n2"]
+    assert by_folder.meta["crs"] == "EPSG:4326"
+
+
+def test_read_matrix_loads_the_requested_weight(tmp_path, backends):
+    get_network.main(
+        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    )
+
+    data = multimodalpy.read_matrix(tmp_path / "walking", weight="length")
+
+    assert data.weight == "length"
+    assert data.matrix.toarray()[0, 1] == 100.0
+
+
+def test_read_matrix_rejects_unknown_weights(tmp_path, backends):
+    get_network.main(
+        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    )
+
+    with pytest.raises(ValueError, match="Available: length, tts"):
+        multimodalpy.read_matrix(tmp_path / "walking", weight="tts_m")
+
+
+def test_read_matrix_without_a_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError, match="No matrix file"):
+        multimodalpy.read_matrix(tmp_path)
+
 
 def test_main_shapefile_writes_layer_files(tmp_path, backends):
     manifest = get_network.main(

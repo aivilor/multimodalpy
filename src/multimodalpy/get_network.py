@@ -27,12 +27,13 @@ import shutil
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import networkx as nx
     import pandas as pd
+    from scipy.sparse import csr_array
 
 from . import _process_gtfs, get_area
 
@@ -172,6 +173,93 @@ def read_graph_json(
             if isinstance(geom, str):
                 attrs["geometry"] = wkt.loads(geom)
     return graph
+
+class MatrixData(NamedTuple):
+    """What :func:`read_matrix` returns: ``(matrix, nodes, meta, weight)``."""
+
+    #: Directed adjacency matrix (``scipy.sparse.csr_array``) of the chosen
+    #: weight: row = origin node, column = destination node. A missing entry
+    #: means there is no edge; ``inf`` means the edge exists but cannot be
+    #: travelled with this weight (e.g. a GTFS period with no service).
+    matrix: csr_array
+    #: One row per matrix row, in order: ``layer``, ``node_id``, ``x``, ``y``
+    #: (in ``meta["crs"]``) and ``in_area``.
+    nodes: pd.DataFrame
+    #: File metadata: ``crs``, ``mode``, ``dataset``, ``area``, ``weights``
+    #: (names and units), ``default_weight``, ...
+    meta: dict[str, Any]
+    #: Name of the weight in ``matrix``.
+    weight: str
+
+
+def read_matrix(path: str | Path, weight: str | None = None) -> MatrixData:
+    """Read a ``matrix.npz`` written by the matrix export.
+
+    Parameters
+    ----------
+    path : str | Path
+        The ``matrix.npz`` file, or the folder that holds it (e.g.
+        ``"output/walking"`` or ``"output/bus/<dataset>"``).
+    weight : str, optional
+        Weight to load: ``"tts"`` or ``"length"`` for walking / bike /
+        driving, or one of the GTFS travel-time columns (``"tts_m"``,
+        ``"tm_pam_wd"``, ...) for bus / train. Defaults to the file's
+        default weight (``tts`` for OSM, ``tts_m`` for GTFS). The weights
+        in a file are listed in ``meta["weights"]``.
+
+    Returns
+    -------
+    MatrixData
+        The matrix of that weight, the node table and the metadata.
+
+    Raises
+    ------
+    FileNotFoundError
+        If there is no ``matrix.npz`` at ``path``.
+    ValueError
+        If ``weight`` is not in the file, the file is not a multimodalpy
+        matrix, or it was written by a newer multimodalpy.
+
+    See Also
+    --------
+    main : writes the files with ``output_file_type="matrix"``.
+
+    Notes
+    -----
+    The file layout is described in the "Matrix" section of
+    ``DATA_SCHEMA.md``. It can also be opened without multimodalpy:
+    ``scipy.sparse.load_npz`` returns the default weight, and
+    ``numpy.load`` gives every array.
+
+    Examples
+    --------
+    >>> from scipy.sparse.csgraph import dijkstra  # doctest: +SKIP
+    >>> data = read_matrix("output/walking")  # doctest: +SKIP
+    >>> origin = data.nodes.index[data.nodes["node_id"] == 1234][0]  # doctest: +SKIP
+    >>> seconds = dijkstra(data.matrix, indices=origin, limit=600)  # doctest: +SKIP
+    """
+    # Imported here so ``import multimodalpy`` does not load numpy / pandas.
+    from . import _matrix
+
+    file_path = Path(path)
+    if file_path.is_dir():
+        file_path = file_path / "matrix.npz"
+    if not file_path.is_file():
+        raise FileNotFoundError(f"No matrix file at {file_path}.")
+
+    network = _matrix.read_network_matrix(file_path)
+    name = network.default_weight if weight is None else weight
+    if name not in network.weights:
+        raise ValueError(
+            f"Weight '{name}' is not in {file_path}. "
+            f"Available: {', '.join(sorted(network.weights))}"
+        )
+    return MatrixData(
+        matrix=network.to_scipy(name),
+        nodes=network.nodes,
+        meta=network.meta,
+        weight=name,
+    )
 
 def _graph_value(value: object) -> object:
     """JSON-safe value for a graph attribute (numpy scalars -> Python)."""
