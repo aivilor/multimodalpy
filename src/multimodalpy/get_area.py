@@ -12,8 +12,10 @@ The functions return in-memory objects (GeoDataFrames / graphs). Writing to
 disk in the format chosen by the user is done by
 :mod:`multimodalpy.get_network`.
 
-Credentials: no key is stored in the code. The NAP key is read from the
-``NAP_API_KEY`` environment variable (or a local ``.env`` file).
+Credentials: no key is stored in the code. The NAP key comes from the
+``api_key`` argument, the ``NAP_API_KEY`` environment variable, or a
+``.env`` file in the working folder or one of its parents (see
+:func:`resolve_nap_api_key`).
 """
 
 from __future__ import annotations
@@ -227,17 +229,63 @@ NETWORK_TYPE_TO_LAYER_LABEL = {
 # ---------------------------------------------------------------------------
 # Text / environment utilities
 # ---------------------------------------------------------------------------
-def load_dotenv(env_path: str | Path | None = None) -> None:
-    """Load variables from a ``.env`` file into ``os.environ`` (if it exists)."""
-    path = Path(env_path or ".env")
-    if not path.exists():
-        return
+def find_dotenv(start: str | Path | None = None) -> Path | None:
+    """First ``.env`` file in ``start`` (default: the working folder) or a parent.
+
+    Looking in the parent folders too means a ``.env`` at the root of a
+    project is found when Python runs from a subfolder (e.g. a notebook
+    in ``notebooks/``), not only from the folder that holds it.
+    """
+    folder = Path(start if start is not None else Path.cwd()).resolve()
+    for candidate in (folder, *folder.parents):
+        path = candidate / ".env"
+        if path.is_file():
+            return path
+    return None
+
+
+def load_dotenv(env_path: str | Path | None = None) -> Path | None:
+    """Load variables from a ``.env`` file into ``os.environ``.
+
+    ``env_path`` defaults to the first ``.env`` found by
+    :func:`find_dotenv`. Variables already set in the environment are not
+    overwritten. Returns the file that was read, or ``None`` if there was
+    none.
+    """
+    path = Path(env_path) if env_path is not None else find_dotenv()
+    if path is None or not path.is_file():
+        return None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    return path
+
+
+def resolve_nap_api_key(api_key: str | None = None) -> str | None:
+    """Return the NAP API key to use, or ``None`` if there is none.
+
+    In order of priority: the ``api_key`` argument (``--api-key`` in the
+    command line), the ``NAP_API_KEY`` environment variable, and a
+    ``NAP_API_KEY=...`` line in a ``.env`` file (see :func:`find_dotenv`).
+    """
+    if api_key:
+        return api_key
+    if not os.environ.get("NAP_API_KEY"):
+        load_dotenv()
+    return os.environ.get("NAP_API_KEY") or None
+
+
+def missing_nap_key_message() -> str:
+    """Explain how to provide the NAP key, naming the folders searched."""
+    return (
+        "Missing NAP API key (only needed for bus/train). Pass api_key=... "
+        "(--api-key in the command line), set the NAP_API_KEY environment "
+        "variable, or put NAP_API_KEY=... in a .env file in "
+        f"{Path.cwd()} or one of its parent folders."
+    )
 
 
 def normalize_name(value: object) -> str:
@@ -775,6 +823,148 @@ def find_area_boundary(
 
 
 # ---------------------------------------------------------------------------
+# Multi-part study areas (e.g. Donostia/San Sebastián with its exclaves)
+# ---------------------------------------------------------------------------
+# Extra margin around the convex hull of the parts when looking for the
+# roads that connect them. A connecting route that leaves this area is not
+# found, and the part is reported as unconnected.
+CONNECT_MARGIN_M = 1000.0
+
+
+def _area_parts(polygon) -> list:
+    """Polygons of a (multi)polygon, largest first (part 1 is the main one)."""
+    import geopandas as gpd
+
+    if polygon.geom_type != "MultiPolygon":
+        return [polygon]
+    parts = gpd.GeoSeries(list(polygon.geoms), crs="EPSG:4326")
+    areas = parts.to_crs(parts.estimate_utm_crs()).area
+    return [parts.iloc[i] for i in areas.sort_values(ascending=False).index]
+
+
+def _connection_area(polygon, margin_m: float = CONNECT_MARGIN_M):
+    """Convex hull of all parts plus ``margin_m``, where connecting roads are sought."""
+    import geopandas as gpd
+
+    hull = gpd.GeoSeries([polygon.convex_hull], crs="EPSG:4326")
+    metric = hull.to_crs(hull.estimate_utm_crs())
+    return metric.buffer(margin_m).to_crs("EPSG:4326").iloc[0]
+
+
+def _shortest_edge_key(graph, u, v) -> object:
+    """Key of the shortest of the parallel edges between ``u`` and ``v``."""
+    edges = graph.get_edge_data(u, v)
+    return min(edges, key=lambda key: edges[key].get("length", 0.0))
+
+
+def _connect_parts(graph, area_graph, parts: list) -> tuple[object, list[int]]:
+    """Add to ``area_graph`` the shortest paths joining every part to the main one.
+
+    ``graph`` is the network over the whole connection area and
+    ``area_graph`` the same network cut to the study area. For each part
+    other than the main one (part 1, the largest), the shortest path by
+    ``length`` from the main part to it and the one back are looked up in
+    ``graph``; both are needed because of one-way streets. Edges of those
+    paths that are not already in ``area_graph`` are added with
+    ``connector=True``; every other edge gets ``connector=False``.
+
+    Returns the connected graph and the numbers (1-based, largest part
+    first) of the parts that have streets but could not be reached in both
+    directions. Parts with no streets at all (e.g. a small islet) are
+    skipped.
+    """
+    import networkx as nx
+    import numpy as np
+    import shapely
+
+    connected = area_graph.copy()
+    nx.set_edge_attributes(connected, False, "connector")
+
+    node_ids = np.array(list(area_graph.nodes))
+    xs = np.array([area_graph.nodes[n]["x"] for n in node_ids], dtype=float)
+    ys = np.array([area_graph.nodes[n]["y"] for n in node_ids], dtype=float)
+    part_nodes = [
+        set(node_ids[shapely.contains_xy(part, xs, ys)].tolist()) if len(xs) else set()
+        for part in parts
+    ]
+    main = next((nodes for nodes in part_nodes if nodes), None)
+    if main is None:
+        return connected, []
+
+    # One search from the whole main part in each direction covers every
+    # other part.
+    forward_m, forward = nx.multi_source_dijkstra(graph, main, weight="length")
+    backward_m, backward = nx.multi_source_dijkstra(
+        graph.reverse(copy=False), main, weight="length"
+    )
+
+    def closest_path(nodes, distances, paths):
+        reached = [n for n in nodes if n in distances]
+        if not reached:
+            return None
+        return paths[min(reached, key=lambda n: distances[n])]
+
+    unconnected: list[int] = []
+    for number, nodes in enumerate(part_nodes, start=1):
+        if not nodes or nodes is main:
+            continue
+        to_part = closest_path(nodes, forward_m, forward)
+        from_part = closest_path(nodes, backward_m, backward)
+        if to_part is None or from_part is None:
+            unconnected.append(number)
+            continue
+        steps = list(zip(to_part, to_part[1:], strict=False))
+        # ``backward`` paths run main -> part on the reversed graph, so in
+        # the real network they go part -> main.
+        steps += [(v, u) for u, v in zip(from_part, from_part[1:], strict=False)]
+        for u, v in steps:
+            key = _shortest_edge_key(graph, u, v)
+            if connected.has_edge(u, v, key):
+                continue
+            for node in (u, v):
+                if node not in connected:
+                    connected.add_node(node, **graph.nodes[node])
+            connected.add_edge(
+                u, v, key, **{**graph.edges[u, v, key], "connector": True}
+            )
+    return connected, unconnected
+
+
+def _download_connected_graph(
+    polygon,
+    *,
+    network_type: str,
+    simplify: bool,
+    retain_all: bool,
+    truncate_by_edge: bool,
+):
+    """OSM graph of a multi-part area, with the roads that join its parts.
+
+    The network is downloaded once over the convex hull of the parts (plus
+    ``CONNECT_MARGIN_M``) and then cut to the study area exactly as
+    ``osmnx.graph_from_polygon`` does (simplify over the larger area, then
+    truncate), so the streets inside the area are the same as before. Only
+    the shortest connecting paths are added back (see ``_connect_parts``).
+    """
+    import osmnx as ox
+
+    graph = ox.graph_from_polygon(
+        _connection_area(polygon),
+        network_type=network_type,
+        simplify=simplify,
+        retain_all=True,
+        truncate_by_edge=truncate_by_edge,
+    )
+    area_graph = ox.truncate.truncate_graph_polygon(
+        graph, polygon, truncate_by_edge=truncate_by_edge
+    )
+    connected, unconnected = _connect_parts(graph, area_graph, _area_parts(polygon))
+    if not retain_all:
+        connected = ox.truncate.largest_component(connected, strongly=False)
+    return connected, unconnected
+
+
+# ---------------------------------------------------------------------------
 # OSM download (osmnx) + standardization (process_osm)
 # ---------------------------------------------------------------------------
 def download_osm_layers(
@@ -786,10 +976,12 @@ def download_osm_layers(
     retain_all: bool = True,
     buffer_m: float = 0.0,
     truncate_by_edge: bool = True,
+    connect_parts: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Download OSM network layers for the given modes and standardizes them.
 
-    Returns ``{mode: {"nodes": gdf, "edges": gdf, "graph": osmnx_graph}}``,
+    Returns ``{mode: {"nodes": gdf, "edges": gdf, "graph": osmnx_graph,
+    "unconnected_parts": list[int]}}``,
     where ``mode`` is always the canonical English label ("walking", "bike",
     "driving"), regardless of the synonym used in ``modes`` (e.g. "coche",
     "car", "drive" and "driving" all produce the "driving" key).
@@ -814,6 +1006,15 @@ def download_osm_layers(
     :func:`study_area_geometry`). ``truncate_by_edge=True`` keeps streets
     that cross the area's edge (at least one end inside) instead of
     dropping them, so the network is not disconnected at the boundary.
+
+    ``connect_parts=True`` (the default) joins the parts of a municipality
+    made of several separate polygons (e.g. Donostia/San Sebastián and its
+    exclaves): the shortest roads between them, which run through
+    neighbouring municipalities, are added to the network and marked with
+    ``connector=True`` in the edges layer. Parts are numbered from 1, the
+    largest; any part with streets that cannot be reached is listed in
+    ``unconnected_parts`` and reported with a ``UserWarning``. A
+    single-polygon area is downloaded exactly as before.
     """
     try:
         import osmnx as ox
@@ -833,20 +1034,43 @@ def download_osm_layers(
             raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
         layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
 
-        graph = ox.graph_from_polygon(
-            polygon,
-            network_type=network_type,
-            simplify=simplify,
-            retain_all=retain_all,
-            truncate_by_edge=truncate_by_edge,
-        )
+        unconnected: list[int] = []
+        if connect_parts and polygon.geom_type == "MultiPolygon":
+            graph, unconnected = _download_connected_graph(
+                polygon,
+                network_type=network_type,
+                simplify=simplify,
+                retain_all=retain_all,
+                truncate_by_edge=truncate_by_edge,
+            )
+            if unconnected:
+                warnings.warn(
+                    f"No {layer_key} route was found to part(s) "
+                    f"{', '.join(map(str, unconnected))} of the study area "
+                    f"(numbered from 1, the largest); they stay disconnected.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            graph = ox.graph_from_polygon(
+                polygon,
+                network_type=network_type,
+                simplify=simplify,
+                retain_all=retain_all,
+                truncate_by_edge=truncate_by_edge,
+            )
         nodes, edges = process_osm.build_final_osm_layers(
             graph,
             layer_id=layer_key,
             mode=network_type,
             output_crs=output_crs,
         )
-        results[layer_key] = {"nodes": nodes, "edges": edges, "graph": graph}
+        results[layer_key] = {
+            "nodes": nodes,
+            "edges": edges,
+            "graph": graph,
+            "unconnected_parts": unconnected,
+        }
 
     return results
 
@@ -854,6 +1078,10 @@ def download_osm_layers(
 # ---------------------------------------------------------------------------
 # GTFS download (NAP API) + standardization (process_gtfs)
 # ---------------------------------------------------------------------------
+class NAPAuthenticationError(ValueError):
+    """The NAP API rejected the key (HTTP 401): missing, invalid or expired."""
+
+
 def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
     """GET request to the NAP API with clear handling of network/auth errors.
 
@@ -879,7 +1107,7 @@ def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
         ) from None
 
     if resp.status_code == 401:
-        raise ValueError(
+        raise NAPAuthenticationError(
             f"Authentication error from the NAP API: {resp.text.strip()}. "
             "Check that NAP_API_KEY is valid and hasn't expired."
         )
@@ -911,8 +1139,10 @@ def download_gtfs_nap_zips(
     """Download the NAP GTFS zip files for the study area's province.
 
     NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.
-    The key is taken from ``api_key`` or the ``NAP_API_KEY`` environment
-    variable.
+    The key is taken from ``api_key``, the ``NAP_API_KEY`` environment
+    variable or a ``.env`` file (see :func:`resolve_nap_api_key`). A key
+    the NAP rejects raises :class:`NAPAuthenticationError`, also when it
+    happens while downloading the files.
 
     ``province_code`` is the INE province code (1-52), which is exactly
     the region id understood by the API. This is the reliable path, and
@@ -929,18 +1159,9 @@ def download_gtfs_nap_zips(
     import pandas as pd
     import requests
 
-    if not api_key and not os.environ.get("NAP_API_KEY"):
-        # The key can live in a local .env file (see the module docstring);
-        # without this call it was never read. Variables already set in
-        # the environment take priority over the file.
-        load_dotenv()
-    api_key = api_key or os.environ.get("NAP_API_KEY")
+    api_key = resolve_nap_api_key(api_key)
     if not api_key:
-        raise ValueError(
-            "Missing NAP API key. Set NAP_API_KEY in the environment or a "
-            ".env file, or pass api_key=... (only needed for public-"
-            "transport modes)."
-        )
+        raise ValueError(missing_nap_key_message())
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1038,10 +1259,11 @@ def download_gtfs_nap_zips(
                 "error": None,
             }
             try:
-                link_response = requests.get(
-                    f"{base_url}/fichero/{file_id}/descarga",
-                    headers=headers,
-                    timeout=60,
+                # Through _nap_get, like the other NAP calls, so a rejected
+                # key raises a clear NAPAuthenticationError instead of
+                # becoming one more "failed" row in the report.
+                link_response = _nap_get(
+                    f"{base_url}/fichero/{file_id}/descarga", headers=headers
                 )
                 link_response.raise_for_status()
                 payload = link_response.json().get("data", {})
@@ -1061,7 +1283,9 @@ def download_gtfs_nap_zips(
             except Exception as exc:  # noqa: BLE001 - logged and execution continues
                 row["status"] = "failed"
                 row["error"] = str(exc)
-                if fail_fast:
+                # A rejected key fails every file the same way: stop and
+                # report it, as with fail_fast.
+                if fail_fast or isinstance(exc, NAPAuthenticationError):
                     report_rows.append(row)
                     pd.DataFrame(report_rows).to_csv(
                         output_dir / "nap_download_report.csv", index=False

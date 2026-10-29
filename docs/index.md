@@ -35,8 +35,9 @@ manifest = get_network.main(
 )
 ```
 
-Bus and train (`modes=["bus", "train"]`) also need a free NAP API key in the
-`NAP_API_KEY` environment variable or a `.env` file; see the
+Bus and train (`modes=["bus", "train"]`) also need a free NAP API key, passed
+as `api_key=`, in the `NAP_API_KEY` environment variable or in a `.env` file in
+the working folder or a parent folder; see the
 [README](https://github.com/aivilor/multimodalpy#bus-and-train-nap-api-key).
 Every output column is described in
 [DATA_SCHEMA.md](https://github.com/aivilor/multimodalpy/blob/main/DATA_SCHEMA.md).

@@ -53,13 +53,15 @@ rail at once (Cercanías Renfe). An unreadable feed is treated as bus.
 |---|---|---|
 | `output_file_type` | `"geojson"` | A format or a list of formats. With a list, download and normalisation run once and only the writing step repeats. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer. |
+| `connect_parts` | `True` | Add the roads joining the parts of a multi-part municipality (see "Municipalities in several parts"). |
 | `schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
 | `gtfs_zips` | `False` | Keep the zips downloaded from the NAP. Off by default: they are only the raw input and can be downloaded again. |
 | `multimodal` | `False` | Reserved for the multimodal network, not implemented yet. `True` raises `NotImplementedError`. |
 
 `main()` prints nothing. It returns a manifest with the files written and, when a
 public transport mode was requested but produced no data, a `gtfs_status` field
-saying why. Diagnostic messages go through `logging` and are silent unless the
+saying why. When parts of a multi-part municipality could not be connected, an
+`unconnected_parts` field lists them per mode, e.g. `{"driving": [3]}`. Diagnostic messages go through `logging` and are silent unless the
 application enables them, e.g. `logging.basicConfig(level=logging.INFO)`.
 
 ## Column names
@@ -109,9 +111,10 @@ The abbreviations are listed at the end of this document.
 | `reversed` | boolean | Geometry drawn against the direction of travel |
 | `length` | number | Length in metres |
 | `tts` | number | Travel time in seconds, see below |
+| `connector` | boolean | Road outside the municipality, added to join its parts (see "Municipalities in several parts"); `false` everywhere else |
 | `geometry` | LineString | Edge geometry |
 
-These 14 columns are always present, in this order, in every output format
+These 15 columns are always present, in this order, in every output format
 (GeoPackage, GeoJSON, Shapefile and the NetworkX `graph.json`, where they are
 the edge attributes and `geometry` is WKT). A column the network has no tag for
 (e.g. `lanes` on a walking network) is written empty rather than dropped.
@@ -361,6 +364,19 @@ Melilla, **not the Canary Islands**; use `boundaries_path=` for other areas.
 municipal boundary. `buffer_m` (default 0) widens only the area used to download
 OSM and clip GTFS, so streets and routes crossing the boundary are not cut. OSM
 streets with at least one end inside the area are kept (`truncate_by_edge`).
+
+**Municipalities in several parts.** Some municipalities are several separate
+polygons, e.g. Donostia/San Sebastián and its exclaves. Downloading only inside
+them leaves the walking, bike and driving networks split into islands, because
+the roads between the parts run through neighbouring municipalities. With
+`connect_parts=True` (the default) the network is downloaded once over the
+convex hull of the parts plus 1 km, cut to the municipality as usual, and the
+shortest roads (by length) from the largest part to each other part and back
+are added; both directions are needed because of one-way streets. Only those
+roads are added, marked `connector=True`. Parts are numbered from 1, the largest;
+a part with streets but no road to the others within that area (an island, say)
+stays disconnected, is listed in the manifest's `unconnected_parts` and raises a
+`UserWarning`. Single-polygon municipalities are downloaded exactly as before.
 
 **Municipality → GTFS feeds.** The NAP endpoint `/conjunto-dato/region/{id}`
 only accepts **INE province codes, 1 to 52**. The `/region` listing also returns

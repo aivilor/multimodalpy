@@ -446,6 +446,7 @@ def main(
     gtfs_zips: bool = False,
     province: int | str | None = None,
     buffer_m: float = 0.0,
+    connect_parts: bool = True,
 ) -> dict:
     """Download and standardize a municipality's multimodal network.
 
@@ -491,6 +492,12 @@ def main(
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
         download.
+    api_key : str, optional
+        NAP API key, only needed for "bus" / "train". If not given, it's
+        read from the ``NAP_API_KEY`` environment variable or a ``.env``
+        file in the working folder or one of its parents. It's checked
+        before anything is downloaded: without a key, bus/train are
+        skipped with a ``UserWarning`` and the other layers are written.
     gtfs_zips : bool
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
@@ -503,6 +510,14 @@ def main(
         routes crossing the municipal boundary are not cut at it. The
         exported ``study_area_boundary`` stays the exact boundary.
         Defaults to 0 (no buffer).
+    connect_parts : bool
+        For municipalities made of several separate parts (e.g.
+        Donostia/San Sebastián and its exclaves), add the shortest roads
+        joining the parts to the walking/bike/driving networks, marked
+        ``connector=True``, so the network is not split into islands.
+        Parts that can't be reached are listed in the manifest's
+        ``unconnected_parts``. Defaults to True; has no effect on
+        single-polygon municipalities.
 
     Returns
     -------
@@ -540,6 +555,20 @@ def main(
             output_file_types.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
+
+    # Check the NAP key before downloading anything: otherwise a missing
+    # key only shows up after the OSM step, which can take minutes.
+    gtfs_error: str | None = None
+    if nap_modes:
+        api_key = get_area.resolve_nap_api_key(api_key)
+        if api_key is None:
+            gtfs_error = f"ValueError: {get_area.missing_nap_key_message()}"
+            warnings.warn(
+                f"Bus/train will be skipped. {get_area.missing_nap_key_message()}",
+                UserWarning,
+                stacklevel=2,
+            )
+
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     area_slug = get_area.slugify(area_name)
@@ -571,6 +600,7 @@ def main(
             modes=osm_modes,
             output_crs=crs,
             buffer_m=buffer_m,
+            connect_parts=connect_parts,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
@@ -580,9 +610,8 @@ def main(
 
     # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, pd.DataFrame | None] = {}
-    gtfs_error: str | None = None
     gtfs_zips_dir = output_dir / "gtfs_zips"
-    if nap_modes:
+    if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
         # the manifest, and whatever could be obtained is written anyway.
@@ -738,11 +767,12 @@ def main(
         written_by_format[file_type] = files_here
         written.extend(files_here)
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "area_name": area_name,
         "modes": list(modes),
         "crs": crs,
         "buffer_m": buffer_m,
+        "connect_parts": connect_parts,
         # Returned as it was requested: str if a single format string was
         # passed, list if several were requested.
         "output_file_type": output_file_types[0]
@@ -754,18 +784,27 @@ def main(
         "files": written,
         **({} if single_output_type else {"files_by_format": written_by_format}),
     }
+    unconnected_parts = {
+        mode: out["unconnected_parts"]
+        for mode, out in osm_results.items()
+        if out.get("unconnected_parts")
+    }
+    if unconnected_parts:
+        manifest["unconnected_parts"] = unconnected_parts
     if nap_modes and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"
         # The failure is also logged, but the package logger is silent
         # unless the application configures logging, so without a warning
         # the user just gets a network with no bus/train and no reason.
-        warnings.warn(
-            "No bus/train layers were written: "
-            f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
-            UserWarning,
-            stacklevel=2,
-        )
+        # A missing key was already warned about at the start.
+        if api_key is not None:
+            warnings.warn(
+                "No bus/train layers were written: "
+                f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
+                UserWarning,
+                stacklevel=2,
+            )
     return manifest
 
 
@@ -795,6 +834,13 @@ def _cli(argv: list[str] | None = None) -> None:
         help="Output format(s); accepts several in a single pass.",
     )
     parser.add_argument(
+        "--api-key",
+        help=(
+            "NAP API key for bus/train. Defaults to NAP_API_KEY or a .env file; "
+            "prefer those, since a key typed here stays in the shell history."
+        ),
+    )
+    parser.add_argument(
         "--area-code",
         help="Municipality's 5-digit INE code or INSPIRE NATCODE (optional).",
     )
@@ -807,6 +853,12 @@ def _cli(argv: list[str] | None = None) -> None:
         type=float,
         default=0.0,
         help="Widen the download area by this many metres (default 0).",
+    )
+    parser.add_argument(
+        "--no-connect-parts",
+        dest="connect_parts",
+        action="store_false",
+        help="Don't add the roads joining the parts of a multi-part municipality.",
     )
     parser.add_argument(
         "--clean-gtfs", action="store_true", help="Apply bus/train cleanup."
@@ -846,8 +898,10 @@ def _cli(argv: list[str] | None = None) -> None:
         crs=args.crs,
         output_file_type=args.output_file_type,
         area_code=args.area_code,
+        api_key=args.api_key,
         province=args.province,
         buffer_m=args.buffer_m,
+        connect_parts=args.connect_parts,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         schedule=args.schedule,

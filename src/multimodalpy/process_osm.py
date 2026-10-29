@@ -807,6 +807,7 @@ FINAL_EDGE_COLUMNS = [
     "reversed",
     "length",
     "tts",
+    "connector",
     "geometry",
 ]
 FINAL_EDGE_RENAME = {"osmid": "edge_id"}
@@ -845,7 +846,12 @@ def build_final_osm_layers(
        them and in this order (``STANDARD_EDGE_COLUMNS``): ``edge_id``,
        ``from_node``, ``to_node``, ``highway``, ``hwy_raw``, ``lanes``,
        ``maxspeed``, ``spd_raw``, ``name``, ``oneway``, ``reversed``,
-       ``length``, ``tts``, ``geometry``.
+       ``length``, ``tts``, ``connector``, ``geometry``.
+
+    ``connector`` is ``True`` on the roads added outside the study area to
+    join the parts of a multi-part municipality (the graph's ``connector``
+    edge attribute, see ``get_area.download_osm_layers``) and ``False``
+    everywhere else.
 
     Steps 1-2 run in a projected CRS in metres chosen from the graph
     (``_metric_crs``); both layers are reprojected to ``output_crs`` only
@@ -881,6 +887,12 @@ def build_final_osm_layers(
     if "maxspeed" in edges.columns:
         edges["spd_raw"] = edges["maxspeed"]
         edges["maxspeed"] = edges["maxspeed"].map(_parse_maxspeed_kmh)
+
+    # Only edges added to join the parts of a multi-part area carry
+    # connector=True; edges without the attribute are ordinary ones.
+    edges["connector"] = (
+        edges["connector"].eq(True) if "connector" in edges.columns else False
+    )
 
     # Every standard column is always present, in the standard order,
     # even if this network has no such tag (e.g. no ``lanes`` on a

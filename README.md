@@ -77,20 +77,30 @@ it, so later runs start straight away.
 ### Bus and train: NAP API key
 
 Public transport data comes from the NAP API, which needs a free API key:
-register on the [NAP portal](https://nap.transportes.gob.es) and set the key in
-the `NAP_API_KEY` environment variable, or in a `.env` file in your working
-directory:
+register on the [NAP portal](https://nap.transportes.gob.es). The key is looked
+for in this order:
+
+1. `main(..., api_key="...")`, or `--api-key` in the command line;
+2. the `NAP_API_KEY` environment variable;
+3. a `.env` file in the folder you run Python from **or any parent folder**
+   (so a `.env` at the root of your project also works from `notebooks/`):
 
 ```bash
 NAP_API_KEY=your-key-here
 ```
 
+`.env` is in the repository's `.gitignore`, so the key is not committed by
+accident. Prefer the environment variable or `.env` over `--api-key`, which
+stays in your shell history.
+
 ```python
 manifest = get_network.main("Valencia", modes=["walking", "bus", "train"])
 ```
 
-Without a key, or if the NAP has no feeds for the area, the street layers are
-still written and a warning explains why there is no bus or train data
+The key is checked before anything is downloaded. Without one, a warning says
+so straight away and bus/train are skipped; the street layers are still written.
+If the NAP rejects the key, or has no feeds for the area, the street layers are
+also written and a warning explains why there is no bus or train data
 (`manifest["gtfs_status"]`).
 
 ### Command line
@@ -137,6 +147,7 @@ in [DATA_SCHEMA.md](DATA_SCHEMA.md).
 | `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
+| `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
 | `boundaries_path` | packaged file | Your own boundaries file (Shapefile or GeoJSON). |
 | `schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
@@ -154,7 +165,9 @@ To work with the layers in memory instead, use the functions in
    municipalities, you get the list of candidates and pick one with
    `province` or `area_code`, instead of a merged area.
 2. **Streets.** `osmnx` downloads the OSM network inside the polygon (widened
-   by `buffer_m` if set).
+   by `buffer_m` if set). If the municipality is made of separate parts, the
+   shortest roads joining them are added, so the network is not split into
+   islands.
    `multimodalpy` adds a node at every real intersection, splits the edges
    there and computes a travel time per mode.
 3. **Public transport.** The province's GTFS feeds are downloaded from the NAP,
