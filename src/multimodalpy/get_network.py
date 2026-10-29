@@ -492,6 +492,12 @@ def main(
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
         download.
+    api_key : str, optional
+        NAP API key, only needed for "bus" / "train". If not given, it's
+        read from the ``NAP_API_KEY`` environment variable or a ``.env``
+        file in the working folder or one of its parents. It's checked
+        before anything is downloaded: without a key, bus/train are
+        skipped with a ``UserWarning`` and the other layers are written.
     gtfs_zips : bool
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
@@ -549,6 +555,20 @@ def main(
             output_file_types.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
+
+    # Check the NAP key before downloading anything: otherwise a missing
+    # key only shows up after the OSM step, which can take minutes.
+    gtfs_error: str | None = None
+    if nap_modes:
+        api_key = get_area.resolve_nap_api_key(api_key)
+        if api_key is None:
+            gtfs_error = f"ValueError: {get_area.missing_nap_key_message()}"
+            warnings.warn(
+                f"Bus/train will be skipped. {get_area.missing_nap_key_message()}",
+                UserWarning,
+                stacklevel=2,
+            )
+
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     area_slug = get_area.slugify(area_name)
@@ -590,9 +610,8 @@ def main(
 
     # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, pd.DataFrame | None] = {}
-    gtfs_error: str | None = None
     gtfs_zips_dir = output_dir / "gtfs_zips"
-    if nap_modes:
+    if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
         # the manifest, and whatever could be obtained is written anyway.
@@ -778,12 +797,14 @@ def main(
         # The failure is also logged, but the package logger is silent
         # unless the application configures logging, so without a warning
         # the user just gets a network with no bus/train and no reason.
-        warnings.warn(
-            "No bus/train layers were written: "
-            f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
-            UserWarning,
-            stacklevel=2,
-        )
+        # A missing key was already warned about at the start.
+        if api_key is not None:
+            warnings.warn(
+                "No bus/train layers were written: "
+                f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
+                UserWarning,
+                stacklevel=2,
+            )
     return manifest
 
 
@@ -811,6 +832,13 @@ def _cli(argv: list[str] | None = None) -> None:
         nargs="+",
         choices=sorted(VALID_OUTPUT_TYPES),
         help="Output format(s); accepts several in a single pass.",
+    )
+    parser.add_argument(
+        "--api-key",
+        help=(
+            "NAP API key for bus/train. Defaults to NAP_API_KEY or a .env file; "
+            "prefer those, since a key typed here stays in the shell history."
+        ),
     )
     parser.add_argument(
         "--area-code",
@@ -870,6 +898,7 @@ def _cli(argv: list[str] | None = None) -> None:
         crs=args.crs,
         output_file_type=args.output_file_type,
         area_code=args.area_code,
+        api_key=args.api_key,
         province=args.province,
         buffer_m=args.buffer_m,
         connect_parts=args.connect_parts,

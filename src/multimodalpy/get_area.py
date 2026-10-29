@@ -12,8 +12,10 @@ The functions return in-memory objects (GeoDataFrames / graphs). Writing to
 disk in the format chosen by the user is done by
 :mod:`multimodalpy.get_network`.
 
-Credentials: no key is stored in the code. The NAP key is read from the
-``NAP_API_KEY`` environment variable (or a local ``.env`` file).
+Credentials: no key is stored in the code. The NAP key comes from the
+``api_key`` argument, the ``NAP_API_KEY`` environment variable, or a
+``.env`` file in the working folder or one of its parents (see
+:func:`resolve_nap_api_key`).
 """
 
 from __future__ import annotations
@@ -227,17 +229,63 @@ NETWORK_TYPE_TO_LAYER_LABEL = {
 # ---------------------------------------------------------------------------
 # Text / environment utilities
 # ---------------------------------------------------------------------------
-def load_dotenv(env_path: str | Path | None = None) -> None:
-    """Load variables from a ``.env`` file into ``os.environ`` (if it exists)."""
-    path = Path(env_path or ".env")
-    if not path.exists():
-        return
+def find_dotenv(start: str | Path | None = None) -> Path | None:
+    """First ``.env`` file in ``start`` (default: the working folder) or a parent.
+
+    Looking in the parent folders too means a ``.env`` at the root of a
+    project is found when Python runs from a subfolder (e.g. a notebook
+    in ``notebooks/``), not only from the folder that holds it.
+    """
+    folder = Path(start if start is not None else Path.cwd()).resolve()
+    for candidate in (folder, *folder.parents):
+        path = candidate / ".env"
+        if path.is_file():
+            return path
+    return None
+
+
+def load_dotenv(env_path: str | Path | None = None) -> Path | None:
+    """Load variables from a ``.env`` file into ``os.environ``.
+
+    ``env_path`` defaults to the first ``.env`` found by
+    :func:`find_dotenv`. Variables already set in the environment are not
+    overwritten. Returns the file that was read, or ``None`` if there was
+    none.
+    """
+    path = Path(env_path) if env_path is not None else find_dotenv()
+    if path is None or not path.is_file():
+        return None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    return path
+
+
+def resolve_nap_api_key(api_key: str | None = None) -> str | None:
+    """Return the NAP API key to use, or ``None`` if there is none.
+
+    In order of priority: the ``api_key`` argument (``--api-key`` in the
+    command line), the ``NAP_API_KEY`` environment variable, and a
+    ``NAP_API_KEY=...`` line in a ``.env`` file (see :func:`find_dotenv`).
+    """
+    if api_key:
+        return api_key
+    if not os.environ.get("NAP_API_KEY"):
+        load_dotenv()
+    return os.environ.get("NAP_API_KEY") or None
+
+
+def missing_nap_key_message() -> str:
+    """Explain how to provide the NAP key, naming the folders searched."""
+    return (
+        "Missing NAP API key (only needed for bus/train). Pass api_key=... "
+        "(--api-key in the command line), set the NAP_API_KEY environment "
+        "variable, or put NAP_API_KEY=... in a .env file in "
+        f"{Path.cwd()} or one of its parent folders."
+    )
 
 
 def normalize_name(value: object) -> str:
@@ -1030,6 +1078,10 @@ def download_osm_layers(
 # ---------------------------------------------------------------------------
 # GTFS download (NAP API) + standardization (process_gtfs)
 # ---------------------------------------------------------------------------
+class NAPAuthenticationError(ValueError):
+    """The NAP API rejected the key (HTTP 401): missing, invalid or expired."""
+
+
 def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
     """GET request to the NAP API with clear handling of network/auth errors.
 
@@ -1055,7 +1107,7 @@ def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
         ) from None
 
     if resp.status_code == 401:
-        raise ValueError(
+        raise NAPAuthenticationError(
             f"Authentication error from the NAP API: {resp.text.strip()}. "
             "Check that NAP_API_KEY is valid and hasn't expired."
         )
@@ -1087,8 +1139,10 @@ def download_gtfs_nap_zips(
     """Download the NAP GTFS zip files for the study area's province.
 
     NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.
-    The key is taken from ``api_key`` or the ``NAP_API_KEY`` environment
-    variable.
+    The key is taken from ``api_key``, the ``NAP_API_KEY`` environment
+    variable or a ``.env`` file (see :func:`resolve_nap_api_key`). A key
+    the NAP rejects raises :class:`NAPAuthenticationError`, also when it
+    happens while downloading the files.
 
     ``province_code`` is the INE province code (1-52), which is exactly
     the region id understood by the API. This is the reliable path, and
@@ -1105,18 +1159,9 @@ def download_gtfs_nap_zips(
     import pandas as pd
     import requests
 
-    if not api_key and not os.environ.get("NAP_API_KEY"):
-        # The key can live in a local .env file (see the module docstring);
-        # without this call it was never read. Variables already set in
-        # the environment take priority over the file.
-        load_dotenv()
-    api_key = api_key or os.environ.get("NAP_API_KEY")
+    api_key = resolve_nap_api_key(api_key)
     if not api_key:
-        raise ValueError(
-            "Missing NAP API key. Set NAP_API_KEY in the environment or a "
-            ".env file, or pass api_key=... (only needed for public-"
-            "transport modes)."
-        )
+        raise ValueError(missing_nap_key_message())
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1214,10 +1259,11 @@ def download_gtfs_nap_zips(
                 "error": None,
             }
             try:
-                link_response = requests.get(
-                    f"{base_url}/fichero/{file_id}/descarga",
-                    headers=headers,
-                    timeout=60,
+                # Through _nap_get, like the other NAP calls, so a rejected
+                # key raises a clear NAPAuthenticationError instead of
+                # becoming one more "failed" row in the report.
+                link_response = _nap_get(
+                    f"{base_url}/fichero/{file_id}/descarga", headers=headers
                 )
                 link_response.raise_for_status()
                 payload = link_response.json().get("data", {})
@@ -1237,7 +1283,9 @@ def download_gtfs_nap_zips(
             except Exception as exc:  # noqa: BLE001 - logged and execution continues
                 row["status"] = "failed"
                 row["error"] = str(exc)
-                if fail_fast:
+                # A rejected key fails every file the same way: stop and
+                # report it, as with fail_fast.
+                if fail_fast or isinstance(exc, NAPAuthenticationError):
                     report_rows.append(row)
                     pd.DataFrame(report_rows).to_csv(
                         output_dir / "nap_download_report.csv", index=False
