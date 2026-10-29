@@ -446,6 +446,7 @@ def main(
     gtfs_zips: bool = False,
     province: int | str | None = None,
     buffer_m: float = 0.0,
+    connect_parts: bool = True,
 ) -> dict:
     """Download and standardize a municipality's multimodal network.
 
@@ -503,6 +504,14 @@ def main(
         routes crossing the municipal boundary are not cut at it. The
         exported ``study_area_boundary`` stays the exact boundary.
         Defaults to 0 (no buffer).
+    connect_parts : bool
+        For municipalities made of several separate parts (e.g.
+        Donostia/San Sebastián and its exclaves), add the shortest roads
+        joining the parts to the walking/bike/driving networks, marked
+        ``connector=True``, so the network is not split into islands.
+        Parts that can't be reached are listed in the manifest's
+        ``unconnected_parts``. Defaults to True; has no effect on
+        single-polygon municipalities.
 
     Returns
     -------
@@ -571,6 +580,7 @@ def main(
             modes=osm_modes,
             output_crs=crs,
             buffer_m=buffer_m,
+            connect_parts=connect_parts,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
@@ -738,11 +748,12 @@ def main(
         written_by_format[file_type] = files_here
         written.extend(files_here)
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "area_name": area_name,
         "modes": list(modes),
         "crs": crs,
         "buffer_m": buffer_m,
+        "connect_parts": connect_parts,
         # Returned as it was requested: str if a single format string was
         # passed, list if several were requested.
         "output_file_type": output_file_types[0]
@@ -754,6 +765,13 @@ def main(
         "files": written,
         **({} if single_output_type else {"files_by_format": written_by_format}),
     }
+    unconnected_parts = {
+        mode: out["unconnected_parts"]
+        for mode, out in osm_results.items()
+        if out.get("unconnected_parts")
+    }
+    if unconnected_parts:
+        manifest["unconnected_parts"] = unconnected_parts
     if nap_modes and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"
@@ -809,6 +827,12 @@ def _cli(argv: list[str] | None = None) -> None:
         help="Widen the download area by this many metres (default 0).",
     )
     parser.add_argument(
+        "--no-connect-parts",
+        dest="connect_parts",
+        action="store_false",
+        help="Don't add the roads joining the parts of a multi-part municipality.",
+    )
+    parser.add_argument(
         "--clean-gtfs", action="store_true", help="Apply bus/train cleanup."
     )
     parser.add_argument(
@@ -848,6 +872,7 @@ def _cli(argv: list[str] | None = None) -> None:
         area_code=args.area_code,
         province=args.province,
         buffer_m=args.buffer_m,
+        connect_parts=args.connect_parts,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         schedule=args.schedule,

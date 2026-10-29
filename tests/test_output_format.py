@@ -273,7 +273,7 @@ def test_unreadable_feed_is_treated_as_bus(tmp_path):
 STANDARD_EDGE_COLUMNS = [
     "edge_id", "from_node", "to_node", "highway", "hwy_raw", "lanes",
     "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
-    "geometry",
+    "connector", "geometry",
 ]
 
 
