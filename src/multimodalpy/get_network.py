@@ -199,23 +199,34 @@ def _osm_layers_to_graph_json(
 
     from .process_osm import STANDARD_EDGE_COLUMNS
 
+    def column_values(gdf: gpd.GeoDataFrame, column: str) -> list:
+        # Plain lists instead of ``iterrows()``, which builds a pandas
+        # Series per row: this runs once per edge of the whole network.
+        if column == "geometry":
+            return [None if geom is None else geom.wkt for geom in gdf.geometry]
+        if column in gdf.columns:
+            return gdf[column].tolist()
+        return [None] * len(gdf)
+
     graph = nx.MultiDiGraph(crs=str(edges.crs) if edges.crs is not None else None)
-    for _, row in nodes.iterrows():
-        geom = row.geometry
+    for geom, node_id, node_role in zip(
+        nodes.geometry,
+        column_values(nodes, "node_id"),
+        column_values(nodes, "node_role"),
+        strict=True,
+    ):
         graph.add_node(
-            _graph_value(row.get("node_id")),
+            _graph_value(node_id),
             x=float(geom.x) if geom is not None else None,
             y=float(geom.y) if geom is not None else None,
-            node_role=_graph_value(row.get("node_role")),
+            node_role=_graph_value(node_role),
         )
-    for _, row in edges.iterrows():
-        attrs = {}
-        for column in STANDARD_EDGE_COLUMNS:
-            if column == "geometry":
-                geom = row.geometry
-                attrs[column] = geom.wkt if geom is not None else None
-            else:
-                attrs[column] = _graph_value(row.get(column))
+    values = [column_values(edges, column) for column in STANDARD_EDGE_COLUMNS]
+    for row in zip(*values, strict=True):
+        attrs = {
+            column: value if column == "geometry" else _graph_value(value)
+            for column, value in zip(STANDARD_EDGE_COLUMNS, row, strict=True)
+        }
         graph.add_edge(attrs["from_node"], attrs["to_node"], **attrs)
 
     return _write_node_link_json(graph, output_path)

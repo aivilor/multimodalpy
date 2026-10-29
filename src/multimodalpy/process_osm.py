@@ -98,6 +98,17 @@ def _metric_crs(*gdfs: gpd.GeoDataFrame | None):
     return None
 
 
+def _column_values(gdf: gpd.GeoDataFrame, column: str) -> list:
+    """Values of ``column`` as a plain list, or ``None`` per row if it's absent.
+
+    Equivalent to ``row.get(column)`` inside ``iterrows()``, without
+    building a pandas Series per row.
+    """
+    if column in gdf.columns:
+        return gdf[column].tolist()
+    return [None] * len(gdf)
+
+
 def _iter_line_coords(geometry) -> list[list[tuple[float, float]]]:
     if geometry is None or geometry.is_empty:
         return []
@@ -191,19 +202,21 @@ def derive_topology_nodes_from_edges(
         if not nodes.empty and nodes.crs is not None:
             nodes = nodes.to_crs(work_crs)
 
+    # Plain lists instead of ``iterrows()``, which builds a pandas Series
+    # per row and was most of the cost of this function on large networks.
     original_by_coord: dict[tuple[float, float], dict] = {}
     if not nodes.empty:
-        for _, row in nodes.iterrows():
-            geom = row.geometry
+        attributes = nodes.drop(columns=nodes.geometry.name).to_dict("records")
+        for geom, attrs in zip(nodes.geometry, attributes, strict=True):
             if geom is None or geom.is_empty:
                 continue
             key = _coord_key(geom.x, geom.y, round_digits)
-            original_by_coord.setdefault(key, row.drop(labels="geometry").to_dict())
+            original_by_coord.setdefault(key, attrs)
 
     stats: dict[tuple[float, float], dict[str, object]] = {}
-    for _, edge in edges.iterrows():
+    for edge_geometry in edges.geometry:
         seen_in_feature: set[tuple[float, float]] = set()
-        for part in _iter_line_coords(edge.geometry):
+        for part in _iter_line_coords(edge_geometry):
             if len(part) < 2:
                 continue
 
@@ -347,6 +360,8 @@ def split_edges_with_topology_nodes(
     projected CRS in metres; layers in a geographic CRS are projected for
     the matching and the result is returned in the edges' original CRS.
     """
+    import math
+
     import geopandas as gpd
     from shapely.geometry import LineString
 
@@ -366,22 +381,32 @@ def split_edges_with_topology_nodes(
     ):
         topology_nodes = topology_nodes.to_crs(edges.crs)
 
+    # Plain lists instead of ``iterrows()`` (see
+    # ``derive_topology_nodes_from_edges``). Only ``node_id`` and
+    # ``node_role`` of each topology node are needed here.
     node_lookup: dict[tuple[float, float], dict] = {}
     if topology_nodes is not None and not topology_nodes.empty:
-        for _, row in topology_nodes.iterrows():
-            geom = row.geometry
+        has_node_id = "node_id" in topology_nodes.columns
+        node_ids = _column_values(topology_nodes, "node_id")
+        node_roles = _column_values(topology_nodes, "node_role")
+        for geom, node_id, node_role in zip(
+            topology_nodes.geometry, node_ids, node_roles, strict=True
+        ):
             if geom is None or geom.is_empty:
                 continue
             key = _coord_key(geom.x, geom.y, round_digits)
-            node_lookup[key] = row.to_dict()
+            found = {"node_role": node_role}
+            if has_node_id:  # otherwise from/to fall back to the osmnx u/v
+                found["node_id"] = node_id
+            node_lookup[key] = found
 
     records: list[dict[str, object]] = []
-    for _, edge in edges.iterrows():
-        parts = _iter_line_coords(edge.geometry)
+    edge_attributes = edges.drop(columns=edges.geometry.name).to_dict("records")
+    for edge_geometry, base_attrs in zip(edges.geometry, edge_attributes, strict=True):
+        parts = _iter_line_coords(edge_geometry)
         if not parts:
             continue
 
-        base_attrs = edge.drop(labels="geometry").to_dict()
         edge_length_m = float(base_attrs.get("length") or 0.0)
 
         for part in parts:
@@ -403,8 +428,11 @@ def split_edges_with_topology_nodes(
             # "Planar" length of each micro-segment, only used to
             # distribute the real length (meters) proportionally across
             # the segments.
+            # Same value as ``LineString([a, b]).length``, without creating
+            # a shapely object per micro-segment.
             seg_planar_lengths = [
-                LineString([part[i], part[i + 1]]).length for i in range(len(part) - 1)
+                math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
+                for (x0, y0, *_), (x1, y1, *_) in zip(part, part[1:], strict=False)
             ]
             total_planar = sum(seg_planar_lengths) or 1e-12
             # sliding window, lengths differ by one on purpose
@@ -622,23 +650,35 @@ def add_mode_travel_time(
     profile = MODE_SPEED_PROFILES[mode]
     penalties = MODE_STOP_PENALTIES_SEC.get(mode, {})
 
+    # Plain lists instead of ``iterrows()`` (see
+    # ``derive_topology_nodes_from_edges``).
     node_role_by_id: dict[object, object] = {}
     node_highway_by_id: dict[object, object] = {}
     if nodes is not None and not nodes.empty and "node_id" in nodes.columns:
-        for _, row in nodes.iterrows():
-            node_id = row.get("node_id")
-            node_role_by_id[node_id] = row.get("node_role")
-            node_highway_by_id[node_id] = row.get("highway")
+        for node_id, node_role, node_highway in zip(
+            _column_values(nodes, "node_id"),
+            _column_values(nodes, "node_role"),
+            _column_values(nodes, "highway"),
+            strict=True,
+        ):
+            node_role_by_id[node_id] = node_role
+            node_highway_by_id[node_id] = node_highway
 
     edges = edges.copy()
     travel_times: list[float] = []
-    for _, edge in edges.iterrows():
-        length_m = float(edge.get(length_col) or 0.0)
+    for length, maxspeed, highway, to_node in zip(
+        _column_values(edges, length_col),
+        _column_values(edges, "maxspeed"),
+        _column_values(edges, "highway"),
+        _column_values(edges, to_node_col),
+        strict=True,
+    ):
+        length_m = float(length or 0.0)
 
         if profile.get("use_maxspeed_tag"):
-            speed_kmh = _parse_maxspeed_kmh(edge.get("maxspeed"))
+            speed_kmh = _parse_maxspeed_kmh(maxspeed)
             if not speed_kmh:
-                speed_kmh = _hwy_free_flow_speed_kmh(edge.get("highway"), profile)
+                speed_kmh = _hwy_free_flow_speed_kmh(highway, profile)
         else:
             speed_kmh = cast(float, profile["fallback_speed_kmh"])
 
@@ -653,7 +693,6 @@ def add_mode_travel_time(
 
         penalty_sec = 0.0
         if penalties:
-            to_node = edge.get(to_node_col)
             node_highway_tag = node_highway_by_id.get(to_node)
             node_role = node_role_by_id.get(to_node)
             if node_highway_tag in penalties:
