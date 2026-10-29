@@ -40,6 +40,7 @@ dependencies = [
   "requests",
   "shapely",
   "pooch>=1.8",
+  "scipy>=1.11",
 ]
 
 
