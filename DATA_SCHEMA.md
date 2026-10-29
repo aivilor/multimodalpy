@@ -22,7 +22,8 @@ Shapefile is five files: `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`). GeoPackage is 
 single file at the root holding every layer, so it is not split into folders.
 `schedule.csv` is only written with `schedule=True`. NetworkX writes one `graph.json`
  per mode folder instead of `nodes` and `edges`
-(see [NetworkX graphs](#networkx-graphs-graphjson)).
+(see [NetworkX graphs](#networkx-graphs-graphjson)), and the matrix export one
+`matrix.npz` (see [Matrix](#matrix-matrixnpz)).
 
 
 
@@ -336,6 +337,128 @@ attrs["geometry"]                       # shapely LineString
 Without multimodalpy, use networkx directly:
 `json_graph.node_link_graph(json.load(f), edges="edges")`.
 
+## Matrix (`matrix.npz`)
+
+With `output_file_type="matrix"` each network is written as one `matrix.npz`:
+`<mode>/matrix.npz` for OSM and `<bus|train>/<dataset>/matrix.npz` for GTFS,
+next to `study_area_boundary.geojson`. It is the network as a **directed sparse
+adjacency matrix** in CSR (compressed sparse row) form, made for shortest-path
+calculations such as isochrones: row = origin node, column = destination node,
+and one value per edge for each weight.
+
+It is built from the same final layers as the other formats, but it only keeps
+what a shortest-path calculation needs. Edge geometries, `edge_id`, names and
+trip counts stay in the layers.
+
+### Contents
+
+A `.npz` file is a zip of NumPy arrays, each under a key:
+
+| Key | Type | Content |
+|---|---|---|
+| `format`, `shape`, `indptr`, `indices`, `data` | | The scipy CSR layout. `data` is the default weight again, so `scipy.sparse.load_npz` opens the file directly. |
+| `w_<weight>` | float64 | One vector per weight (`w_tts`, `w_tts_m_pam`, …), aligned with `indices`. |
+| `node_id` | integer (OSM) / text (GTFS) | The `node_id` of each row, as in the `nodes` layer. |
+| `node_x`, `node_y` | float64 | Node position, in the CRS given in `meta`. |
+| `node_in_area` | boolean | `false` for GTFS stops outside the study area (see below). |
+| `node_layer` | text | Network of the node: `walking`, `bike`, `driving`, `bus/<dataset>` or `train/<dataset>`. |
+| `meta` | text | JSON metadata, see below. |
+
+No array holds Python objects, so the file is read without pickle.
+
+### How CSR stores the edges
+
+`indices` and every weight vector list all the edges one after another, grouped
+by origin row and sorted by destination. `indptr` has one value per row plus
+one: the edges leaving row `i` are at positions `indptr[i]` to
+`indptr[i + 1] - 1`. Two equal values in a row mean that node has no outgoing
+edges. With three nodes and the edges A→B 30 s, A→C 50 s, B→C 20 s and
+C→A 45 s:
+
+| | A (0) | B (1) | C (2) |
+|---|---|---|---|
+| **A (0)** | | 30 | 50 |
+| **B (1)** | | | 20 |
+| **C (2)** | 45 | | |
+
+```
+indptr  = [0, 2, 3, 4]
+indices = [1, 2, 2, 0]
+w_tts   = [30, 50, 20, 45]
+```
+
+The matrix is not symmetric: a one-way street, or different times in each
+direction, is an edge in one direction only, or with a different weight in each.
+
+### Weights
+
+| Network | Weights | Unit | Default |
+|---|---|---|---|
+| walking, bike, driving | `tts`, `length` | seconds, metres | `tts` |
+| bus, train | the 18 travel-time columns of the [GTFS edges](#gtfs-edges): `tts_m`, `tts_md`, `tts_mn`, `tts_mx`, `tts_m_pam`, …, `tm_rod_we` | seconds | `tts_m` |
+
+A GTFS matrix only has the weights present in its edge layer.
+
+### Rules
+
+- **One entry per (origin, destination) pair.** Parallel edges (several OSM ways
+  merged into one edge, several routes between the same two stops) keep the
+  **minimum of each weight, taken separately**, so the minimum `tts` and the
+  minimum `length` can come from different edges.
+- **`inf`** means the edge exists but cannot be travelled with that weight, e.g.
+  a GTFS edge with no trips in that period, or a missing value. A missing entry
+  means there is no edge.
+- **Zero weights are kept** as edges; shortest-path algorithms such as scipy's
+  `dijkstra` treat them as free edges.
+- **Self-loops are dropped**: they never shorten a path.
+- **Direction.** OSM edges are already directed (a two-way street is one edge in
+  each direction), so one-way streets are respected.
+- **Node order.** OSM rows follow the `nodes` layer, including isolated nodes,
+  which are rows with no edges. GTFS rows follow the stops layer first, then the
+  stops outside the study area that are reached by an edge crossing the
+  boundary, with `node_in_area = false` and their position taken from the edge
+  geometry, as in the [NetworkX graphs](#networkx-graphs-graphjson).
+
+### Metadata (`meta`)
+
+| Field | Content |
+|---|---|
+| `format_version` | Version of this layout, currently 1. |
+| `layer`, `mode`, `dataset` | Network of the file (`dataset` is `null` for OSM). |
+| `area` | Municipality name passed to `main()`. |
+| `crs` | CRS of `node_x` / `node_y`, the `crs` passed to `main()`. |
+| `weights` | Weight names and units, e.g. `[{"name": "tts", "unit": "s"}, …]`. |
+| `default_weight` | Weight stored in `data`. |
+| `gtfs_periods` | GTFS only: start and end hour of each peak period behind `pam` / `ppm`, e.g. `{"peak_am": [7, 9], "peak_pm": [17, 20]}`. `rod` is every other hour. |
+| `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `main()`, or `null`. |
+| `multimodalpy_version` | Version that wrote the file. |
+
+A newer `format_version` is rejected when reading instead of being misread.
+Later versions may add arrays (for the multimodal network, e.g. an `edge_type`
+per edge), which older readers simply ignore.
+
+### Reading
+
+`multimodalpy.read_matrix` takes the file or its folder and returns the matrix
+of one weight as a `scipy.sparse.csr_array`, the node table and the metadata:
+
+```python
+from scipy.sparse.csgraph import dijkstra
+
+from multimodalpy import read_matrix
+
+data = read_matrix("output/walking")              # default weight: tts
+data.meta["crs"]                                  # 'EPSG:4326'
+origin = data.nodes.index[data.nodes["node_id"] == 1234][0]
+seconds = dijkstra(data.matrix, indices=origin, limit=600)
+reached = data.nodes[seconds <= 600]              # nodes within 10 minutes
+
+peak = read_matrix("output/bus/<dataset>", weight="tm_pam_wd")
+```
+
+Without multimodalpy, `scipy.sparse.load_npz(path)` returns the default weight
+and `numpy.load(path)` every array.
+
 ---
 
 ## From municipality to data
@@ -396,6 +519,9 @@ directly as the region id.
 - `lanes` is still exported as text and can hold `;`-joined values.
 - In the **networkx** export, OSM node ids are integers and GTFS node ids are
   text, so the graphs cannot be joined on node id as they are.
+- In the **matrix** export, the routes between the same two stops are merged
+  into one GTFS edge with the fastest time, and waiting times, frequencies and
+  transfers are not modelled: a GTFS matrix gives in-vehicle travel times only.
 
 ## Abbreviations
 

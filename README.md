@@ -18,7 +18,8 @@ standardizes its transport networks, one layer per mode:
   edges with travel times and trip counts by period of the day.
 
 All modes share the same column names, and the layers are written as GeoJSON,
-Shapefile, GeoPackage or NetworkX graphs, ready for GIS or network analysis.
+Shapefile, GeoPackage, NetworkX graphs or sparse matrices, ready for GIS or
+network analysis.
 
 > **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
 > Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
@@ -137,12 +138,33 @@ output/
 Every column, the travel-time model and how each value is computed are described
 in [DATA_SCHEMA.md](DATA_SCHEMA.md).
 
+### Shortest paths: the matrix format
+
+`output_file_type="matrix"` writes each network as one `matrix.npz`: a directed
+sparse adjacency matrix (CSR) with one vector per weight (`tts` and `length`
+for streets, the travel-time statistics for bus and train). Read it with
+`read_matrix` and pass it to scipy's shortest-path functions:
+
+```python
+from scipy.sparse.csgraph import dijkstra
+
+from multimodalpy import read_matrix
+
+data = read_matrix("output/walking")
+origin = data.nodes.index[data.nodes["node_id"] == 1234][0]
+seconds = dijkstra(data.matrix, indices=origin, limit=600)
+```
+
+For bus and train the matrix holds in-vehicle times only: waiting and transfers
+are not modelled. See the
+[Matrix section of DATA_SCHEMA.md](DATA_SCHEMA.md#matrix-matrixnpz).
+
 ## Main options
 
 | Option | Default | What it does |
 |---|---|---|
 | `modes` | `["walking"]` | Any of `walking`, `bike`, `driving`, `bus`, `train`. Spanish synonyms work too (`caminable`, `bicicleta`, `coche`). |
-| `output_file_type` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, or a list to write several at once. |
+| `output_file_type` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer, e.g. `"EPSG:25830"` for metres in Spain. |
 | `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |

@@ -1,11 +1,10 @@
 """The public API exposes get_network and get_area, not the processing modules."""
 
 from __future__ import annotations
-
 import importlib
-
+import subprocess
+import sys
 import pytest
-
 import multimodalpy
 
 PUBLIC_MODULES = {"get_network", "get_area"}
@@ -16,6 +15,7 @@ def test_all_lists_only_the_public_api():
     assert set(multimodalpy.__all__) == {
         "main",
         "read_graph_json",
+        "read_matrix",
         "find_area_boundary",
         "get_network",
         "get_area",
@@ -40,3 +40,15 @@ def test_star_import_brings_no_processing_module():
     exec("from multimodalpy import *", namespace)
     assert PRIVATE_MODULES.isdisjoint(namespace)
     assert not any(name.startswith("_process") for name in namespace)
+
+
+def test_importing_the_package_does_not_load_the_heavy_dependencies():
+    # Run in a fresh interpreter: other tests have already imported them here.
+    code = (
+        "import sys, multimodalpy; "
+        "print(sorted({'numpy', 'pandas', 'scipy'} & set(sys.modules)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[]"
