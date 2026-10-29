@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+- Municipalities made of several separate parts (e.g. Donostia/San Sebastián
+  and its exclaves) get the shortest roads joining their parts added to the
+  walking, bike and driving networks, so the network is no longer split into
+  islands. On by default; `connect_parts=False` / `--no-connect-parts` turns it
+  off. Parts that cannot be reached are listed in the manifest's
+  `unconnected_parts` and reported with a `UserWarning` (#61).
+- OSM edges have a new standard column, `connector`: `true` on the roads added
+  outside the municipality to join its parts, `false` everywhere else.
+
+
 ## [0.1.5] - 2026-10-14
 
 ### Added

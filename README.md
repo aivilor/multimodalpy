@@ -137,6 +137,7 @@ in [DATA_SCHEMA.md](DATA_SCHEMA.md).
 | `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
+| `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
 | `boundaries_path` | packaged file | Your own boundaries file (Shapefile or GeoJSON). |
 | `schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
@@ -154,7 +155,9 @@ To work with the layers in memory instead, use the functions in
    municipalities, you get the list of candidates and pick one with
    `province` or `area_code`, instead of a merged area.
 2. **Streets.** `osmnx` downloads the OSM network inside the polygon (widened
-   by `buffer_m` if set).
+   by `buffer_m` if set). If the municipality is made of separate parts, the
+   shortest roads joining them are added, so the network is not split into
+   islands.
    `multimodalpy` adds a node at every real intersection, splits the edges
    there and computes a travel time per mode.
 3. **Public transport.** The province's GTFS feeds are downloaded from the NAP,
