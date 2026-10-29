@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unconnected_parts` and reported with a `UserWarning` (#61).
 - OSM edges have a new standard column, `connector`: `true` on the roads added
   outside the municipality to join its parts, `false` everywhere else.
+- `--api-key` command-line option for the NAP API key (#62).
+- `get_area.resolve_nap_api_key()`, `get_area.find_dotenv()` and
+  `get_area.NAPAuthenticationError` (#62).
+
+### Changed
+- The NAP API key is checked at the start of `main()`, before anything is
+  downloaded: without one, a `UserWarning` says so straight away and bus/train
+  are skipped, instead of finding out after the OSM download (#62).
+- A `.env` file is also found in the parent folders of the working folder, and
+  the missing-key message names the folder searched (#62).
+
+### Fixed
+- A key rejected by the NAP while downloading the feed files raised no clear
+  error: each file became a "failed" row in `nap_download_report.csv`. It now
+  stops with `NAPAuthenticationError`, as the other NAP calls do (#62).
+- `.env` and `.venv/` are in `.gitignore`, so a NAP key in `.env` is not
+  committed by accident (#62).
 
 
 ## [0.1.5] - 2026-10-14

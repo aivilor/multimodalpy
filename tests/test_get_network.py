@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import warnings
 from contextlib import closing
 from pathlib import Path
 
@@ -874,3 +875,122 @@ def test_cli_requires_area_and_valid_output_type():
         get_network._cli([])
     with pytest.raises(SystemExit):
         get_network._cli(["--area", "Valencia", "--output-file-type", "csv"])
+
+
+# ---------------------------------------------------------------------------
+# NAP API key: where it is found, early check, rejected key, CLI
+# ---------------------------------------------------------------------------
+def test_dotenv_in_a_parent_folder_is_found(no_env_key, monkeypatch):
+    (no_env_key / ".env").write_text("NAP_API_KEY=from-parent\n", "utf-8")
+    notebooks = no_env_key / "notebooks"
+    notebooks.mkdir()
+    monkeypatch.chdir(notebooks)
+
+    assert get_network.get_area.resolve_nap_api_key() == "from-parent"
+
+
+def test_api_key_argument_beats_environment_and_dotenv(no_env_key, monkeypatch):
+    (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
+    monkeypatch.setenv("NAP_API_KEY", "from-env")
+
+    assert get_network.get_area.resolve_nap_api_key("from-arg") == "from-arg"
+
+
+def test_missing_key_message_says_where_it_looked(no_env_key):
+    assert get_network.get_area.resolve_nap_api_key() is None
+    message = get_network.get_area.missing_nap_key_message()
+    assert str(Path.cwd()) in message
+    assert "--api-key" in message and "NAP_API_KEY" in message
+
+
+def test_load_dotenv_returns_the_file_it_read(no_env_key):
+    assert get_network.get_area.load_dotenv() is None
+    env = no_env_key / ".env"
+    env.write_text("NAP_API_KEY=x\n", "utf-8")
+    assert get_network.get_area.load_dotenv() == env.resolve()
+
+
+class _Response:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+        self.url = "https://nap.example"
+        self.content = b"zip"
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_rejected_key_while_downloading_files_stops_with_auth_error(
+    tmp_path, monkeypatch
+):
+    import requests
+
+    requested = []
+
+    def fake_get(url, headers=None, timeout=None):
+        requested.append(url)
+        if url.endswith("/conjunto-dato/region/46"):
+            dataset = {
+                "id": 1,
+                "nombre": "EMT",
+                "tiposTransporte": [{"id": 1}],
+                "ficheros": [{"id": 10}, {"id": 11}],
+            }
+            return _Response(payload={"data": [dataset]})
+        return _Response(status_code=401, text="Invalid API key")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    with pytest.raises(get_network.get_area.NAPAuthenticationError, match="Invalid"):
+        get_network.get_area.download_gtfs_nap_zips(
+            "Valencia", tmp_path, modes=[1], province_code=46
+        )
+
+    # Stopped at the first file instead of trying (and failing) every one.
+    assert not any(url.endswith("/fichero/11/descarga") for url in requested)
+    report = pd.read_csv(tmp_path / "nap_download_report.csv")
+    assert report["status"].tolist() == ["failed"]
+
+
+def test_main_without_key_warns_before_downloading_and_skips_gtfs(
+    tmp_path, backends, monkeypatch
+):
+    monkeypatch.delenv("NAP_API_KEY")
+    monkeypatch.chdir(tmp_path)  # no .env here or in a parent folder
+    warnings_before_osm = []
+    fake_osm = get_network.get_area.download_osm_layers
+
+    def osm_spy(*args, **kwargs):
+        warnings_before_osm.append(len(caught))
+        return fake_osm(*args, **kwargs)
+
+    monkeypatch.setattr(get_network.get_area, "download_osm_layers", osm_spy)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        manifest = get_network.main(
+            "Valencia", modes=["walking", "bus"], output_path=tmp_path / "out"
+        )
+
+    key_warnings = [w for w in caught if "NAP API key" in str(w.message)]
+    assert len(key_warnings) == 1  # warned once, not again at the end
+    assert warnings_before_osm == [1]  # ...and before the OSM download
+    assert backends["gtfs"] == []  # GTFS download not even attempted
+    assert manifest["gtfs_status"].startswith("ValueError: Missing NAP API key")
+    assert "walking/nodes.geojson" in manifest["files"]
+
+
+def test_cli_forwards_api_key(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+
+    get_network._cli(["--area", "Valencia", "--api-key", "secret"])
+    assert captured["api_key"] == "secret"
+
+    get_network._cli(["--area", "Valencia"])
+    assert captured["api_key"] is None

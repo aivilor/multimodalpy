@@ -77,20 +77,30 @@ it, so later runs start straight away.
 ### Bus and train: NAP API key
 
 Public transport data comes from the NAP API, which needs a free API key:
-register on the [NAP portal](https://nap.transportes.gob.es) and set the key in
-the `NAP_API_KEY` environment variable, or in a `.env` file in your working
-directory:
+register on the [NAP portal](https://nap.transportes.gob.es). The key is looked
+for in this order:
+
+1. `main(..., api_key="...")`, or `--api-key` in the command line;
+2. the `NAP_API_KEY` environment variable;
+3. a `.env` file in the folder you run Python from **or any parent folder**
+   (so a `.env` at the root of your project also works from `notebooks/`):
 
 ```bash
 NAP_API_KEY=your-key-here
 ```
 
+`.env` is in the repository's `.gitignore`, so the key is not committed by
+accident. Prefer the environment variable or `.env` over `--api-key`, which
+stays in your shell history.
+
 ```python
 manifest = get_network.main("Valencia", modes=["walking", "bus", "train"])
 ```
 
-Without a key, or if the NAP has no feeds for the area, the street layers are
-still written and a warning explains why there is no bus or train data
+The key is checked before anything is downloaded. Without one, a warning says
+so straight away and bus/train are skipped; the street layers are still written.
+If the NAP rejects the key, or has no feeds for the area, the street layers are
+also written and a warning explains why there is no bus or train data
 (`manifest["gtfs_status"]`).
 
 ### Command line
