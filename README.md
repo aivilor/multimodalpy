@@ -191,4 +191,29 @@ details are in [DATA_SCHEMA.md](DATA_SCHEMA.md), and changes between versions in
 
 ## Citation
 
-If you use `multimodalpy` in your research, please cite it. Citation metadata is in [`CITATION.cff`](CITATION.cff); on GitHub, use the "Cite this repository" button in the sidebar to get a formatted citation (APA, BibTeX, etc.).
+If you use `multimodalpy` in your research, please cite the software and state
+the version you used. On GitHub, the "Cite this repository" button in the
+sidebar gives a ready-made citation (APA, BibTeX) from
+[`CITATION.cff`](CITATION.cff).
+
+> Villalba Ortiz, A. (2026). *multimodalpy: Easy creation of multimodal
+> transport networks from OpenStreetMap and GTFS data* (Version X.Y.Z)
+> [Computer software]. https://doi.org/10.5281/zenodo.NNNNNNN
+
+```bibtex
+@software{villalba_multimodalpy,
+  author    = {Villalba Ortiz, Aida},
+  title     = {multimodalpy: Easy creation of multimodal transport networks
+               from OpenStreetMap and GTFS data},
+  year      = {2026},
+  version   = {0.2.0},
+  doi       = {10.5281/zenodo.NNNNNNN},
+  url       = {https://github.com/aivilor/multimodalpy},
+  license   = {MIT}
+}
+```
+
+Each release is archived on Zenodo with its own DOI; the DOI above is the one
+for all versions. Use the version DOI listed on the
+[Zenodo record](https://doi.org/10.5281/zenodo.NNNNNNN) when you need to cite
+the exact release you ran.
