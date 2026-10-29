@@ -23,7 +23,7 @@ import pytest
 from shapely.geometry import LineString, Point, box
 
 import multimodalpy
-from multimodalpy import get_network
+from multimodalpy import _matrix, get_network
 
 # Captured at import time, before any test monkeypatches it.
 REAL_FIND_AREA_BOUNDARY = get_network.get_area.find_area_boundary
@@ -645,6 +645,113 @@ def test_main_networkx_writes_graph_json(tmp_path, backends):
     data = json.loads((tmp_path / "walking" / "graph.json").read_text("utf-8"))
     assert len(data["nodes"]) == 2
 
+
+def test_main_matrix_writes_one_npz_per_network(tmp_path, backends):
+    backends["gtfs_result"] = {"ds1": make_gtfs_result("bus")}
+    manifest = get_network.main(
+        "Valencia",
+        modes=["walking", "bus"],
+        output_path=tmp_path,
+        output_file_type="matrix",
+        api_key="secret",
+    )
+
+    assert set(manifest["files"]) == {
+        "study_area_boundary.geojson",
+        "walking/matrix.npz",
+        "bus/ds1/matrix.npz",
+    }
+
+    walking = _matrix.read_network_matrix(tmp_path / "walking" / "matrix.npz")
+    assert walking.nodes["node_id"].tolist() == ["n1", "n2"]
+    assert walking.weights["tts"].tolist() == [72.0]
+    assert walking.weights["length"].tolist() == [100.0]
+    assert walking.meta["area"] == "Valencia"
+    assert walking.meta["crs"] == "EPSG:4326"
+    assert walking.meta["layer"] == "walking"
+
+    # GTFS weights use the short names of the edge layer.
+    bus = _matrix.read_network_matrix(tmp_path / "bus" / "ds1" / "matrix.npz")
+    assert bus.default_weight == "tts_m"
+    assert set(bus.weights) == {"tts_m"}
+    assert bus.weights["tts_m"].tolist() == [95.0]
+    assert bus.nodes["layer"].unique().tolist() == ["bus/ds1"]
+    assert bus.meta["gtfs_periods"] == {"peak_am": [7, 9], "peak_pm": [17, 20]}
+    assert bus.meta["gtfs_hour_range"] is None
+
+
+def test_main_matrix_records_custom_gtfs_settings(tmp_path, backends):
+    backends["gtfs_result"] = {"ds1": make_gtfs_result("train")}
+    get_network.main(
+        "Valencia",
+        modes=["train"],
+        output_path=tmp_path,
+        output_file_type="matrix",
+        api_key="secret",
+        gtfs_peak_periods={"peak_am": (6, 9)},
+        gtfs_hour_range=(6, 22),
+    )
+
+    train = _matrix.read_network_matrix(tmp_path / "train" / "ds1" / "matrix.npz")
+    assert train.meta["gtfs_periods"] == {"peak_am": [6, 9]}
+    assert train.meta["gtfs_hour_range"] == [6, 22]
+
+
+def test_main_matrix_writes_the_schedule_as_csv(tmp_path, backends):
+    backends["gtfs_result"] = {"ds1": make_gtfs_result()}
+    manifest = get_network.main(
+        "Valencia",
+        modes=["bus"],
+        output_path=tmp_path,
+        output_file_type="matrix",
+        api_key="secret",
+        schedule=True,
+    )
+    assert "bus/ds1/schedule.csv" in manifest["files"]
+    assert (tmp_path / "bus" / "ds1" / "schedule.csv").is_file()
+
+
+def test_main_matrix_combines_with_other_formats(tmp_path, backends):
+    manifest = get_network.main(
+        "Valencia",
+        modes=["walking"],
+        output_path=tmp_path,
+        output_file_type=["geojson", "matrix"],
+    )
+
+    assert manifest["files_by_format"]["matrix"] == [
+        "study_area_boundary.geojson",
+        "walking/matrix.npz",
+    ]
+    assert "walking/edges.geojson" in manifest["files_by_format"]["geojson"]
+    # Same network in both formats: one edge, the same travel time.
+    edges = gpd.read_file(tmp_path / "walking" / "edges.geojson")
+    matrix = _matrix.read_network_matrix(tmp_path / "walking" / "matrix.npz")
+    assert matrix.weights["tts"].tolist() == edges["tts"].tolist()
+
+
+def test_main_matrix_skips_networks_without_edges(tmp_path, backends):
+    empty = make_gtfs_result()
+    empty["edges"] = empty["edges"].iloc[0:0]
+    backends["gtfs_result"] = {"ds1": empty}
+    manifest = get_network.main(
+        "Valencia",
+        modes=["bus"],
+        output_path=tmp_path,
+        output_file_type="matrix",
+        api_key="secret",
+    )
+    assert manifest["files"] == ["study_area_boundary.geojson"]
+
+
+def test_cli_accepts_the_matrix_format(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+
+    get_network._cli(["--area", "Valencia", "--output-file-type", "matrix"])
+
+    assert captured["output_file_type"] == ["matrix"]
+    
 
 def test_main_shapefile_writes_layer_files(tmp_path, backends):
     manifest = get_network.main(
