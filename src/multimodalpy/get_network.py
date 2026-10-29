@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     import networkx as nx
     import pandas as pd
 
-from . import get_area, process_gtfs
+from . import _process_gtfs, get_area
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def _osm_layers_to_graph_json(
     import networkx as nx
     from networkx.readwrite import json_graph
 
-    from .process_osm import STANDARD_EDGE_COLUMNS
+    from ._process_osm import STANDARD_EDGE_COLUMNS
 
     def column_values(gdf: gpd.GeoDataFrame, column: str) -> list:
         # Plain lists instead of ``iterrows()``, which builds a pandas
@@ -473,7 +473,7 @@ def main(
         repeated, instead of redoing the whole pipeline per format.
     NOTE on the OSM layers (walking/bike/driving): travel time (``tts``, in
         seconds) is computed automatically based on the mode (free-flow
-        speed + stop penalty; see ``process_osm.add_mode_travel_time``), so
+        speed + stop penalty; see "Travel time" in ``DATA_SCHEMA.md``), so
         a constant speed parameter is no longer accepted for OSM.
     gtfs_hour_band_size : int, optional
         If set (e.g. 1), GTFS edges are computed per one-hour band (the
@@ -673,7 +673,7 @@ def main(
         # default period names (peak_am/peak_pm/rest_of_day); if a custom
         # ``gtfs_peak_periods`` is passed with other names, its combined
         # columns aren't filtered here automatically.
-        for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
+        for period_name in list(_process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
             "rest_of_day"
         ]:
             for day_type_name in ("weekday", "weekend"):

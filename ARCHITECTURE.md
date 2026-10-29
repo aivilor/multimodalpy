@@ -22,8 +22,8 @@ multimodalpy/
 │       ├── get_area.py        # study-area boundary resolution (pooch-fetched
 │       │                      # default boundaries; see DATA_SCHEMA.md)
 │       ├── get_network.py     # main() entry point: OSM + GTFS -> network
-│       ├── process_osm.py     # OSM download/normalization per mode
-│       └── process_gtfs.py    # GTFS download/normalization via NAP
+│       ├── _process_osm.py     # private: OSM normalization per mode
+│       └── _process_gtfs.py    # private: GTFS normalization
 │
 ├── tests/
 │   ├── test_get_area_cities.py

@@ -1,12 +1,14 @@
-"""Downloads data from the OSM and GTFS APIs, and calls process_osm / process_gtfs.
+"""Resolves the study area and downloads its OSM and GTFS network layers.
 
 This module resolves a study area (municipality) from an administrative
 boundaries file and downloads the network layers:
 
-- OSM (via ``osmnx``) for walking / bike / driving modes, normalizing the
-  result with :mod:`multimodalpy.process_osm`.
+- OSM (via ``osmnx``) for walking / bike / driving modes.
 - Official GTFS (via the NAP API, Spain's National Access Point) for bus /
-  train, normalizing the result with :mod:`multimodalpy.process_gtfs`.
+  train.
+
+Both are returned already standardized, with the columns described in
+``DATA_SCHEMA.md``.
 
 The functions return in-memory objects (GeoDataFrames / graphs). Writing to
 disk in the format chosen by the user is done by
@@ -30,7 +32,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import process_gtfs, process_osm
+from . import _process_gtfs, _process_osm
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -965,7 +967,7 @@ def _download_connected_graph(
 
 
 # ---------------------------------------------------------------------------
-# OSM download (osmnx) + standardization (process_osm)
+# OSM download (osmnx) + standardization (_process_osm)
 # ---------------------------------------------------------------------------
 def download_osm_layers(
     boundary: gpd.GeoDataFrame,
@@ -987,7 +989,7 @@ def download_osm_layers(
     "car", "drive" and "driving" all produce the "driving" key).
 
     ``nodes``/``edges`` are already the final layers, ready to export (see
-    :func:`multimodalpy.process_osm.build_final_osm_layers`):
+    the "OSM nodes" and "OSM edges" sections of ``DATA_SCHEMA.md``):
 
     - ``nodes``: ``node_id``, ``node_role``, ``geometry``.
     - ``edges``: ``edge_id``, ``from_node``, ``to_node``, ``highway``,
@@ -1059,7 +1061,7 @@ def download_osm_layers(
                 retain_all=retain_all,
                 truncate_by_edge=truncate_by_edge,
             )
-        nodes, edges = process_osm.build_final_osm_layers(
+        nodes, edges = _process_osm.build_final_osm_layers(
             graph,
             layer_id=layer_key,
             mode=network_type,
@@ -1076,7 +1078,7 @@ def download_osm_layers(
 
 
 # ---------------------------------------------------------------------------
-# GTFS download (NAP API) + standardization (process_gtfs)
+# GTFS download (NAP API) + standardization (_process_gtfs)
 # ---------------------------------------------------------------------------
 class NAPAuthenticationError(ValueError):
     """The NAP API rejected the key (HTTP 401): missing, invalid or expired."""
@@ -1327,9 +1329,9 @@ def download_gtfs_layers(
     :func:`find_area_boundary`). See :func:`download_gtfs_nap_zips`.
 
     ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
-    ``include_schedule_table`` are forwarded to
-    ``process_gtfs.normalize_gtfs_feed`` (see that function for details on
-    options A/B/C).
+    ``include_schedule_table`` are forwarded to the GTFS standardization
+    step; the resulting columns are described in the "GTFS edges" and
+    "GTFS schedule" sections of ``DATA_SCHEMA.md``.
 
     ``buffer_m`` widens the clipping area by that many metres (see
     :func:`study_area_geometry`), so stops just across the municipal
@@ -1355,7 +1357,7 @@ def download_gtfs_layers(
     for zip_path in zips:
         dataset_name = slugify(Path(zip_path).stem)
         try:
-            stops, stop_edges, schedule = process_gtfs.normalize_gtfs_feed(
+            stops, stop_edges, schedule = _process_gtfs.normalize_gtfs_feed(
                 zip_path,
                 dataset_name=dataset_name,
                 layer_id=dataset_name,
@@ -1375,6 +1377,6 @@ def download_gtfs_layers(
             "schedule": schedule,
             # "bus" or "train", inferred from the feed's route_type. Used
             # by get_network to decide the dataset's output folder.
-            "mode": process_gtfs.infer_transport_mode(zip_path),
+            "mode": _process_gtfs.infer_transport_mode(zip_path),
         }
     return results

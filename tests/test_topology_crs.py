@@ -15,7 +15,7 @@ import networkx as nx
 import pytest
 from shapely.geometry import LineString
 
-from multimodalpy import process_osm
+from multimodalpy import _process_osm as process_osm
 
 # Centre of Valencia; the grid spacing is ~20 m in both directions, well
 # below the ~100 m that 3 decimals of a degree represent.
