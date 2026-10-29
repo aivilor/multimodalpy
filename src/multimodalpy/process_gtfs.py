@@ -240,6 +240,33 @@ def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
     return "|".join(f"{label}:{value:g}" for label, value in items)
 
 
+def _pack_by_group(
+    rows: pd.DataFrame,
+    group_cols: list[str],
+    label_col: str,
+    value_col: str,
+    *,
+    decimals: int = 0,
+) -> pd.Series:
+    """Vectorized ``_pack_key_value`` for every group at once.
+
+    Returns one ``'label:value|label:value'`` string per group (indexed by
+    ``group_cols``), with the same format, rounding and label order as
+    ``_pack_key_value``. Groups whose values are all NaN are left out.
+    Calling ``_pack_key_value`` once per group through ``groupby.apply``
+    took most of the GTFS processing time on large feeds.
+    """
+    work = rows[group_cols + [label_col, value_col]].dropna(
+        subset=[label_col, value_col]
+    )
+    work = work.sort_values(label_col, kind="stable")
+    values = work[value_col].astype(float).round(decimals)
+    tokens = work[label_col].astype(str) + ":" + [f"{value:g}" for value in values]
+    return tokens.groupby(
+        [work[column] for column in group_cols], dropna=False, sort=False
+    ).agg("|".join)
+
+
 # ---------------------------------------------------------------------------
 # Building the normalized layers
 # ---------------------------------------------------------------------------
@@ -901,24 +928,25 @@ def build_gtfs_stop_to_stop_edges_gdf(
                 )
                 .reset_index()
             )
-            packed = (
-                hour_grouped.groupby(group_cols)
-                .apply(
-                    lambda df: pd.Series(
-                        {
-                            "hourly_travel_times": _pack_key_value(
-                                df.set_index("hour_band")["travel_time_seconds_mean"]
-                            ),
-                            "hourly_trip_counts": _pack_key_value(
-                                df.set_index("hour_band")["trip_count"]
-                            ),
-                        }
+            # Grouped with dropna=False: edges whose route has no
+            # route_short_name (or another empty grouping column) used to
+            # lose their hourly summary.
+            packed = pd.concat(
+                {
+                    "hourly_travel_times": _pack_by_group(
+                        hour_grouped,
+                        group_cols,
+                        "hour_band",
+                        "travel_time_seconds_mean",
                     ),
-                    include_groups=False,
-                )
-                .reset_index()
+                    "hourly_trip_counts": _pack_by_group(
+                        hour_grouped, group_cols, "hour_band", "trip_count"
+                    ),
+                },
+                axis=1,
             )
-            grouped = grouped.merge(packed, on=group_cols, how="left")
+            packed.index.names = group_cols
+            grouped = grouped.merge(packed.reset_index(), on=group_cols, how="left")
         for col in ("hourly_travel_times", "hourly_trip_counts"):
             if col not in grouped.columns:
                 grouped[col] = None
