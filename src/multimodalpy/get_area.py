@@ -30,7 +30,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import process_gtfs, process_osm
+from . import _process_gtfs, _process_osm
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -965,7 +965,7 @@ def _download_connected_graph(
 
 
 # ---------------------------------------------------------------------------
-# OSM download (osmnx) + standardization (process_osm)
+# OSM download (osmnx) + standardization (_process_osm)
 # ---------------------------------------------------------------------------
 def download_osm_layers(
     boundary: gpd.GeoDataFrame,
@@ -1059,7 +1059,7 @@ def download_osm_layers(
                 retain_all=retain_all,
                 truncate_by_edge=truncate_by_edge,
             )
-        nodes, edges = process_osm.build_final_osm_layers(
+        nodes, edges = _process_osm.build_final_osm_layers(
             graph,
             layer_id=layer_key,
             mode=network_type,
@@ -1076,7 +1076,7 @@ def download_osm_layers(
 
 
 # ---------------------------------------------------------------------------
-# GTFS download (NAP API) + standardization (process_gtfs)
+# GTFS download (NAP API) + standardization (_process_gtfs)
 # ---------------------------------------------------------------------------
 class NAPAuthenticationError(ValueError):
     """The NAP API rejected the key (HTTP 401): missing, invalid or expired."""
@@ -1355,7 +1355,7 @@ def download_gtfs_layers(
     for zip_path in zips:
         dataset_name = slugify(Path(zip_path).stem)
         try:
-            stops, stop_edges, schedule = process_gtfs.normalize_gtfs_feed(
+            stops, stop_edges, schedule = _process_gtfs.normalize_gtfs_feed(
                 zip_path,
                 dataset_name=dataset_name,
                 layer_id=dataset_name,
@@ -1375,6 +1375,6 @@ def download_gtfs_layers(
             "schedule": schedule,
             # "bus" or "train", inferred from the feed's route_type. Used
             # by get_network to decide the dataset's output folder.
-            "mode": process_gtfs.infer_transport_mode(zip_path),
+            "mode": _process_gtfs.infer_transport_mode(zip_path),
         }
     return results

@@ -24,7 +24,8 @@ import osmnx as ox
 import pytest
 from shapely.geometry import MultiPolygon, Point, box
 
-from multimodalpy import get_area, get_network, process_osm
+from multimodalpy import _process_osm as process_osm
+from multimodalpy import get_area, get_network
 
 LON0, LAT0 = -2.0, 43.28
 KM_LON = 1 / (111.32 * math.cos(math.radians(LAT0)))

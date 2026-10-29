@@ -1,4 +1,4 @@
-"""Tests for GTFS normalization (process_gtfs), including the fast paths.
+"""Tests for GTFS normalization (_process_gtfs), including the fast paths.
 
 The feeds are tiny zips written to ``tmp_path``, so no network is needed.
 """
@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 
-from multimodalpy import process_gtfs
+from multimodalpy import _process_gtfs as process_gtfs
 
 # A 0.1 x 0.1 degree study area.
 AREA = box(-0.45, 39.42, -0.35, 39.52)

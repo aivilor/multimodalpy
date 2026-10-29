@@ -18,10 +18,9 @@ from __future__ import annotations
 import logging
 from importlib.metadata import PackageNotFoundError, version
 
-from . import get_area, get_network, process_gtfs, process_osm
+from . import get_area, get_network
 from .get_area import find_area_boundary
 from .get_network import main, read_graph_json
-
 
 # A library shouldn't write to the terminal on its own: without this
 # handler, Python would print WARNING-level alerts to stderr even if the
@@ -40,7 +39,5 @@ __all__ = [
     "find_area_boundary",
     "get_network",
     "get_area",
-    "process_osm",
-    "process_gtfs",
     "__version__",
 ]
