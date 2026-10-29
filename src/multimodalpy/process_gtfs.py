@@ -138,6 +138,38 @@ def _filter_by_geometry(gdf: gpd.GeoDataFrame, filter_geometry) -> gpd.GeoDataFr
     return gdf[gdf.geometry.intersects(filter_geometry)].copy()
 
 
+_SEGMENT_COORD_COLUMNS = [
+    "from_stop_lon",
+    "from_stop_lat",
+    "to_stop_lon",
+    "to_stop_lat",
+]
+
+
+def _filter_records_by_geometry(records: pd.DataFrame, filter_geometry) -> pd.DataFrame:
+    """Keep the trip records whose stop-to-stop segment touches ``filter_geometry``.
+
+    Applies the same test as the final ``_filter_by_geometry`` on the edges
+    layer (the straight from-stop -> to-stop line intersects the area), but
+    before aggregating, so the trips of the rest of the province are not
+    aggregated only to be thrown away. Each distinct segment is tested
+    once. A segment that crosses the area without stopping in it is kept,
+    as before.
+    """
+    import pandas as pd
+    import shapely
+
+    if filter_geometry is None or records.empty:
+        return records
+    segments = records[_SEGMENT_COORD_COLUMNS].drop_duplicates()
+    lines = shapely.linestrings(segments.to_numpy(dtype=float).reshape(-1, 2, 2))
+    inside = segments[shapely.intersects(lines, filter_geometry)]
+    keep = pd.MultiIndex.from_frame(records[_SEGMENT_COORD_COLUMNS]).isin(
+        pd.MultiIndex.from_frame(inside)
+    )
+    return records[keep]
+
+
 # ---------------------------------------------------------------------------
 # GTFS times (allow values >= 24:00:00 for overnight services)
 # ---------------------------------------------------------------------------
@@ -238,6 +270,33 @@ def _pack_key_value(pairs: pd.Series, *, decimals: int = 0) -> str | None:
     if not items:
         return None
     return "|".join(f"{label}:{value:g}" for label, value in items)
+
+
+def _pack_by_group(
+    rows: pd.DataFrame,
+    group_cols: list[str],
+    label_col: str,
+    value_col: str,
+    *,
+    decimals: int = 0,
+) -> pd.Series:
+    """Vectorized ``_pack_key_value`` for every group at once.
+
+    Returns one ``'label:value|label:value'`` string per group (indexed by
+    ``group_cols``), with the same format, rounding and label order as
+    ``_pack_key_value``. Groups whose values are all NaN are left out.
+    Calling ``_pack_key_value`` once per group through ``groupby.apply``
+    took most of the GTFS processing time on large feeds.
+    """
+    work = rows[group_cols + [label_col, value_col]].dropna(
+        subset=[label_col, value_col]
+    )
+    work = work.sort_values(label_col, kind="stable")
+    values = work[value_col].astype(float).round(decimals)
+    tokens = work[label_col].astype(str) + ":" + [f"{value:g}" for value in values]
+    return tokens.groupby(
+        [work[column] for column in group_cols], dropna=False, sort=False
+    ).agg("|".join)
 
 
 # ---------------------------------------------------------------------------
@@ -628,26 +687,32 @@ def build_gtfs_schedule_table(
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
+    records: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Option B: a flat table (no geometry), one record per trip and segment.
 
     Meant to be joined with the ``edges`` layer by ``edge_id`` when the
     full schedule detail is needed (every step of every trip), without
     losing that granularity in the aggregated spatial layer.
+
+    ``records`` takes the output of ``_build_stop_to_stop_trip_records``
+    if it was already built with the same arguments (as
+    ``normalize_gtfs_feed`` does), so it is not built a second time.
     """
-    records = _build_stop_to_stop_trip_records(
-        stop_times,
-        stops,
-        trips,
-        routes,
-        dataset_name=dataset_name,
-        calendar=calendar,
-        calendar_dates=calendar_dates,
-        frequencies=frequencies,
-        hour_band_size=hour_band_size,
-        hour_range=hour_range,
-        peak_periods=peak_periods,
-    )
+    if records is None:
+        records = _build_stop_to_stop_trip_records(
+            stop_times,
+            stops,
+            trips,
+            routes,
+            dataset_name=dataset_name,
+            calendar=calendar,
+            calendar_dates=calendar_dates,
+            frequencies=frequencies,
+            hour_band_size=hour_band_size,
+            hour_range=hour_range,
+            peak_periods=peak_periods,
+        )
     columns = _existing_columns(
         records,
         [
@@ -740,6 +805,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
+    records: pd.DataFrame | None = None,
 ) -> gpd.GeoDataFrame:
     """Build the stop-to-stop edges layer: one row per pair of stops.
 
@@ -773,24 +839,36 @@ def build_gtfs_stop_to_stop_edges_gdf(
 
     For the full per-trip detail (not aggregated at all), use
     ``build_gtfs_schedule_table`` (option B).
+
+    ``records`` takes the output of ``_build_stop_to_stop_trip_records``
+    if it was already built with the same arguments, so it is not built
+    again (see ``normalize_gtfs_feed``).
     """
     import geopandas as gpd
     import pandas as pd
     from shapely.geometry import LineString
 
-    edges = _build_stop_to_stop_trip_records(
-        stop_times,
-        stops,
-        trips,
-        routes,
-        dataset_name=dataset_name,
-        calendar=calendar,
-        calendar_dates=calendar_dates,
-        frequencies=frequencies,
-        hour_band_size=hour_band_size,
-        hour_range=hour_range,
-        peak_periods=peak_periods,
-    )
+    if records is None:
+        records = _build_stop_to_stop_trip_records(
+            stop_times,
+            stops,
+            trips,
+            routes,
+            dataset_name=dataset_name,
+            calendar=calendar,
+            calendar_dates=calendar_dates,
+            frequencies=frequencies,
+            hour_band_size=hour_band_size,
+            hour_range=hour_range,
+            peak_periods=peak_periods,
+        )
+    edges = records
+    in_area = _filter_records_by_geometry(edges, filter_geometry)
+    # If nothing touches the area, aggregate a single record instead of
+    # none: the aggregation steps below expect at least one row, and the
+    # final ``_filter_by_geometry`` drops it again, leaving an empty layer
+    # with the usual columns.
+    edges = in_area if not in_area.empty else edges.iloc[:1]
 
     group_cols = _existing_columns(
         edges,
@@ -901,24 +979,25 @@ def build_gtfs_stop_to_stop_edges_gdf(
                 )
                 .reset_index()
             )
-            packed = (
-                hour_grouped.groupby(group_cols)
-                .apply(
-                    lambda df: pd.Series(
-                        {
-                            "hourly_travel_times": _pack_key_value(
-                                df.set_index("hour_band")["travel_time_seconds_mean"]
-                            ),
-                            "hourly_trip_counts": _pack_key_value(
-                                df.set_index("hour_band")["trip_count"]
-                            ),
-                        }
+            # Grouped with dropna=False: edges whose route has no
+            # route_short_name (or another empty grouping column) used to
+            # lose their hourly summary.
+            packed = pd.concat(
+                {
+                    "hourly_travel_times": _pack_by_group(
+                        hour_grouped,
+                        group_cols,
+                        "hour_band",
+                        "travel_time_seconds_mean",
                     ),
-                    include_groups=False,
-                )
-                .reset_index()
+                    "hourly_trip_counts": _pack_by_group(
+                        hour_grouped, group_cols, "hour_band", "trip_count"
+                    ),
+                },
+                axis=1,
             )
-            grouped = grouped.merge(packed, on=group_cols, how="left")
+            packed.index.names = group_cols
+            grouped = grouped.merge(packed.reset_index(), on=group_cols, how="left")
         for col in ("hourly_travel_times", "hourly_trip_counts"):
             if col not in grouped.columns:
                 grouped[col] = None
@@ -989,6 +1068,22 @@ def normalize_gtfs_feed(
         layer_id=layer_id,
         filter_geometry=filter_geometry,
     )
+    # The trip-segment records (times parsed, trips/routes/stops joined)
+    # are the expensive part; build them once for both the edges layer and
+    # the schedule table instead of once each.
+    records = _build_stop_to_stop_trip_records(
+        stop_times,
+        stops,
+        trips,
+        routes,
+        dataset_name=dataset_name,
+        calendar=calendar,
+        calendar_dates=calendar_dates,
+        frequencies=frequencies,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
+    )
     stop_edges_gdf = build_gtfs_stop_to_stop_edges_gdf(
         stop_times,
         stops,
@@ -997,13 +1092,9 @@ def normalize_gtfs_feed(
         dataset_name=dataset_name,
         layer_id=layer_id,
         filter_geometry=filter_geometry,
-        calendar=calendar,
-        calendar_dates=calendar_dates,
-        frequencies=frequencies,
-        hour_band_size=hour_band_size,
-        hour_range=hour_range,
         peak_periods=peak_periods,
         include_hourly_summary=include_hourly_summary,
+        records=records,
     )
 
     schedule_df = None
@@ -1014,12 +1105,7 @@ def normalize_gtfs_feed(
             trips,
             routes,
             dataset_name=dataset_name,
-            calendar=calendar,
-            calendar_dates=calendar_dates,
-            frequencies=frequencies,
-            hour_band_size=hour_band_size,
-            hour_range=hour_range,
-            peak_periods=peak_periods,
+            records=records,
         )
 
     if target_crs:
