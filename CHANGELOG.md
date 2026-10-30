@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the matrix of one weight as a `scipy.sparse.csr_array`, the node table and
   the metadata.
 - `scipy` is now a required dependency.
+- New public module `multimodalpy.isochrones` (#64). `isochrones()` computes
+  the area reachable from one or more origins (node ids or coordinates) within
+  each cutoff, in minutes (`weight="tts"`) or metres (`weight="length"`), on a
+  walking, bike or driving network. It reads the network in any output format
+  (output folder, network folder, `matrix.npz`, `graph.json`, GeoPackage,
+  GeoJSON, Shapefile, or the result of `read_matrix` / `read_graph_json`) and
+  returns a GeoDataFrame with one polygon per origin and cutoff, nested and in
+  the network's CRS. `method="edges"` (default) buffers the streets reached,
+  including the reached part of edges crossing the cutoff; `method="hull"`
+  draws a concave hull. Bus and train isochrones raise `NotImplementedError`
+  until the multimodal network is available.
+- `shapely>=2.0` is now required explicitly (for `shapely.concave_hull`).
 
 ### Changed
 - **Breaking:** `process_osm` and `process_gtfs` are now private modules

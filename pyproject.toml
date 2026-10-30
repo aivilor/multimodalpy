@@ -38,7 +38,7 @@ dependencies = [
   "osmnx",
   "pandas",
   "requests",
-  "shapely",
+  "shapely>=2.0",
   "pooch>=1.8",
   "scipy>=1.11",
 ]

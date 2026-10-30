@@ -457,7 +457,9 @@ peak = read_matrix("output/bus/<dataset>", weight="tm_pam_wd")
 ```
 
 Without multimodalpy, `scipy.sparse.load_npz(path)` returns the default weight
-and `numpy.load(path)` every array.
+and `numpy.load(path)` every array.  
+`multimodalpy.isochrones.isochrones` works on this matrix, and turns every other
+format into it first.
 
 ---
 
