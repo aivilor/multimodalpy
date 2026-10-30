@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 import importlib
+import inspect
 import subprocess
 import sys
 import pytest
 import multimodalpy
 
-PUBLIC_MODULES = {"get_network", "get_area"}
+PUBLIC_MODULES = {"get_network", "get_area", "isochrones"}
 PRIVATE_MODULES = {"process_osm", "process_gtfs"}
 
 
@@ -19,6 +20,7 @@ def test_all_lists_only_the_public_api():
         "find_area_boundary",
         "get_network",
         "get_area",
+        "isochrones",
         "__version__",
     }
 
@@ -34,6 +36,11 @@ def test_processing_modules_are_not_exposed(name):
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module(f"multimodalpy.{name}")
 
+
+def test_isochrones_is_the_module_not_the_function():
+    assert inspect.ismodule(multimodalpy.isochrones)
+    assert callable(multimodalpy.isochrones.isochrones)
+    
 
 def test_star_import_brings_no_processing_module():
     namespace: dict[str, object] = {}
