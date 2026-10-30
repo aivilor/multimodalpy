@@ -16,8 +16,9 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
-from multimodalpy import get_area, get_network, process_gtfs, process_osm
-
+from multimodalpy import _process_gtfs as process_gtfs
+from multimodalpy import _process_osm as process_osm
+from multimodalpy import get_area, get_network
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal sample data, no network

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-30
+
+### Added
+- New output format `matrix` (#63): `output_file_type="matrix"` (or
+  `--output-file-type matrix`) writes each network as one `matrix.npz`, a
+  directed sparse adjacency matrix in CSR form for shortest-path calculations.
+  Walking, bike and driving matrices carry `tts` and `length`; bus and train
+  matrices carry the 18 travel-time columns of the GTFS edge layer. Parallel
+  edges keep the minimum of each weight, and GTFS periods without service are
+  `inf`. The file opens with `scipy.sparse.load_npz`. The layout is described
+  in the "Matrix" section of `DATA_SCHEMA.md`.
+- `multimodalpy.read_matrix()` reads a `matrix.npz` (or its folder) and returns
+  the matrix of one weight as a `scipy.sparse.csr_array`, the node table and
+  the metadata.
+- `scipy` is now a required dependency.
+- New public module `multimodalpy.isochrones` (#64). `isochrones()` computes
+  the area reachable from one or more origins (node ids or coordinates) within
+  each cutoff, in minutes (`weight="tts"`) or metres (`weight="length"`), on a
+  walking, bike or driving network. It reads the network in any output format
+  (output folder, network folder, `matrix.npz`, `graph.json`, GeoPackage,
+  GeoJSON, Shapefile, or the result of `read_matrix` / `read_graph_json`) and
+  returns a GeoDataFrame with one polygon per origin and cutoff, nested and in
+  the network's CRS. `method="edges"` (default) buffers the streets reached,
+  including the reached part of edges crossing the cutoff; `method="hull"`
+  draws a concave hull. Bus and train isochrones raise `NotImplementedError`
+  until the multimodal network is available.
+- `shapely>=2.0` is now required explicitly (for `shapely.concave_hull`).
+
+### Changed
+- **Breaking:** `process_osm` and `process_gtfs` are now private modules
+  (`_process_osm`, `_process_gtfs`) and are no longer part of the public API:
+  `multimodalpy.process_osm` and `multimodalpy.process_gtfs` no longer exist,
+  and both modules are gone from the API reference. The public API is
+  `get_network`, `get_area` and the names in `multimodalpy.__all__`. Code that
+  imported them directly should use `get_network.main()` or the `get_area`
+  download functions, which return the standardized layers.
 
 ## [0.2.0] - 2026-10-29
 
@@ -35,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env` and `.venv/` are in `.gitignore`, so a NAP key in `.env` is not
   committed by accident (#62).
 
-[0.2.0]: https://github.com/aivilor/multimodalpy/compare/v0.1.5...v0.2.0
+[0.3.0]: https://github.com/aivilor/multimodalpy/compare/v0.2.0...v0.3.0
 
 ## [0.1.5] - 2026-10-14
 
@@ -177,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict resolution.
 
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.3.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0

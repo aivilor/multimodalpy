@@ -7,6 +7,5 @@
 
    multimodalpy.get_network
    multimodalpy.get_area
-   multimodalpy.process_osm
-   multimodalpy.process_gtfs
+   multimodalpy.isochrones
 ```

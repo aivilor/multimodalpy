@@ -18,7 +18,9 @@ standardizes its transport networks, one layer per mode:
   edges with travel times and trip counts by period of the day.
 
 All modes share the same column names, and the layers are written as GeoJSON,
-Shapefile, GeoPackage or NetworkX graphs, ready for GIS or network analysis.
+Shapefile, GeoPackage, NetworkX graphs or sparse matrices, ready for GIS or
+network analysis. On the walking, cycling and driving networks, `multimodalpy`
+also computes isochrones: the area reachable from a point within a travel time.
 
 > **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
 > Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
@@ -137,12 +139,59 @@ output/
 Every column, the travel-time model and how each value is computed are described
 in [DATA_SCHEMA.md](DATA_SCHEMA.md).
 
+### Shortest paths: the matrix format
+
+`output_file_type="matrix"` writes each network as one `matrix.npz`: a directed
+sparse adjacency matrix (CSR) with one vector per weight (`tts` and `length`
+for streets, the travel-time statistics for bus and train). Read it with
+`read_matrix` and pass it to scipy's shortest-path functions:
+
+```python
+from scipy.sparse.csgraph import dijkstra
+
+from multimodalpy import read_matrix
+
+data = read_matrix("output/walking")
+origin = data.nodes.index[data.nodes["node_id"] == 1234][0]
+seconds = dijkstra(data.matrix, indices=origin, limit=600)
+```
+
+For bus and train the matrix holds in-vehicle times only: waiting and transfers
+are not modelled. See the
+[Matrix section of DATA_SCHEMA.md](DATA_SCHEMA.md#matrix-matrixnpz).
+
+### Isochrones
+
+`isochrones` draws the area reachable from one or more origins within each
+travel time, on a walking, bike or driving network:
+
+```python
+from multimodalpy.isochrones import isochrones
+
+areas = isochrones(
+    "output",                     # output folder of main()
+    origins=(-0.3763, 39.4699),   # (x, y) in the network's CRS, or a node_id
+    cutoffs=[5, 10, 15],          # minutes
+    mode="walking",
+)
+areas.to_file("isochrones.geojson")
+```
+
+It reads the network in any output format (`matrix.npz` is the fastest) and
+returns one polygon per origin and cutoff, in the network's CRS. By default
+(`method="edges"`) the area is a band of `buffer_distance` metres (25) along the
+streets reached, so it follows the street network; `method="hull"` draws a
+concave hull around them instead, faster when most of the network is reached.
+With `weight="length"` the cutoffs are metres. Coordinates are snapped to the
+nearest node within `max_snap_distance` metres (250). Bus and train isochrones
+will come with the multimodal network.
+
 ## Main options
 
 | Option | Default | What it does |
 |---|---|---|
 | `modes` | `["walking"]` | Any of `walking`, `bike`, `driving`, `bus`, `train`. Spanish synonyms work too (`caminable`, `bicicleta`, `coche`). |
-| `output_file_type` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, or a list to write several at once. |
+| `output_file_type` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer, e.g. `"EPSG:25830"` for metres in Spain. |
 | `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
@@ -191,4 +240,29 @@ details are in [DATA_SCHEMA.md](DATA_SCHEMA.md), and changes between versions in
 
 ## Citation
 
-If you use `multimodalpy` in your research, please cite it. Citation metadata is in [`CITATION.cff`](CITATION.cff); on GitHub, use the "Cite this repository" button in the sidebar to get a formatted citation (APA, BibTeX, etc.).
+If you use `multimodalpy` in your research, please cite the software and state
+the version you used. On GitHub, the "Cite this repository" button in the
+sidebar gives a ready-made citation (APA, BibTeX) from
+[`CITATION.cff`](CITATION.cff).
+
+> Villalba Ortiz, A. (2026). *multimodalpy: Easy creation of multimodal
+> transport networks from OpenStreetMap and GTFS data* (Version X.Y.Z)
+> [Computer software]. https://doi.org/10.5281/zenodo.NNNNNNN
+
+```bibtex
+@software{villalba_multimodalpy,
+  author    = {Villalba Ortiz, Aida},
+  title     = {multimodalpy: Easy creation of multimodal transport networks
+               from OpenStreetMap and GTFS data},
+  year      = {2026},
+  version   = {0.3.0},
+  doi       = {10.5281/zenodo.NNNNNNN},
+  url       = {https://github.com/aivilor/multimodalpy},
+  license   = {MIT}
+}
+```
+
+Each release is archived on Zenodo with its own DOI; the DOI above is the one
+for all versions. Use the version DOI listed on the
+[Zenodo record](https://doi.org/10.5281/zenodo.NNNNNNN) when you need to cite
+the exact release you ran.

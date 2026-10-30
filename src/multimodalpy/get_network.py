@@ -10,7 +10,7 @@ whole pipeline with the minimal parameters the user needs::
         boundaries_path=None,   # Path: boundaries shapefile/geojson (optional)
         crs="EPSG:4326",        # str : output CRS (defaults to universal WGS84)
         output_file_type="geojson",  # geopackage | geojson | shapefile | networkx
-                                     # (or a list of several of them)
+                                     # | matrix (or a list of several of them)
     )
 
 Modes are automatically split between OSM and GTFS::
@@ -27,14 +27,15 @@ import shutil
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import networkx as nx
     import pandas as pd
+    from scipy.sparse import csr_array
 
-from . import get_area, process_gtfs
+from . import _process_gtfs, get_area
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ GTFS_MODE_TO_NAP = {
 }
 
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
-VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx"}
+VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx", "matrix"}
 
 # Extension and OGR driver for the formats written layer by layer.
 _FILE_FORMATS = {
@@ -173,6 +174,93 @@ def read_graph_json(
                 attrs["geometry"] = wkt.loads(geom)
     return graph
 
+class MatrixData(NamedTuple):
+    """What :func:`read_matrix` returns: ``(matrix, nodes, meta, weight)``."""
+
+    #: Directed adjacency matrix (``scipy.sparse.csr_array``) of the chosen
+    #: weight: row = origin node, column = destination node. A missing entry
+    #: means there is no edge; ``inf`` means the edge exists but cannot be
+    #: travelled with this weight (e.g. a GTFS period with no service).
+    matrix: csr_array
+    #: One row per matrix row, in order: ``layer``, ``node_id``, ``x``, ``y``
+    #: (in ``meta["crs"]``) and ``in_area``.
+    nodes: pd.DataFrame
+    #: File metadata: ``crs``, ``mode``, ``dataset``, ``area``, ``weights``
+    #: (names and units), ``default_weight``, ...
+    meta: dict[str, Any]
+    #: Name of the weight in ``matrix``.
+    weight: str
+
+
+def read_matrix(path: str | Path, weight: str | None = None) -> MatrixData:
+    """Read a ``matrix.npz`` written by the matrix export.
+
+    Parameters
+    ----------
+    path : str | Path
+        The ``matrix.npz`` file, or the folder that holds it (e.g.
+        ``"output/walking"`` or ``"output/bus/<dataset>"``).
+    weight : str, optional
+        Weight to load: ``"tts"`` or ``"length"`` for walking / bike /
+        driving, or one of the GTFS travel-time columns (``"tts_m"``,
+        ``"tm_pam_wd"``, ...) for bus / train. Defaults to the file's
+        default weight (``tts`` for OSM, ``tts_m`` for GTFS). The weights
+        in a file are listed in ``meta["weights"]``.
+
+    Returns
+    -------
+    MatrixData
+        The matrix of that weight, the node table and the metadata.
+
+    Raises
+    ------
+    FileNotFoundError
+        If there is no ``matrix.npz`` at ``path``.
+    ValueError
+        If ``weight`` is not in the file, the file is not a multimodalpy
+        matrix, or it was written by a newer multimodalpy.
+
+    See Also
+    --------
+    main : writes the files with ``output_file_type="matrix"``.
+
+    Notes
+    -----
+    The file layout is described in the "Matrix" section of
+    ``DATA_SCHEMA.md``. It can also be opened without multimodalpy:
+    ``scipy.sparse.load_npz`` returns the default weight, and
+    ``numpy.load`` gives every array.
+
+    Examples
+    --------
+    >>> from scipy.sparse.csgraph import dijkstra  # doctest: +SKIP
+    >>> data = read_matrix("output/walking")  # doctest: +SKIP
+    >>> origin = data.nodes.index[data.nodes["node_id"] == 1234][0]  # doctest: +SKIP
+    >>> seconds = dijkstra(data.matrix, indices=origin, limit=600)  # doctest: +SKIP
+    """
+    # Imported here so ``import multimodalpy`` does not load numpy / pandas.
+    from . import _matrix
+
+    file_path = Path(path)
+    if file_path.is_dir():
+        file_path = file_path / "matrix.npz"
+    if not file_path.is_file():
+        raise FileNotFoundError(f"No matrix file at {file_path}.")
+
+    network = _matrix.read_network_matrix(file_path)
+    name = network.default_weight if weight is None else weight
+    if name not in network.weights:
+        raise ValueError(
+            f"Weight '{name}' is not in {file_path}. "
+            f"Available: {', '.join(sorted(network.weights))}"
+        )
+    return MatrixData(
+        matrix=network.to_scipy(name),
+        nodes=network.nodes,
+        meta=network.meta,
+        weight=name,
+    )
+
 def _graph_value(value: object) -> object:
     """JSON-safe value for a graph attribute (numpy scalars -> Python)."""
     if hasattr(value, "item") and not isinstance(value, (list, tuple, dict)):
@@ -197,7 +285,7 @@ def _osm_layers_to_graph_json(
     import networkx as nx
     from networkx.readwrite import json_graph
 
-    from .process_osm import STANDARD_EDGE_COLUMNS
+    from ._process_osm import STANDARD_EDGE_COLUMNS
 
     def column_values(gdf: gpd.GeoDataFrame, column: str) -> list:
         # Plain lists instead of ``iterrows()``, which builds a pandas
@@ -305,6 +393,71 @@ def _gtfs_to_graph_json(
 
     return _write_node_link_json(graph, output_path)
 
+# ---------------------------------------------------------------------------
+# Export to a sparse matrix (CSR, matrix.npz)
+# ---------------------------------------------------------------------------
+def _write_matrices(
+    osm_results: dict[str, dict[str, Any]],
+    gtfs_results: dict[str, dict[str, Any]],
+    layers: dict[str, gpd.GeoDataFrame | None],
+    output_dir: Path,
+    *,
+    area_name: str,
+    gtfs_peak_periods: dict[str, tuple[int, int]] | None,
+    gtfs_hour_range: tuple[int, int] | None,
+) -> list[str]:
+    """Write one ``matrix.npz`` per OSM mode and per GTFS dataset.
+
+    Built from the same final layers as the other formats: OSM from the
+    ``download_osm_layers`` output, GTFS from the filtered and renamed edge
+    layers, so the weights have the short column names (``tts_m``, ...).
+    Networks with no edges are skipped. Returns the paths written, relative
+    to ``output_dir``.
+    """
+    # Imported here so ``import multimodalpy`` does not load numpy / pandas.
+    from . import _matrix
+
+    written: list[str] = []
+    for mode, out in osm_results.items():
+        edges = out.get("edges")
+        if edges is None or edges.empty:
+            continue
+        matrix = _matrix.osm_network_matrix(
+            out["nodes"], edges, mode=mode, meta={"area": area_name}
+        )
+        relative = f"{mode}/matrix.npz"
+        _matrix.write_matrix(matrix, output_dir / relative)
+        written.append(relative)
+
+    periods = (
+        gtfs_peak_periods
+        if gtfs_peak_periods is not None
+        else _process_gtfs.DEFAULT_PEAK_PERIODS
+    )
+    for dataset, gtfs_out in gtfs_results.items():
+        stops = layers.get(f"gtfs_{dataset}_nodes")
+        edges = layers.get(f"gtfs_{dataset}_edges")
+        if stops is None or edges is None or edges.empty:
+            continue
+        mode = gtfs_out.get("mode") or "bus"
+        matrix = _matrix.gtfs_network_matrix(
+            stops,
+            edges,
+            mode=mode,
+            dataset=dataset,
+            periods=periods,
+            meta={
+                "area": area_name,
+                "gtfs_hour_range": (
+                    list(gtfs_hour_range) if gtfs_hour_range is not None else None
+                ),
+            },
+        )
+        relative = f"{mode}/{dataset}/matrix.npz"
+        _matrix.write_matrix(matrix, output_dir / relative)
+        written.append(relative)
+    return written
+
 
 def _relative_name(path: Path, root: Path) -> str:
     """Return path's location relative to root, always using '/' as separator."""
@@ -326,8 +479,8 @@ def _write_schedule_tables(
 
     - geopackage: added as attribute tables (no geometry) inside the same
       .gpkg, via sqlite3 (a GeoPackage is a SQLite database).
-    - geojson / shapefile / networkx: don't natively support non-spatial
-      tables, so they're written as CSV in the dataset's folder.
+    - geojson / shapefile / networkx / matrix: don't natively support
+      non-spatial tables, so they're written as CSV in the dataset's folder.
     """
     written: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -466,14 +619,17 @@ def main(
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.
     output_file_type : str | list[str]
-        Download format(s): "geopackage", "geojson", "shapefile" or
-        "networkx". Accepts a list to write several in a single pass (e.g.
-        ["geojson", "shapefile", "geopackage"]): the download and
-        normalization only happen once, and only the writing step is
-        repeated, instead of redoing the whole pipeline per format.
+        Download format(s): "geopackage", "geojson", "shapefile",
+        "networkx" or "matrix". Accepts a list to write several in a single
+        pass (e.g. ["geojson", "matrix"]): the download and normalization
+        only happen once, and only the writing step is repeated, instead of
+        redoing the whole pipeline per format. "matrix" writes one
+        ``matrix.npz`` per network: a directed sparse adjacency matrix
+        (CSR) with one vector per weight, for shortest-path calculations
+        (see "Matrix" in ``DATA_SCHEMA.md``).
     NOTE on the OSM layers (walking/bike/driving): travel time (``tts``, in
         seconds) is computed automatically based on the mode (free-flow
-        speed + stop penalty; see ``process_osm.add_mode_travel_time``), so
+        speed + stop penalty; see "Travel time" in ``DATA_SCHEMA.md``), so
         a constant speed parameter is no longer accepted for OSM.
     gtfs_hour_band_size : int, optional
         If set (e.g. 1), GTFS edges are computed per one-hour band (the
@@ -673,7 +829,7 @@ def main(
         # default period names (peak_am/peak_pm/rest_of_day); if a custom
         # ``gtfs_peak_periods`` is passed with other names, its combined
         # columns aren't filtered here automatically.
-        for period_name in list(process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
+        for period_name in list(_process_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
             "rest_of_day"
         ]:
             for day_type_name in ("weekday", "weekend"):
@@ -738,6 +894,33 @@ def main(
                     edge_columns=gtfs_edge_columns.get(dataset),
                 )
                 files_here.append(relative)
+            files_here.extend(
+                _write_schedule_tables(
+                    schedule_tables,
+                    output_dir,
+                    file_type,
+                    area_slug=area_slug,
+                    layer_paths=layer_paths,
+                )
+            )
+        elif file_type == "matrix":
+            # As with networkx, the boundary goes alongside as GeoJSON so
+            # the folder is self-contained.
+            boundary.to_crs(crs).to_file(
+                output_dir / "study_area_boundary.geojson", driver="GeoJSON"
+            )
+            files_here = ["study_area_boundary.geojson"]
+            files_here.extend(
+                _write_matrices(
+                    osm_results,
+                    gtfs_results,
+                    layers,
+                    output_dir,
+                    area_name=area_name,
+                    gtfs_peak_periods=gtfs_peak_periods,
+                    gtfs_hour_range=gtfs_hour_range,
+                )
+            )
             files_here.extend(
                 _write_schedule_tables(
                     schedule_tables,
