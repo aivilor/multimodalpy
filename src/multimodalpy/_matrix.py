@@ -520,3 +520,248 @@ def read_network_matrix(path: str | Path) -> NetworkMatrix:
         meta=meta,
         edge_type=edge_type,
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Loading a network from any output format
+# ---------------------------------------------------------------------------
+#: Networks whose final layers can be turned into a matrix here. Bus and
+#: train layers are only loaded from ``matrix.npz`` for now.
+OSM_MODES = ("walking", "bike", "driving")
+GTFS_MODES = ("bus", "train")
+
+MATRIX_FILE = "matrix.npz"
+GRAPH_FILE = "graph.json"
+_LAYER_FILES = (("geojson", ".geojson"), ("shapefile", ".shp"))
+
+
+def _is_matrix_data(obj: object) -> bool:
+    """``get_network.MatrixData`` without importing ``get_network``."""
+    return all(hasattr(obj, name) for name in ("matrix", "nodes", "meta", "weight"))
+
+
+def _matrix_from_matrix_data(data: Any) -> NetworkMatrix:
+    """Wrap a ``read_matrix`` result. It holds a single weight."""
+    csr = data.matrix.tocsr()
+    csr.sort_indices()
+    meta = dict(data.meta)
+    meta["weights"] = [
+        entry for entry in meta.get("weights", []) if entry.get("name") == data.weight
+    ] or [{"name": data.weight, "unit": None}]
+    meta["default_weight"] = data.weight
+    return NetworkMatrix(
+        indptr=np.asarray(csr.indptr),
+        indices=np.asarray(csr.indices),
+        weights={data.weight: np.asarray(csr.data, dtype=np.float64)},
+        nodes=data.nodes.reset_index(drop=True),
+        meta=meta,
+    )
+
+
+def _matrix_from_graph(graph: Any, *, mode: str | None) -> NetworkMatrix:
+    """Build the matrix of a street graph (``read_graph_json`` or in memory).
+
+    Nodes need ``x`` / ``y``; edges need ``tts`` (and, optionally,
+    ``length``), the attributes of the OSM graphs written by multimodalpy.
+    """
+    nodes = pd.DataFrame(
+        [
+            {"node_id": node, "x": attrs.get("x"), "y": attrs.get("y")}
+            for node, attrs in graph.nodes(data=True)
+        ],
+        columns=["node_id", "x", "y"],
+    )
+    rows = [
+        {
+            "from_node": u,
+            "to_node": v,
+            "tts": attrs.get("tts"),
+            "length": attrs.get("length"),
+        }
+        for u, v, attrs in graph.edges(data=True)
+    ]
+    edges = pd.DataFrame(rows, columns=["from_node", "to_node", "tts", "length"])
+    if edges.empty or edges["tts"].isna().all():
+        raise ValueError(
+            "The graph has no 'tts' travel times on its edges. Only walking, "
+            "bike and driving graphs written by multimodalpy can be used."
+        )
+    if nodes[["x", "y"]].isna().any().any():
+        raise ValueError("Every graph node needs 'x' and 'y' coordinates.")
+    label = mode or "network"
+    return build_network_matrix(
+        nodes,
+        edges,
+        weights=OSM_WEIGHTS,
+        default_weight=OSM_DEFAULT_WEIGHT,
+        layer=label,
+        meta={"mode": mode, "dataset": None, "crs": graph.graph.get("crs")},
+    )
+
+
+def _matrix_from_layer_files(
+    nodes_path: Path, edges_path: Path, *, mode: str, **read_kwargs: Any
+) -> NetworkMatrix:
+    import geopandas as gpd
+
+    nodes = gpd.read_file(nodes_path, **read_kwargs.get("nodes", {}))
+    edges = gpd.read_file(edges_path, **read_kwargs.get("edges", {}))
+    return osm_network_matrix(nodes, edges, mode=mode)
+
+
+def _matrix_from_geopackage(path: Path, *, mode: str) -> NetworkMatrix | None:
+    """Matrix of ``mode`` from a GeoPackage, or None if it lacks the layers."""
+    import geopandas as gpd
+
+    names = set(gpd.list_layers(path)["name"])
+    nodes_layer, edges_layer = f"osm_{mode}_nodes", f"osm_{mode}_edges"
+    if not {nodes_layer, edges_layer} <= names:
+        return None
+    nodes = gpd.read_file(path, layer=nodes_layer)
+    edges = gpd.read_file(path, layer=edges_layer)
+    return osm_network_matrix(nodes, edges, mode=mode)
+
+
+def _modes_in(root: Path) -> list[str]:
+    """Network folders found in an output folder of ``main()``."""
+    found = [mode for mode in (*OSM_MODES, *GTFS_MODES) if (root / mode).is_dir()]
+    for gpkg in sorted(root.glob("*.gpkg")):
+        import geopandas as gpd
+
+        names = set(gpd.list_layers(gpkg)["name"])
+        found += [
+            mode
+            for mode in OSM_MODES
+            if f"osm_{mode}_edges" in names and mode not in found
+        ]
+    return found
+
+
+def _resolve_folder(path: Path, mode: str | None) -> tuple[Path, Path, str]:
+    """Return (mode folder, output root, mode) for a folder given by the user.
+
+    ``path`` can be a mode folder (``output/walking``) or the output root of
+    ``main()`` together with ``mode``.
+    """
+    if mode is not None:
+        mode = mode.strip().lower()
+    if path.name in (*OSM_MODES, *GTFS_MODES):
+        if mode is not None and mode != path.name:
+            raise ValueError(
+                f"{path} is the '{path.name}' network, but mode='{mode}' was given."
+            )
+        return path, path.parent, path.name
+    if path.parent.name in GTFS_MODES:  # output/bus/<dataset>
+        return path, path.parent.parent, path.parent.name
+    available = _modes_in(path)
+    if mode is None:
+        if len(available) == 1:
+            mode = available[0]
+        else:
+            raise ValueError(
+                f"{path} holds several networks or none was recognised: pass "
+                f"mode= (available: {', '.join(available) or 'none'})."
+            )
+    return path / mode, path, mode
+
+
+def _load_from_path(path: Path, mode: str | None) -> NetworkMatrix:
+    if path.is_file():
+        if path.suffix == ".npz":
+            return read_network_matrix(path)
+        if path.suffix == ".json":
+            from .get_network import read_graph_json
+
+            folder_mode = mode or (
+                path.parent.name if path.parent.name in OSM_MODES else None
+            )
+            return _matrix_from_graph(
+                read_graph_json(path, parse_geometry=False), mode=folder_mode
+            )
+        if path.suffix == ".gpkg":
+            if mode is None:
+                raise ValueError(f"Pass mode= to read a network from {path}.")
+            matrix = _matrix_from_geopackage(path, mode=mode)
+            if matrix is None:
+                raise ValueError(f"{path} has no '{mode}' network layers.")
+            return matrix
+        raise ValueError(f"Unsupported network file: {path}")
+    if not path.is_dir():
+        raise FileNotFoundError(f"No network at {path}.")
+
+    folder, root, mode = _resolve_folder(path, mode)
+    # Same order as the cost of rebuilding the matrix: the matrix itself,
+    # then the graph, then the layers.
+    if (folder / MATRIX_FILE).is_file():
+        return read_network_matrix(folder / MATRIX_FILE)
+    if mode in OSM_MODES:
+        if (folder / GRAPH_FILE).is_file():
+            from .get_network import read_graph_json
+
+            return _matrix_from_graph(
+                read_graph_json(folder / GRAPH_FILE, parse_geometry=False), mode=mode
+            )
+        for gpkg in sorted(root.glob("*.gpkg")):
+            matrix = _matrix_from_geopackage(gpkg, mode=mode)
+            if matrix is not None:
+                return matrix
+        for _, suffix in _LAYER_FILES:
+            nodes_path = folder / f"nodes{suffix}"
+            edges_path = folder / f"edges{suffix}"
+            if nodes_path.is_file() and edges_path.is_file():
+                return _matrix_from_layer_files(nodes_path, edges_path, mode=mode)
+    raise FileNotFoundError(
+        f"No '{mode}' network found in {path}: looked for {MATRIX_FILE}"
+        + (
+            f", {GRAPH_FILE}, a GeoPackage, and nodes/edges GeoJSON or Shapefile"
+            if mode in OSM_MODES
+            else ""
+        )
+        + "."
+    )
+
+
+def load_network_matrix(network: Any, *, mode: str | None = None) -> NetworkMatrix:
+    """Turn any network multimodalpy writes or reads into a NetworkMatrix.
+
+    ``network`` can be:
+
+    - a :class:`NetworkMatrix`, returned as is;
+    - the result of ``read_matrix`` (it holds a single weight);
+    - a networkx graph, e.g. from ``read_graph_json``;
+    - a path: a ``matrix.npz``, ``graph.json`` or ``.gpkg`` file, a network
+      folder (``output/walking``) or the output folder of ``main()`` with
+      ``mode=``. In a folder the first format found is used, in this order:
+      ``matrix.npz``, ``graph.json``, GeoPackage, GeoJSON, Shapefile.
+
+    Every format other than ``matrix.npz`` is converted with the same
+    builder as the matrix export, so the result is the same whatever the
+    format. Only ``matrix.npz`` is read for bus and train.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no network is found at the path.
+    ValueError
+        If ``mode`` is needed and missing, or the input cannot be used.
+    TypeError
+        For any other kind of object.
+    """
+    if isinstance(network, NetworkMatrix):
+        return network
+    if _is_matrix_data(network):
+        return _matrix_from_matrix_data(network)
+    if isinstance(network, (str, Path)):
+        return _load_from_path(Path(network), mode)
+    if (
+        hasattr(network, "nodes")
+        and hasattr(network, "edges")
+        and hasattr(network, "graph")
+    ):
+        return _matrix_from_graph(network, mode=mode)
+    raise TypeError(
+        "network must be a path, a networkx graph or the result of read_matrix; "
+        f"got {type(network).__name__}."
+    )
+

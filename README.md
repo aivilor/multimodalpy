@@ -19,7 +19,8 @@ standardizes its transport networks, one layer per mode:
 
 All modes share the same column names, and the layers are written as GeoJSON,
 Shapefile, GeoPackage, NetworkX graphs or sparse matrices, ready for GIS or
-network analysis.
+network analysis. On the walking, cycling and driving networks, `multimodalpy`
+also computes isochrones: the area reachable from a point within a travel time.
 
 > **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
 > Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
@@ -159,6 +160,32 @@ For bus and train the matrix holds in-vehicle times only: waiting and transfers
 are not modelled. See the
 [Matrix section of DATA_SCHEMA.md](DATA_SCHEMA.md#matrix-matrixnpz).
 
+### Isochrones
+
+`isochrones` draws the area reachable from one or more origins within each
+travel time, on a walking, bike or driving network:
+
+```python
+from multimodalpy.isochrones import isochrones
+
+areas = isochrones(
+    "output",                     # output folder of main()
+    origins=(-0.3763, 39.4699),   # (x, y) in the network's CRS, or a node_id
+    cutoffs=[5, 10, 15],          # minutes
+    mode="walking",
+)
+areas.to_file("isochrones.geojson")
+```
+
+It reads the network in any output format (`matrix.npz` is the fastest) and
+returns one polygon per origin and cutoff, in the network's CRS. By default
+(`method="edges"`) the area is a band of `buffer_distance` metres (25) along the
+streets reached, so it follows the street network; `method="hull"` draws a
+concave hull around them instead, faster when most of the network is reached.
+With `weight="length"` the cutoffs are metres. Coordinates are snapped to the
+nearest node within `max_snap_distance` metres (250). Bus and train isochrones
+will come with the multimodal network.
+
 ## Main options
 
 | Option | Default | What it does |
@@ -228,7 +255,7 @@ sidebar gives a ready-made citation (APA, BibTeX) from
   title     = {multimodalpy: Easy creation of multimodal transport networks
                from OpenStreetMap and GTFS data},
   year      = {2026},
-  version   = {0.2.0},
+  version   = {0.3.0},
   doi       = {10.5281/zenodo.NNNNNNN},
   url       = {https://github.com/aivilor/multimodalpy},
   license   = {MIT}

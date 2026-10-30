@@ -7,4 +7,5 @@
 
    multimodalpy.get_network
    multimodalpy.get_area
+   multimodalpy.isochrones
 ```

@@ -10,6 +10,8 @@ Public modules:
     - get_network    : main() entry point; downloads, standardizes and writes
                        the networks per the user's settings.
     - get_area       : study-area boundary lookup and OSM / GTFS downloads.
+    - isochrones     : area reachable from a point within a travel time
+                       (``from multimodalpy.isochrones import isochrones``).
 
 OSM and GTFS standardization happen in private modules (``_process_osm``,
 ``_process_gtfs``) that are not part of the public API.
@@ -20,7 +22,7 @@ from __future__ import annotations
 import logging
 from importlib.metadata import PackageNotFoundError, version
 
-from . import get_area, get_network
+from . import get_area, get_network, isochrones
 from .get_area import find_area_boundary
 from .get_network import main, read_graph_json, read_matrix
 
@@ -42,5 +44,6 @@ __all__ = [
     "find_area_boundary",
     "get_network",
     "get_area",
+    "isochrones",
     "__version__",
 ]

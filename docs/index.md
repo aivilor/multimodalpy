@@ -8,7 +8,8 @@ standardizes its transport networks, one layer per mode: walking, cycling and
 driving from OpenStreetMap, and bus and train from the official GTFS feeds of
 Spain's National Access Point (NAP). The layers share the same column names and
 are written as GeoJSON, Shapefile, GeoPackage, NetworkX graphs or sparse
-matrices for shortest-path calculations.
+matrices for shortest-path calculations. On the walking, cycling and driving
+networks it also computes isochrones (`multimodalpy.isochrones`).
 
 Only municipalities in Spain are supported (not the Canary Islands with the
 default boundaries file). Each mode is exported as its own network; linking them
