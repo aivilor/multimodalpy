@@ -19,6 +19,7 @@ SHORTCUTS = {
     "read_matrix": "io",
     "read_graph": "io",
     "isochrones": "analysis",
+    "shortest_path": "analysis",
 }
 #: Modules of earlier versions that no longer exist.
 REMOVED_MODULES = {"get_area", "get_network", "process_osm", "process_gtfs"}

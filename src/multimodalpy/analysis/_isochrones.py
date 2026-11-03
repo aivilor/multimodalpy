@@ -17,7 +17,7 @@ from ._common import (
     check_network_mode,
     cutoff_values,
     metric_transformer,
-    snap_origins,
+    snap_points,
     travel_costs,
     weight_unit,
 )
@@ -261,7 +261,7 @@ def isochrones(
     check_network_mode(matrix, "Isochrones")
     unit = weight_unit(matrix, weight)
     given, limits, label = cutoff_values(cutoffs, unit)
-    rows = snap_origins(matrix, origins, max_snap_distance)
+    rows = snap_points(matrix, origins, max_snap_distance)
     costs = travel_costs(matrix, weight, rows, limits[-1], merge_origins=merge_origins)
 
     transformer, metric_crs = metric_transformer(matrix)

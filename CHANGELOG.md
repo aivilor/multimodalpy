@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-03
 
 ### Changed
 - **Breaking:** the public API is reorganised into four modules, one per task,
@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The API reference documents only each module's public names.
 
 ### Added
+- `shortest_path()` (`multimodalpy.analysis`, #78): the shortest path from
+  every origin to every destination (node ids or coordinates) within a
+  threshold in minutes (`weight="tts"`) or metres (`weight="length"`), on a
+  walking, bike or driving network in any output format. Returns a
+  GeoDataFrame with `origin`, `destination`, `time_min`, `length_m`,
+  `n_edges` and the path as a line (`geometry=False` for large tables); pairs
+  beyond the threshold are left out. Bus and train raise
+  `NotImplementedError` until the multimodal network is available.
 - `multimodalpy` command, installed with the package
   (`multimodalpy --area Valencia --modes walking`).
 - `find_area()` has a full docstring (parameters, errors, examples).
@@ -43,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `multimodal` parameter of `download_network()`, which only raised
   `NotImplementedError`; it will come back with the multimodal network.
 - The `--clean-gtfs` command-line flag, which had no effect.
+
+[0.4.0]: https://github.com/aivilor/multimodalpy/compare/v0.3.0...v0.4.0
 
 ## [0.3.0] - 2026-10-30
 
@@ -252,7 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict resolution.
 
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.4.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0

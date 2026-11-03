@@ -20,7 +20,8 @@ standardizes its transport networks, one layer per mode:
 All modes share the same column names, and the layers are written as GeoJSON,
 Shapefile, GeoPackage, NetworkX graphs or sparse matrices, ready for GIS or
 network analysis. On the walking, cycling and driving networks, `multimodalpy`
-also computes isochrones: the area reachable from a point within a travel time.
+also computes isochrones (the area reachable from a point within a travel time)
+and shortest paths between sets of points.
 
 > **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
 > Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
@@ -187,6 +188,31 @@ With `weight="length"` the cutoffs are metres. Coordinates are snapped to the
 nearest node within `max_snap_distance` metres (250). Bus and train isochrones
 will come with the multimodal network.
 
+### Shortest paths
+
+`shortest_path` finds the shortest path from every origin to every destination
+within a travel time or distance, on a walking, bike or driving network:
+
+```python
+from multimodalpy import shortest_path
+
+paths = shortest_path(
+    "output",
+    origins=[(-0.3763, 39.4699)],                          # node_ids or (x, y)
+    destinations=[(-0.3546, 39.4562), (-0.3881, 39.4789)],
+    threshold=30,                                          # minutes
+    mode="walking",
+)
+paths[["origin", "destination", "time_min", "length_m"]]
+```
+
+It returns a GeoDataFrame with one row per origin and destination within the
+threshold: the travel time (`time_min`) and length (`length_m`) of the path,
+whatever it minimises (`weight="tts"`, the default, or `weight="length"`), its
+number of edges and the path as a line. Pairs beyond the threshold are left
+out. For large origin-destination tables, `geometry=False` skips drawing the
+paths and is much faster.
+
 ## Main options
 
 | Option | Default | What it does |
@@ -214,10 +240,10 @@ listing them).
 | `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
 | `multimodalpy.area` | `find_area()`: the municipality's boundary. |
 | `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
-| `multimodalpy.analysis` | `isochrones()` and the other network analyses. |
+| `multimodalpy.analysis` | `isochrones()`, `shortest_path()` and the other network analyses. |
 
-`download_network`, `find_area`, `read_matrix`, `read_graph` and `isochrones`
-are also available from the package itself (`multimodalpy.find_area`). See the
+`download_network`, `find_area`, `read_matrix`, `read_graph`, `isochrones` and
+`shortest_path` are also available from the package itself (`multimodalpy.find_area`). See the
 [API reference](https://multimodalpy.readthedocs.io/en/latest/api.html).
 
 ## How it works
@@ -269,7 +295,7 @@ sidebar gives a ready-made citation (APA, BibTeX) from
   title     = {multimodalpy: Easy creation of multimodal transport networks
                from OpenStreetMap and GTFS data},
   year      = {2026},
-  version   = {0.3.0},
+  version   = {0.4.0},
   doi       = {10.5281/zenodo.NNNNNNN},
   url       = {https://github.com/aivilor/multimodalpy},
   license   = {MIT}

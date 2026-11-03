@@ -15,11 +15,12 @@ network.
 
 The functions are also available from the package itself::
 
-    from multimodalpy import isochrones
+    from multimodalpy import isochrones, shortest_path
 """
 
 from __future__ import annotations
 
 from ._isochrones import isochrones
+from ._shortest_path import shortest_path
 
-__all__ = ["isochrones"]
+__all__ = ["isochrones", "shortest_path"]

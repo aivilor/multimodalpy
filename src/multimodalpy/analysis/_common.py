@@ -132,36 +132,43 @@ def _xy(value: Any) -> tuple[float, float]:
     return float(value[0]), float(value[1])
 
 
-def origin_list(origins: object) -> list[object]:
-    """One origin or a list of them. A tuple of two numbers is a coordinate."""
-    if is_coordinate(origins) or isinstance(origins, (str, int)):
-        return [origins]
-    if hasattr(origins, "item") and getattr(origins, "ndim", 1) == 0:  # numpy scalar
-        return [origins]
+def point_list(points: object, role: str = "origin") -> list[object]:
+    """One point or a list of them. A tuple of two numbers is a coordinate."""
+    if is_coordinate(points) or isinstance(points, (str, int)):
+        return [points]
+    if hasattr(points, "item") and getattr(points, "ndim", 1) == 0:  # numpy scalar
+        return [points]
     try:
-        items = list(origins)  # type: ignore[call-overload]
+        items = list(points)  # type: ignore[call-overload]
     except TypeError:
-        return [origins]
+        return [points]
     if not items:
-        raise ValueError("origins cannot be empty.")
+        raise ValueError(f"{role}s cannot be empty.")
     return items
 
 
-def snap_origins(
-    matrix: NetworkMatrix, origins: object, max_snap_distance: float
+def snap_points(
+    matrix: NetworkMatrix,
+    points: object,
+    max_snap_distance: float,
+    *,
+    role: str = "origin",
 ) -> np.ndarray:
-    """Matrix rows of the origins.
+    """Matrix rows of the points (origins or destinations).
 
     A ``node_id`` is used as is. A coordinate ``(x, y)`` or shapely Point, in
-    the network's CRS, is snapped to the nearest node with outgoing edges;
-    if that node is further than ``max_snap_distance`` metres, it is an
-    error rather than a silent start from a distant point.
+    the network's CRS, is snapped to the nearest node that can be used in
+    that ``role``: with outgoing edges for an origin, with incoming edges
+    for a destination. If that node is further than ``max_snap_distance``
+    metres, it is an error rather than a silent start from (or arrival at)
+    a distant point.
     """
     import numpy as np
     import pandas as pd
     from scipy.spatial import cKDTree
 
-    items = origin_list(origins)
+    label = role.capitalize()
+    items = point_list(points, role)
     rows = np.empty(len(items), dtype=np.int64)
     ids = pd.Index(matrix.nodes["node_id"])
 
@@ -171,16 +178,19 @@ def snap_origins(
             continue
         position = ids.get_indexer([item])[0]
         if position < 0:
-            raise ValueError(f"Origin node_id {item!r} is not in the network.")
+            raise ValueError(f"{label} node_id {item!r} is not in the network.")
         rows[i] = position
 
     if coordinates:
         transformer, _ = metric_transformer(matrix)
-        out_degree = np.diff(matrix.indptr)
+        if role == "destination":
+            degree = np.bincount(matrix.indices, minlength=matrix.n_nodes)
+        else:
+            degree = np.diff(matrix.indptr)
         xy = matrix.nodes[["x", "y"]].to_numpy(dtype=float)
-        candidates = np.flatnonzero((out_degree > 0) & np.isfinite(xy).all(axis=1))
+        candidates = np.flatnonzero((degree > 0) & np.isfinite(xy).all(axis=1))
         if candidates.size == 0:
-            raise ValueError("The network has no nodes with edges to start from.")
+            raise ValueError(f"The network has no nodes with edges for a {role}.")
         node_x, node_y = transformer.transform(xy[candidates, 0], xy[candidates, 1])
         tree = cKDTree(np.column_stack([node_x, node_y]))
         for i in coordinates:
@@ -190,7 +200,7 @@ def snap_origins(
             distance, nearest = tree.query(point)
             if distance > max_snap_distance:
                 raise ValueError(
-                    f"Origin {x, y} is {distance:.0f} m from the nearest network "
+                    f"{label} {x, y} is {distance:.0f} m from the nearest network "
                     f"node, more than max_snap_distance={max_snap_distance:g} m. "
                     "Check that the coordinates are in the network's CRS "
                     f"({matrix.meta.get('crs')})."
