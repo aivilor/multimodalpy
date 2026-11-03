@@ -161,7 +161,7 @@ def download_gtfs_nap_zips(
 
     ``province_code`` is the INE province code (1-52), which is exactly
     the region id understood by the API. This is the reliable path, and
-    the one used by :func:`get_network.main`, which gets it from the
+    the one used by ``network.download_network``, which gets it from the
     boundary. If not given, ``area_name`` is compared against the names of
     the 52 province entries in the ``/region`` listing; never against the
     municipality or region (CCAA) entries, which return 404 or another

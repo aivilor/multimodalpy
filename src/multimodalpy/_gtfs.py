@@ -1,7 +1,6 @@
 """GTFS networks: standardization of bus and train feeds, and their download.
 
-Private module: not part of the public API, used by ``get_area`` and
-``get_network``.
+Private module: the public entry point is ``multimodalpy.network``.
 
 This module has three parts:
 
@@ -15,11 +14,11 @@ This module has three parts:
 2. Bus + train cleanup: snapping stops onto the route geometry and
    splitting the route lines into segments between consecutive stops, to
    get a coherent stop-segment-stop topology.
-3. Download: ``download_gtfs_layers`` fetches the feeds of a study area
+3. Download: ``download_gtfs`` fetches the feeds of a study area
    from the NAP (see ``_nap``) and standardizes each one. The short column
    names of the edge layer (``GTFS_EDGE_RENAME``) are also defined here.
 
-No file is written here; that's done by ``get_network``.
+No file is written here; that's done by ``_writers``.
 """
 
 from __future__ import annotations
@@ -1179,7 +1178,7 @@ GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
 # ---------------------------------------------------------------------------
 # Download (NAP) and standardize the GTFS layers
 # ---------------------------------------------------------------------------
-def download_gtfs_layers(
+def download_gtfs(
     area_name: str,
     boundary: gpd.GeoDataFrame,
     zip_dir: str | Path,
@@ -1202,7 +1201,7 @@ def download_gtfs_layers(
 
     ``province_code`` is the area's INE province code; if not given, it's
     taken from the ``boundary``'s ``province_code`` column (filled in by
-    :func:`find_area_boundary`). See :func:`download_gtfs_nap_zips`.
+    ``find_area``). See ``_nap.download_gtfs_nap_zips``.
 
     ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
     ``include_schedule_table`` are forwarded to the GTFS standardization
@@ -1252,7 +1251,7 @@ def download_gtfs_layers(
             "edges": stop_edges,
             "schedule": schedule,
             # "bus" or "train", inferred from the feed's route_type. Used
-            # by get_network to decide the dataset's output folder.
+            # by download_network to decide the dataset's output folder.
             "mode": infer_transport_mode(zip_path),
         }
     return results

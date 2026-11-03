@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
-from multimodalpy import _gtfs, _osm, _writers, get_area, get_network
+from multimodalpy import _gtfs, _osm, _writers, network
 
 
 # ---------------------------------------------------------------------------
@@ -72,16 +72,14 @@ def run_main(tmp_path, fake_boundary, fake_osm_layers, fake_gtfs_layers):
 
     def _run(**kwargs):
         with (
-            patch.object(get_area, "find_area_boundary", return_value=fake_boundary),
-            patch.object(get_area, "download_osm_layers", return_value=fake_osm_layers),
-            patch.object(
-                get_area, "download_gtfs_layers", side_effect=fake_download_gtfs
-            ),
+            patch.object(network, "find_area", return_value=fake_boundary),
+            patch.object(network, "download_osm", return_value=fake_osm_layers),
+            patch.object(network, "download_gtfs", side_effect=fake_download_gtfs),
         ):
-            return get_network.main(
+            return network.download_network(
                 area_name="Valencia",
                 modes=["walking", "bus", "train"],
-                output_path=str(tmp_path),
+                output_dir=str(tmp_path),
                 **kwargs,
             )
 
@@ -92,7 +90,7 @@ def run_main(tmp_path, fake_boundary, fake_osm_layers, fake_gtfs_layers):
 # Folder structure
 # ---------------------------------------------------------------------------
 def test_layers_are_grouped_in_one_folder_per_mode(tmp_path, run_main):
-    manifest = run_main(output_file_type="geojson")
+    manifest = run_main(formats="geojson")
 
     files = set(manifest["files"])
     assert {
@@ -107,7 +105,7 @@ def test_layers_are_grouped_in_one_folder_per_mode(tmp_path, run_main):
 
 
 def test_geopackage_is_a_single_file_at_the_root(tmp_path, run_main):
-    manifest = run_main(output_file_type="geopackage")
+    manifest = run_main(formats="geopackage")
 
     assert (tmp_path / "valencia.gpkg").exists()
     assert "valencia.gpkg::osm_walking_nodes" in manifest["files"]
@@ -118,31 +116,21 @@ def test_geopackage_is_a_single_file_at_the_root(tmp_path, run_main):
 # main() parameters
 # ---------------------------------------------------------------------------
 def test_schedule_and_gtfs_zips_are_off_by_default(tmp_path, run_main):
-    run_main(output_file_type="geojson")
+    run_main(formats="geojson")
 
     assert not list(tmp_path.rglob("schedule.csv"))
     assert not (tmp_path / "gtfs_zips").exists()
 
 
 def test_schedule_and_gtfs_zips_can_be_kept(tmp_path, run_main):
-    run_main(output_file_type="geojson", schedule=True, gtfs_zips=True)
+    run_main(formats="geojson", write_schedule=True, keep_gtfs_zips=True)
 
     assert (tmp_path / "bus" / "alsa" / "schedule.csv").exists()
     assert (tmp_path / "gtfs_zips" / "feed.zip").exists()
 
 
-def test_multimodal_is_rejected_before_any_download(tmp_path):
-    with (
-        patch.object(get_area, "find_area_boundary") as mock_boundary,
-        pytest.raises(NotImplementedError),
-    ):
-        get_network.main("Valencia", output_path=str(tmp_path), multimodal=True)
-
-    mock_boundary.assert_not_called()
-
-
-def test_main_does_not_print_to_the_terminal(capsys, run_main):
-    run_main(output_file_type="geojson")
+def test_download_network_does_not_print_to_the_terminal(capsys, run_main):
+    run_main(formats="geojson")
 
     assert capsys.readouterr().out == ""
 
@@ -158,14 +146,14 @@ def test_package_logger_is_silent_unless_configured():
 def test_column_names_fit_the_shapefile_limit():
     rename = _osm.FINAL_EDGE_RENAME
     osm = [rename.get(column, column) for column in _osm.FINAL_EDGE_COLUMNS]
-    gtfs = list(get_network.GTFS_EDGE_RENAME.values())
+    gtfs = list(_gtfs.GTFS_EDGE_RENAME.values())
 
     assert all(len(name) <= 10 for name in osm + gtfs)
     assert len(set(gtfs)) == len(gtfs)
 
 
 def test_shapefile_keeps_the_column_names(tmp_path, run_main):
-    run_main(output_file_type="shapefile")
+    run_main(formats="shapefile")
 
     columns = gpd.read_file(tmp_path / "train" / "cercanias" / "edges.shp").columns
     assert {"from_node", "trips", "trp_rod_we"} <= set(columns)

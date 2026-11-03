@@ -543,7 +543,7 @@ def study_area_geometry(
     return metric.geometry.buffer(buffer_m).to_crs(crs).iloc[0]
 
 
-def find_area_boundary(
+def find_area(
     area_name: str,
     boundaries_path: str | Path | None = None,
     *,
@@ -553,20 +553,51 @@ def find_area_boundary(
     code_columns: Iterable[str] | None = None,
     target_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
-    """Return a single (dissolved) polygon for the given municipality.
+    """Find a municipality and return its boundary as a single polygon.
 
-    ``boundaries_path`` must be a shapefile (.shp) or a GeoJSON
-    (.geojson/.json). If not given, the packaged municipal-boundary
-    shapefile is used (peninsular Spain, Balearic Islands, Ceuta and
-    Melilla; not the Canary Islands).
+    Parameters
+    ----------
+    area_name : str
+        Municipality name. Matching ignores accents and case, accepts either
+        part of a bilingual name (``"Elche"`` finds ``Elx/Elche``) and
+        tolerates small typos; looser matches emit a ``UserWarning`` naming
+        the area picked.
+    boundaries_path : str | Path, optional
+        Shapefile (``.shp``) or GeoJSON (``.geojson`` / ``.json``) to search
+        in. By default, the packaged municipal boundaries: peninsular Spain,
+        the Balearic Islands, Ceuta and Melilla (not the Canary Islands).
+    area_code : str, optional
+        The municipality's 5-digit INE code (``"46250"``) or its full
+        INSPIRE NATCODE (``"34104646250"``), to pick it exactly.
+    province : str | int, optional
+        Province name or INE code (1-52), to choose between municipalities
+        that share a name.
+    name_columns, code_columns : list of str, optional
+        Columns of ``boundaries_path`` holding the names and codes, for
+        files with other column names than the default one.
+    target_crs : str
+        CRS of the result. Defaults to ``"EPSG:4326"``.
 
-    ``area_code`` takes a 5-digit INE municipality code ("46250") or the
-    full INSPIRE NATCODE ("34104646250"). ``province`` (name or INE code)
-    picks between municipalities that share a name, e.g.
-    ``find_area_boundary("Castejón", province="Navarra")``. Name matching
-    is tolerant to accents, bilingual names and small typos; see
-    :func:`_select_area_rows`. If a name matches several municipalities,
-    :class:`AmbiguousAreaError` lists them.
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        One row: the municipality's polygon (several polygons are dissolved
+        into one), with its name, codes and ``province_code``.
+
+    Raises
+    ------
+    AmbiguousAreaError
+        If the name matches several different municipalities; the error
+        lists them, so ``area_code`` or ``province`` can choose one.
+    ValueError
+        If no municipality matches, or ``boundaries_path`` is not a
+        Shapefile or GeoJSON.
+
+    Examples
+    --------
+    >>> from multimodalpy import find_area  # doctest: +SKIP
+    >>> valencia = find_area("Valencia")  # doctest: +SKIP
+    >>> castejon = find_area("Castejón", province="Navarra")  # doctest: +SKIP
     """
     using_default_file = boundaries_path is None
     if boundaries_path is None:

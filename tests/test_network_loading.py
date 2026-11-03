@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString
 
-from multimodalpy import _matrix, _osm, _writers, read_graph_json, read_matrix
+from multimodalpy import _matrix, _osm, _writers, read_graph, read_matrix
 
 
 @pytest.fixture
@@ -149,9 +149,9 @@ def test_a_geopackage_file_needs_the_mode(layers, expected, tmp_path):
 # ---------------------------------------------------------------------------
 # Objects in memory
 # ---------------------------------------------------------------------------
-def test_graph_from_read_graph_json(layers, expected, tmp_path):
+def test_graph_from_read_graph(layers, expected, tmp_path):
     _write("networkx", layers, tmp_path)
-    graph = read_graph_json(tmp_path / "walking" / "graph.json")
+    graph = read_graph(tmp_path / "walking" / "graph.json")
 
     loaded = _matrix.load_network_matrix(graph, mode="walking")
 

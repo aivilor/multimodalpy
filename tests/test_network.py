@@ -1,10 +1,11 @@
-"""Tests for ``multimodalpy.get_network``.
+"""Tests for ``multimodalpy.network`` and the command line.
 
-Nothing here touches the network: the three backends that ``main()`` calls
-(``find_area_boundary``, ``download_osm_layers`` and ``download_gtfs_layers``)
-are replaced by small fakes that return tiny in-memory layers. What is tested
-is get_network's own logic: mode splitting, argument validation, column
-renaming, file writing per format, the manifest and the CLI.
+Nothing here touches the network: the three backends that
+``download_network()`` calls (``find_area``, ``download_osm`` and
+``download_gtfs``) are replaced by small fakes that return tiny in-memory
+layers. What is tested is download_network's own logic: mode splitting,
+argument validation, column renaming, file writing per format, the manifest
+and the CLI.
 """
 
 from __future__ import annotations
@@ -23,17 +24,28 @@ import pytest
 from shapely.geometry import LineString, Point, box
 
 import multimodalpy
-from multimodalpy import _matrix, _nap, _writers, get_network
+from multimodalpy import (
+    _cli,
+    _gtfs,
+    _matrix,
+    _nap,
+    _osm,
+    _text,
+    _writers,
+    area,
+    io,
+    network,
+)
 
 # Captured at import time, before any test monkeypatches it.
-REAL_FIND_AREA_BOUNDARY = get_network.get_area.find_area_boundary
+REAL_FIND_AREA = area.find_area
 
 
 # ---------------------------------------------------------------------------
 # Small in-memory layers used by the fakes
 # ---------------------------------------------------------------------------
 def make_osm_result() -> dict:
-    """One OSM 'mode' result, shaped like ``get_area.download_osm_layers``."""
+    """One OSM 'mode' result, shaped like ``network.download_osm``."""
     nodes = gpd.GeoDataFrame(
         {"node_id": ["n1", "n2"], "node_role": ["intersection", "endpoint"]},
         geometry=[Point(-0.40, 39.40), Point(-0.39, 39.40)],
@@ -56,7 +68,7 @@ def make_osm_result() -> dict:
 
 
 def make_gtfs_result(mode: str = "bus") -> dict:
-    """One GTFS dataset result, shaped like ``get_area.download_gtfs_layers``."""
+    """One GTFS dataset result, shaped like ``network.download_gtfs``."""
     nodes = gpd.GeoDataFrame(
         {
             "node_id": ["s1", "s2"],
@@ -101,13 +113,12 @@ def boundary() -> gpd.GeoDataFrame:
 
 @pytest.fixture
 def backends(monkeypatch, boundary):
-    """Replace the three backends of ``main()`` with offline fakes.
+    """Replace the three backends of ``download_network()`` with offline fakes.
 
     Returns a dict that records every call. Tests can set
     ``backends["gtfs_result"]`` or ``backends["gtfs_error"]`` to change what
     the fake GTFS download does.
     """
-    get_area = get_network.get_area
     calls: dict = {
         "boundary": [],
         "osm": [],
@@ -116,24 +127,24 @@ def backends(monkeypatch, boundary):
         "gtfs_error": None,
     }
 
-    def fake_find_area_boundary(area_name, boundaries_path=None, **kwargs):
+    def fake_find_area(area_name, boundaries_path=None, **kwargs):
         calls["boundary"].append(
             {"area_name": area_name, "boundaries_path": boundaries_path, **kwargs}
         )
         return boundary
 
-    def fake_download_osm_layers(bnd, *, modes, output_crs, **kwargs):
+    def fake_download_osm(bnd, *, modes, output_crs, **kwargs):
         calls["osm"].append(
             {"boundary": bnd, "modes": list(modes), "output_crs": output_crs}
         )
         results = {}
         for mode in modes:
-            network_type = get_area.OSM_NETWORK_TYPES[get_area.normalize_name(mode)]
-            label = get_area.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+            network_type = _osm.OSM_NETWORK_TYPES[_text.normalize_name(mode)]
+            label = _osm.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
             results[label] = make_osm_result()
         return results
 
-    def fake_download_gtfs_layers(area_name, bnd, zip_dir, **kwargs):
+    def fake_download_gtfs(area_name, bnd, zip_dir, **kwargs):
         calls["gtfs"].append(
             {"area_name": area_name, "zip_dir": Path(zip_dir), **kwargs}
         )
@@ -144,9 +155,9 @@ def backends(monkeypatch, boundary):
             raise calls["gtfs_error"]
         return calls["gtfs_result"]
 
-    monkeypatch.setattr(get_area, "find_area_boundary", fake_find_area_boundary)
-    monkeypatch.setattr(get_area, "download_osm_layers", fake_download_osm_layers)
-    monkeypatch.setattr(get_area, "download_gtfs_layers", fake_download_gtfs_layers)
+    monkeypatch.setattr(network, "find_area", fake_find_area)
+    monkeypatch.setattr(network, "download_osm", fake_download_osm)
+    monkeypatch.setattr(network, "download_gtfs", fake_download_gtfs)
     return calls
 
 
@@ -155,18 +166,18 @@ def backends(monkeypatch, boundary):
 # ---------------------------------------------------------------------------
 def test_gtfs_edge_rename_fits_shapefile_limit():
     too_long = {
-        new: old for old, new in get_network.GTFS_EDGE_RENAME.items() if len(new) > 10
+        new: old for old, new in _gtfs.GTFS_EDGE_RENAME.items() if len(new) > 10
     }
     assert too_long == {}
 
 
 def test_gtfs_edge_rename_targets_are_unique():
-    targets = list(get_network.GTFS_EDGE_RENAME.values())
+    targets = list(_gtfs.GTFS_EDGE_RENAME.values())
     assert len(targets) == len(set(targets))
 
 
 def test_gtfs_edge_rename_expected_examples():
-    rename = get_network.GTFS_EDGE_RENAME
+    rename = _gtfs.GTFS_EDGE_RENAME
     assert "from_node" not in rename  # already short, produced as-is
     assert rename["trip_count"] == "trips"
     assert rename["travel_time_seconds_mean"] == "tts_m"
@@ -180,7 +191,7 @@ def test_gtfs_edge_rename_expected_examples():
 # _split_modes
 # ---------------------------------------------------------------------------
 def test_split_modes_separates_osm_and_gtfs():
-    osm_modes, nap_modes = get_network._split_modes(["walking", "bus", "train"])
+    osm_modes, nap_modes = network._split_modes(["walking", "bus", "train"])
     assert osm_modes == ["walking"]
     assert nap_modes == {1, 2}
 
@@ -198,12 +209,12 @@ def test_split_modes_separates_osm_and_gtfs():
 def test_split_modes_is_case_and_whitespace_insensitive(
     modes, expected_osm, expected_nap
 ):
-    assert get_network._split_modes(modes) == (expected_osm, expected_nap)
+    assert network._split_modes(modes) == (expected_osm, expected_nap)
 
 
 def test_split_modes_rejects_unknown_mode():
     with pytest.raises(ValueError, match="Unknown mode 'helicopter'"):
-        get_network._split_modes(["walking", "helicopter"])
+        network._split_modes(["walking", "helicopter"])
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +353,7 @@ def test_write_schedule_tables_geopackage_uses_plain_sqlite_table(tmp_path):
 # NetworkX / JSON exports
 # ---------------------------------------------------------------------------
 def _links(data: dict) -> list[dict]:
-    return data[get_network.GRAPH_JSON_EDGES_KEY]
+    return data[_writers.GRAPH_JSON_EDGES_KEY]
 
 
 def test_graph_json_stores_edges_under_edges_key(tmp_path):
@@ -356,6 +367,7 @@ def test_graph_json_stores_edges_under_edges_key(tmp_path):
     assert "edges" in data
     assert "links" not in data
 
+
 def test_gtfs_graph_json_records_the_crs(tmp_path):
     result = make_gtfs_result()
     nodes = result["nodes"].to_crs("EPSG:25830")
@@ -364,6 +376,7 @@ def test_gtfs_graph_json_records_the_crs(tmp_path):
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["graph"]["crs"] == "EPSG:25830"
+
 
 def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     result = make_gtfs_result()
@@ -387,6 +400,7 @@ def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     assert link["geometry"] == "LINESTRING (-0.4 39.4, -0.39 39.41)"
     assert "hour_band" not in link  # never a column of the aggregated edges
 
+
 def test_gtfs_graph_json_keeps_only_the_given_edge_columns(tmp_path):
     result = make_gtfs_result()
     columns = ["edge_id", "from_node", "to_node", "trip_count", "geometry"]
@@ -398,10 +412,12 @@ def test_gtfs_graph_json_keeps_only_the_given_edge_columns(tmp_path):
     assert [k for k in link if k not in {"source", "target", "key"}] == columns
 
 
-def test_main_networkx_gtfs_graph_has_the_layer_edge_columns(tmp_path, backends):
+def test_download_network_networkx_gtfs_graph_has_the_layer_edge_columns(
+    tmp_path, backends
+):
     backends["gtfs_result"] = {"ds1": make_gtfs_result()}
-    get_network.main(
-        "Valencia", modes=["bus"], output_path=tmp_path, output_file_type="networkx"
+    network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, formats="networkx"
     )
     data = json.loads((tmp_path / "bus" / "ds1" / "graph.json").read_text("utf-8"))
 
@@ -418,6 +434,7 @@ def test_main_networkx_gtfs_graph_has_the_layer_edge_columns(tmp_path, backends)
     ]
     assert "not_in_whitelist" not in link
 
+
 def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
     # The edge s1 -> s3 crosses the boundary: s3 is not in the stops layer.
     result = make_gtfs_result()
@@ -432,9 +449,7 @@ def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
         geometry=[LineString([(-0.40, 39.40), (-0.10, 39.70)])],
         crs="EPSG:4326",
     )
-    path = _writers._gtfs_to_graph_json(
-        result["nodes"], edges, tmp_path / "graph.json"
-    )
+    path = _writers._gtfs_to_graph_json(result["nodes"], edges, tmp_path / "graph.json")
 
     nodes = {n["id"]: n for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]}
     assert nodes["s3"]["x"] == pytest.approx(-0.10)
@@ -443,12 +458,12 @@ def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
     assert nodes["s1"]["stop_name"] == "Stop A"  # stops-layer node left as is
 
 
-def test_read_graph_json_round_trip(tmp_path):
+def test_read_graph_round_trip(tmp_path):
     result = make_gtfs_result()
     path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json"
     )
-    graph = multimodalpy.read_graph_json(path)
+    graph = multimodalpy.read_graph(path)
 
     assert isinstance(graph, nx.MultiDiGraph)
     assert graph.graph["crs"] == "EPSG:4326"
@@ -459,7 +474,7 @@ def test_read_graph_json_round_trip(tmp_path):
     assert attrs["geometry"].coords[0] == pytest.approx((-0.40, 39.40))
 
 
-def test_read_graph_json_reads_legacy_links_key(tmp_path):
+def test_read_graph_reads_legacy_links_key(tmp_path):
     result = make_gtfs_result()
     path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json"
@@ -468,41 +483,39 @@ def test_read_graph_json_reads_legacy_links_key(tmp_path):
     data["links"] = data.pop("edges")  # as written by networkx < 3.6
     path.write_text(json.dumps(data), encoding="utf-8")
 
-    graph = get_network.read_graph_json(path, parse_geometry=False)
+    graph = io.read_graph(path, parse_geometry=False)
     assert graph.number_of_edges() == 1
     ((_, _, attrs),) = graph.edges(data=True)
     assert isinstance(attrs["geometry"], str)
 
+
 # ---------------------------------------------------------------------------
 # main(): argument validation (fails before any backend is called)
 # ---------------------------------------------------------------------------
-def test_main_multimodal_is_not_implemented(tmp_path):
-    with pytest.raises(NotImplementedError):
-        get_network.main("Valencia", output_path=tmp_path, multimodal=True)
-
-
 @pytest.mark.parametrize("bad_type", ["csv", "gpkg", ["geojson", "csv"]])
-def test_main_rejects_unknown_output_file_type(tmp_path, bad_type):
+def test_download_network_rejects_unknown_format(tmp_path, bad_type):
     with pytest.raises(ValueError, match="is not valid"):
-        get_network.main("Valencia", output_path=tmp_path, output_file_type=bad_type)
+        network.download_network("Valencia", output_dir=tmp_path, formats=bad_type)
 
 
-def test_main_rejects_empty_output_file_type_list(tmp_path):
+def test_download_network_rejects_empty_format_list(tmp_path):
     with pytest.raises(ValueError, match="cannot be empty"):
-        get_network.main("Valencia", output_path=tmp_path, output_file_type=[])
+        network.download_network("Valencia", output_dir=tmp_path, formats=[])
 
 
-def test_main_rejects_unknown_mode(tmp_path):
+def test_download_network_rejects_unknown_mode(tmp_path):
     with pytest.raises(ValueError, match="Unknown mode"):
-        get_network.main("Valencia", modes=["helicopter"], output_path=tmp_path)
+        network.download_network("Valencia", modes=["helicopter"], output_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
 # main(): OSM only
 # ---------------------------------------------------------------------------
-def test_main_osm_geojson_writes_one_folder_per_mode(tmp_path, backends):
+def test_download_network_osm_geojson_writes_one_folder_per_mode(tmp_path, backends):
     out = tmp_path / "out"
-    manifest = get_network.main("Valencia", modes=["walking", "bike"], output_path=out)
+    manifest = network.download_network(
+        "Valencia", modes=["walking", "bike"], output_dir=out
+    )
 
     expected = {
         "study_area_boundary.geojson",
@@ -520,8 +533,8 @@ def test_main_osm_geojson_writes_one_folder_per_mode(tmp_path, backends):
     assert manifest["osm_modes"] == ["walking", "bike"]
     assert manifest["gtfs_datasets"] == []
     assert manifest["crs"] == "EPSG:4326"
-    assert manifest["output_file_type"] == "geojson"
-    assert manifest["output_path"] == str(out)
+    assert manifest["formats"] == "geojson"
+    assert manifest["output_dir"] == str(out)
     assert "files_by_format" not in manifest
     assert "gtfs_status" not in manifest
 
@@ -530,27 +543,35 @@ def test_main_osm_geojson_writes_one_folder_per_mode(tmp_path, backends):
     assert backends["gtfs"] == []
 
 
-def test_main_accepts_a_single_mode_as_string(tmp_path, backends):
-    manifest = get_network.main("Valencia", modes="walking", output_path=tmp_path)
+def test_download_network_accepts_a_single_mode_as_string(tmp_path, backends):
+    manifest = network.download_network(
+        "Valencia", modes="walking", output_dir=tmp_path
+    )
     assert manifest["modes"] == ["walking"]
     assert "walking/nodes.geojson" in manifest["files"]
 
 
-def test_main_maps_spanish_synonyms_to_canonical_folders(tmp_path, backends):
-    manifest = get_network.main("Valencia", modes=["coche"], output_path=tmp_path)
+def test_download_network_maps_spanish_synonyms_to_canonical_folders(
+    tmp_path, backends
+):
+    manifest = network.download_network(
+        "Valencia", modes=["coche"], output_dir=tmp_path
+    )
     assert "driving/nodes.geojson" in manifest["files"]
     assert "driving/edges.geojson" in manifest["files"]
 
 
-def test_main_passes_boundary_arguments_and_reprojects_output(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_passes_boundary_arguments_and_reprojects_output(
+    tmp_path, backends
+):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
+        output_dir=tmp_path,
         boundaries_path="my_boundaries.geojson",
         area_code="46250",
         crs="EPSG:25830",
-        output_file_type="geopackage",
+        formats="geopackage",
     )
 
     call = backends["boundary"][0]
@@ -566,11 +587,9 @@ def test_main_passes_boundary_arguments_and_reprojects_output(tmp_path, backends
     assert layer.crs.to_epsg() == 25830
 
 
-def test_main_with_real_boundary_file(tmp_path, backends, monkeypatch):
-    """End to end through the real ``find_area_boundary`` (OSM still faked)."""
-    monkeypatch.setattr(
-        get_network.get_area, "find_area_boundary", REAL_FIND_AREA_BOUNDARY
-    )
+def test_download_network_with_real_boundary_file(tmp_path, backends, monkeypatch):
+    """End to end through the real ``find_area`` (OSM still faked)."""
+    monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
     boundaries = gpd.GeoDataFrame(
         {"nombre": ["Segovia", "Madrid"], "NATCODE": ["34074040136", "34132828079"]},
         geometry=[box(-4.2, 40.9, -4.0, 41.0), box(-3.8, 40.3, -3.5, 40.6)],
@@ -579,10 +598,10 @@ def test_main_with_real_boundary_file(tmp_path, backends, monkeypatch):
     path = tmp_path / "boundaries.geojson"
     boundaries.to_file(path, driver="GeoJSON")
 
-    manifest = get_network.main(
+    manifest = network.download_network(
         "Segovia",
         modes=["walking"],
-        output_path=tmp_path / "out",
+        output_dir=tmp_path / "out",
         boundaries_path=path,
     )
 
@@ -595,15 +614,17 @@ def test_main_with_real_boundary_file(tmp_path, backends, monkeypatch):
 # ---------------------------------------------------------------------------
 # main(): output formats
 # ---------------------------------------------------------------------------
-def test_main_multiple_formats_download_once_and_write_each(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_multiple_formats_download_once_and_write_each(
+    tmp_path, backends
+):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
-        output_file_type=["geojson", "geopackage", "GeoJSON"],  # duplicate ignored
+        output_dir=tmp_path,
+        formats=["geojson", "geopackage", "GeoJSON"],  # duplicate ignored
     )
 
-    assert manifest["output_file_type"] == ["geojson", "geopackage"]
+    assert manifest["formats"] == ["geojson", "geopackage"]
     by_format = manifest["files_by_format"]
     assert set(by_format) == {"geojson", "geopackage"}
     assert by_format["geojson"] == [
@@ -620,23 +641,25 @@ def test_main_multiple_formats_download_once_and_write_each(tmp_path, backends):
     assert len(backends["osm"]) == 1  # the pipeline is not repeated per format
 
 
-def test_main_single_format_given_as_list_returns_a_list(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_single_format_given_as_list_returns_a_list(
+    tmp_path, backends
+):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
-        output_file_type=["geojson"],
+        output_dir=tmp_path,
+        formats=["geojson"],
     )
-    assert manifest["output_file_type"] == ["geojson"]
+    assert manifest["formats"] == ["geojson"]
     assert set(manifest["files_by_format"]) == {"geojson"}
 
 
-def test_main_networkx_writes_graph_json(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_networkx_writes_graph_json(tmp_path, backends):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
-        output_file_type="networkx",
+        output_dir=tmp_path,
+        formats="networkx",
     )
     assert set(manifest["files"]) == {
         "study_area_boundary.geojson",
@@ -646,13 +669,13 @@ def test_main_networkx_writes_graph_json(tmp_path, backends):
     assert len(data["nodes"]) == 2
 
 
-def test_main_matrix_writes_one_npz_per_network(tmp_path, backends):
+def test_download_network_matrix_writes_one_npz_per_network(tmp_path, backends):
     backends["gtfs_result"] = {"ds1": make_gtfs_result("bus")}
-    manifest = get_network.main(
+    manifest = network.download_network(
         "Valencia",
         modes=["walking", "bus"],
-        output_path=tmp_path,
-        output_file_type="matrix",
+        output_dir=tmp_path,
+        formats="matrix",
         api_key="secret",
     )
 
@@ -680,13 +703,13 @@ def test_main_matrix_writes_one_npz_per_network(tmp_path, backends):
     assert bus.meta["gtfs_hour_range"] is None
 
 
-def test_main_matrix_records_custom_gtfs_settings(tmp_path, backends):
+def test_download_network_matrix_records_custom_gtfs_settings(tmp_path, backends):
     backends["gtfs_result"] = {"ds1": make_gtfs_result("train")}
-    get_network.main(
+    network.download_network(
         "Valencia",
         modes=["train"],
-        output_path=tmp_path,
-        output_file_type="matrix",
+        output_dir=tmp_path,
+        formats="matrix",
         api_key="secret",
         gtfs_peak_periods={"peak_am": (6, 9)},
         gtfs_hour_range=(6, 22),
@@ -697,26 +720,26 @@ def test_main_matrix_records_custom_gtfs_settings(tmp_path, backends):
     assert train.meta["gtfs_hour_range"] == [6, 22]
 
 
-def test_main_matrix_writes_the_schedule_as_csv(tmp_path, backends):
+def test_download_network_matrix_writes_the_schedule_as_csv(tmp_path, backends):
     backends["gtfs_result"] = {"ds1": make_gtfs_result()}
-    manifest = get_network.main(
+    manifest = network.download_network(
         "Valencia",
         modes=["bus"],
-        output_path=tmp_path,
-        output_file_type="matrix",
+        output_dir=tmp_path,
+        formats="matrix",
         api_key="secret",
-        schedule=True,
+        write_schedule=True,
     )
     assert "bus/ds1/schedule.csv" in manifest["files"]
     assert (tmp_path / "bus" / "ds1" / "schedule.csv").is_file()
 
 
-def test_main_matrix_combines_with_other_formats(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_matrix_combines_with_other_formats(tmp_path, backends):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
-        output_file_type=["geojson", "matrix"],
+        output_dir=tmp_path,
+        formats=["geojson", "matrix"],
     )
 
     assert manifest["files_by_format"]["matrix"] == [
@@ -730,15 +753,15 @@ def test_main_matrix_combines_with_other_formats(tmp_path, backends):
     assert matrix.weights["tts"].tolist() == edges["tts"].tolist()
 
 
-def test_main_matrix_skips_networks_without_edges(tmp_path, backends):
+def test_download_network_matrix_skips_networks_without_edges(tmp_path, backends):
     empty = make_gtfs_result()
     empty["edges"] = empty["edges"].iloc[0:0]
     backends["gtfs_result"] = {"ds1": empty}
-    manifest = get_network.main(
+    manifest = network.download_network(
         "Valencia",
         modes=["bus"],
-        output_path=tmp_path,
-        output_file_type="matrix",
+        output_dir=tmp_path,
+        formats="matrix",
         api_key="secret",
     )
     assert manifest["files"] == ["study_area_boundary.geojson"]
@@ -746,19 +769,21 @@ def test_main_matrix_skips_networks_without_edges(tmp_path, backends):
 
 def test_cli_accepts_the_matrix_format(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
 
-    get_network._cli(["--area", "Valencia", "--output-file-type", "matrix"])
+    _cli.main(["--area", "Valencia", "--formats", "matrix"])
 
-    assert captured["output_file_type"] == ["matrix"]
+    assert captured["formats"] == ["matrix"]
 
 
 # ---------------------------------------------------------------------------
 # read_matrix
 # ---------------------------------------------------------------------------
 def test_read_matrix_reads_the_file_or_its_folder(tmp_path, backends):
-    get_network.main(
-        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path, formats="matrix"
     )
 
     by_folder = multimodalpy.read_matrix(tmp_path / "walking")
@@ -772,8 +797,8 @@ def test_read_matrix_reads_the_file_or_its_folder(tmp_path, backends):
 
 
 def test_read_matrix_loads_the_requested_weight(tmp_path, backends):
-    get_network.main(
-        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path, formats="matrix"
     )
 
     data = multimodalpy.read_matrix(tmp_path / "walking", weight="length")
@@ -783,8 +808,8 @@ def test_read_matrix_loads_the_requested_weight(tmp_path, backends):
 
 
 def test_read_matrix_rejects_unknown_weights(tmp_path, backends):
-    get_network.main(
-        "Valencia", modes=["walking"], output_path=tmp_path, output_file_type="matrix"
+    network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path, formats="matrix"
     )
 
     with pytest.raises(ValueError, match="Available: length, tts"):
@@ -796,12 +821,12 @@ def test_read_matrix_without_a_file_raises_file_not_found(tmp_path):
         multimodalpy.read_matrix(tmp_path)
 
 
-def test_main_shapefile_writes_layer_files(tmp_path, backends):
-    manifest = get_network.main(
+def test_download_network_shapefile_writes_layer_files(tmp_path, backends):
+    manifest = network.download_network(
         "Valencia",
         modes=["walking"],
-        output_path=tmp_path,
-        output_file_type="shapefile",
+        output_dir=tmp_path,
+        formats="shapefile",
     )
     assert "walking/nodes.shp" in manifest["files"]
     assert (tmp_path / "walking" / "nodes.shp").is_file()
@@ -811,10 +836,12 @@ def test_main_shapefile_writes_layer_files(tmp_path, backends):
 # main(): GTFS
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("mode", "nap_id"), [("bus", 1), ("train", 2)])
-def test_main_gtfs_writes_filtered_and_renamed_layers(tmp_path, backends, mode, nap_id):
+def test_download_network_gtfs_writes_filtered_and_renamed_layers(
+    tmp_path, backends, mode, nap_id
+):
     backends["gtfs_result"] = {"ds1": make_gtfs_result(mode)}
-    manifest = get_network.main(
-        "Valencia", modes=[mode], output_path=tmp_path, api_key="secret"
+    manifest = network.download_network(
+        "Valencia", modes=[mode], output_dir=tmp_path, api_key="secret"
     )
 
     assert manifest["gtfs_datasets"] == ["ds1"]
@@ -838,23 +865,25 @@ def test_main_gtfs_writes_filtered_and_renamed_layers(tmp_path, backends, mode, 
 
     # Edge columns are whitelisted and then renamed to shapefile-safe names.
     edges = gpd.read_file(tmp_path / mode / "ds1" / "edges.geojson")
-    assert {"edge_id", "from_node", "to_node", "trips", "tts_m"} <= set(
-        edges.columns
-    )
+    assert {"edge_id", "from_node", "to_node", "trips", "tts_m"} <= set(edges.columns)
     assert "from_node_id" not in edges.columns
     assert "to_node_id" not in edges.columns
     assert "not_in_whitelist" not in edges.columns
 
 
-def test_main_gtfs_schedule_table_only_written_when_requested(tmp_path, backends):
+def test_download_network_gtfs_schedule_table_only_written_when_requested(
+    tmp_path, backends
+):
     backends["gtfs_result"] = {"ds1": make_gtfs_result()}
 
-    without = get_network.main("Valencia", modes=["bus"], output_path=tmp_path / "a")
+    without = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path / "a"
+    )
     assert "bus/ds1/schedule.csv" not in without["files"]
     assert backends["gtfs"][0]["include_schedule_table"] is False
 
-    with_schedule = get_network.main(
-        "Valencia", modes=["bus"], output_path=tmp_path / "b", schedule=True
+    with_schedule = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path / "b", write_schedule=True
     )
     assert "bus/ds1/schedule.csv" in with_schedule["files"]
     assert (tmp_path / "b" / "bus" / "ds1" / "schedule.csv").is_file()
@@ -862,21 +891,23 @@ def test_main_gtfs_schedule_table_only_written_when_requested(tmp_path, backends
 
 
 @pytest.mark.parametrize("keep_zips", [False, True])
-def test_main_removes_gtfs_zips_unless_asked_to_keep_them(
+def test_download_network_removes_gtfs_zips_unless_asked_to_keep_them(
     tmp_path, backends, keep_zips
 ):
     backends["gtfs_result"] = {"ds1": make_gtfs_result()}
-    get_network.main(
-        "Valencia", modes=["bus"], output_path=tmp_path, gtfs_zips=keep_zips
+    network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, keep_gtfs_zips=keep_zips
     )
     assert (tmp_path / "gtfs_zips").exists() is keep_zips
 
 
-def test_main_keeps_osm_layers_when_gtfs_download_fails(tmp_path, backends, caplog):
+def test_download_network_keeps_osm_layers_when_gtfs_download_fails(
+    tmp_path, backends, caplog
+):
     backends["gtfs_error"] = RuntimeError("NAP down")
     with caplog.at_level(logging.WARNING):
-        manifest = get_network.main(
-            "Valencia", modes=["walking", "bus"], output_path=tmp_path
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path
         )
 
     assert manifest["gtfs_status"] == "RuntimeError: NAP down"
@@ -885,24 +916,26 @@ def test_main_keeps_osm_layers_when_gtfs_download_fails(tmp_path, backends, capl
     assert "Could not download GTFS data" in caplog.text
 
 
-def test_main_reports_when_nap_has_no_published_datasets(tmp_path, backends):
+def test_download_network_reports_when_nap_has_no_published_datasets(
+    tmp_path, backends
+):
     backends["gtfs_result"] = {}
-    manifest = get_network.main("Valencia", modes=["bus"], output_path=tmp_path)
+    manifest = network.download_network("Valencia", modes=["bus"], output_dir=tmp_path)
     assert manifest["gtfs_status"] == "no published datasets"
     assert manifest["files"] == ["study_area_boundary.geojson"]
 
 
-def test_main_warns_when_no_gtfs_layers_are_written(tmp_path, backends):
+def test_download_network_warns_when_no_gtfs_layers_are_written(tmp_path, backends):
     backends["gtfs_error"] = ValueError("Missing NAP API key.")
     with pytest.warns(UserWarning, match="No bus/train layers were written"):
-        manifest = get_network.main(
-            "Valencia", modes=["walking", "bus"], output_path=tmp_path
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path
         )
     assert manifest["gtfs_status"] == "ValueError: Missing NAP API key."
 
 
-def test_main_does_not_warn_without_gtfs_modes(tmp_path, backends, recwarn):
-    get_network.main("Valencia", modes=["walking"], output_path=tmp_path)
+def test_download_network_does_not_warn_without_gtfs_modes(tmp_path, backends, recwarn):
+    network.download_network("Valencia", modes=["walking"], output_dir=tmp_path)
     assert not [w for w in recwarn if "bus/train" in str(w.message)]
 
 
@@ -946,7 +979,7 @@ def sent_keys(monkeypatch):
 
 def test_nap_key_is_read_from_dotenv_file(no_env_key, sent_keys):
     (no_env_key / ".env").write_text('NAP_API_KEY="from-dotenv"\n', "utf-8")
-    zips = get_network.get_area.download_gtfs_nap_zips(
+    zips = _nap.download_gtfs_nap_zips(
         "Valencia", no_env_key / "zips", province_code=46
     )
     assert zips == []
@@ -958,17 +991,13 @@ def test_environment_variable_takes_priority_over_dotenv(
 ):
     (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
     monkeypatch.setenv("NAP_API_KEY", "from-env")
-    get_network.get_area.download_gtfs_nap_zips(
-        "Valencia", no_env_key / "zips", province_code=46
-    )
+    _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
     assert sent_keys == ["from-env"]
 
 
 def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
     with pytest.raises(ValueError, match="Missing NAP API key"):
-        get_network.get_area.download_gtfs_nap_zips(
-            "Valencia", no_env_key / "zips", province_code=46
-        )
+        _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
     assert sent_keys == []
 
 
@@ -977,54 +1006,58 @@ def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
 # ---------------------------------------------------------------------------
 def test_cli_forwards_arguments_to_main(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
 
-    get_network._cli(
+    _cli.main(
         [
             "--area", "Valencia",
             "--modes", "walking", "bus",
-            "--output", "out",
+            "--output-dir", "out",
             "--crs", "EPSG:25830",
-            "--output-file-type", "geojson", "geopackage",
+            "--formats", "geojson", "geopackage",
             "--area-code", "46250",
             "--gtfs-hour-range", "7", "9",
-            "--schedule",
-            "--gtfs-zips",
+            "--write-schedule",
+            "--keep-gtfs-zips",
         ]
     )  # fmt: skip
 
     assert captured["area_name"] == "Valencia"
     assert captured["modes"] == ["walking", "bus"]
-    assert captured["output_path"] == "out"
+    assert captured["output_dir"] == "out"
     assert captured["crs"] == "EPSG:25830"
-    assert captured["output_file_type"] == ["geojson", "geopackage"]
+    assert captured["formats"] == ["geojson", "geopackage"]
     assert captured["area_code"] == "46250"
     assert captured["gtfs_hour_range"] == (7, 9)
-    assert captured["schedule"] is True
-    assert captured["gtfs_zips"] is True
+    assert captured["write_schedule"] is True
+    assert captured["keep_gtfs_zips"] is True
 
 
 def test_cli_defaults(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
 
-    get_network._cli(["--area", "Valencia"])
+    _cli.main(["--area", "Valencia"])
 
     assert captured["modes"] == ["walking"]
-    assert captured["output_path"] == "output"
+    assert captured["output_dir"] == "output"
     assert captured["crs"] == "EPSG:4326"
-    assert captured["output_file_type"] == ["geojson"]
+    assert captured["formats"] == ["geojson"]
     assert captured["boundaries_path"] is None
     assert captured["gtfs_hour_range"] is None
-    assert captured["schedule"] is False
-    assert captured["gtfs_zips"] is False
+    assert captured["write_schedule"] is False
+    assert captured["keep_gtfs_zips"] is False
 
 
 def test_cli_requires_area_and_valid_output_type():
     with pytest.raises(SystemExit):
-        get_network._cli([])
+        _cli.main([])
     with pytest.raises(SystemExit):
-        get_network._cli(["--area", "Valencia", "--output-file-type", "csv"])
+        _cli.main(["--area", "Valencia", "--formats", "csv"])
 
 
 # ---------------------------------------------------------------------------
@@ -1036,28 +1069,28 @@ def test_dotenv_in_a_parent_folder_is_found(no_env_key, monkeypatch):
     notebooks.mkdir()
     monkeypatch.chdir(notebooks)
 
-    assert get_network.get_area.resolve_nap_api_key() == "from-parent"
+    assert _nap.resolve_nap_api_key() == "from-parent"
 
 
 def test_api_key_argument_beats_environment_and_dotenv(no_env_key, monkeypatch):
     (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
     monkeypatch.setenv("NAP_API_KEY", "from-env")
 
-    assert get_network.get_area.resolve_nap_api_key("from-arg") == "from-arg"
+    assert _nap.resolve_nap_api_key("from-arg") == "from-arg"
 
 
 def test_missing_key_message_says_where_it_looked(no_env_key):
-    assert get_network.get_area.resolve_nap_api_key() is None
-    message = get_network.get_area.missing_nap_key_message()
+    assert _nap.resolve_nap_api_key() is None
+    message = _nap.missing_nap_key_message()
     assert str(Path.cwd()) in message
     assert "--api-key" in message and "NAP_API_KEY" in message
 
 
 def test_load_dotenv_returns_the_file_it_read(no_env_key):
-    assert get_network.get_area.load_dotenv() is None
+    assert _nap.load_dotenv() is None
     env = no_env_key / ".env"
     env.write_text("NAP_API_KEY=x\n", "utf-8")
-    assert get_network.get_area.load_dotenv() == env.resolve()
+    assert _nap.load_dotenv() == env.resolve()
 
 
 class _Response:
@@ -1097,10 +1130,8 @@ def test_rejected_key_while_downloading_files_stops_with_auth_error(
 
     monkeypatch.setattr(requests, "get", fake_get)
 
-    with pytest.raises(get_network.get_area.NAPAuthenticationError, match="Invalid"):
-        get_network.get_area.download_gtfs_nap_zips(
-            "Valencia", tmp_path, modes=[1], province_code=46
-        )
+    with pytest.raises(_nap.NAPAuthenticationError, match="Invalid"):
+        _nap.download_gtfs_nap_zips("Valencia", tmp_path, modes=[1], province_code=46)
 
     # Stopped at the first file instead of trying (and failing) every one.
     assert not any(url.endswith("/fichero/11/descarga") for url in requested)
@@ -1108,23 +1139,23 @@ def test_rejected_key_while_downloading_files_stops_with_auth_error(
     assert report["status"].tolist() == ["failed"]
 
 
-def test_main_without_key_warns_before_downloading_and_skips_gtfs(
+def test_download_network_without_key_warns_before_downloading_and_skips_gtfs(
     tmp_path, backends, monkeypatch
 ):
     monkeypatch.delenv("NAP_API_KEY")
     monkeypatch.chdir(tmp_path)  # no .env here or in a parent folder
     warnings_before_osm = []
-    fake_osm = get_network.get_area.download_osm_layers
+    fake_osm = network.download_osm
 
     def osm_spy(*args, **kwargs):
         warnings_before_osm.append(len(caught))
         return fake_osm(*args, **kwargs)
 
-    monkeypatch.setattr(get_network.get_area, "download_osm_layers", osm_spy)
+    monkeypatch.setattr(network, "download_osm", osm_spy)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        manifest = get_network.main(
-            "Valencia", modes=["walking", "bus"], output_path=tmp_path / "out"
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path / "out"
         )
 
     key_warnings = [w for w in caught if "NAP API key" in str(w.message)]
@@ -1137,10 +1168,12 @@ def test_main_without_key_warns_before_downloading_and_skips_gtfs(
 
 def test_cli_forwards_api_key(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
 
-    get_network._cli(["--area", "Valencia", "--api-key", "secret"])
+    _cli.main(["--area", "Valencia", "--api-key", "secret"])
     assert captured["api_key"] == "secret"
 
-    get_network._cli(["--area", "Valencia"])
+    _cli.main(["--area", "Valencia"])
     assert captured["api_key"] is None

@@ -43,6 +43,8 @@ napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 
 autosummary_generate = True
+# Document only each public module's __all__, not its helpers.
+autosummary_ignore_module_all = False
 autodoc_default_options = {
     "members": True,
     "undoc-members": False,

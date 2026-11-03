@@ -1,44 +1,46 @@
-"""Downloads data locally according to what the user requested.
+"""Transport networks: download, standardize and write them.
 
-Contains the library's main function, ``main()``, which orchestrates the
-whole pipeline with the minimal parameters the user needs::
+:func:`download_network` is the library's main function: give it a
+municipality and the modes, and it writes every network in the formats
+requested::
 
-    main(
-        area_name,          # str  : municipality to download
-        modes,              # list : transport modes
-        output_path,        # Path : local download folder
-        boundaries_path=None,   # Path: boundaries shapefile/geojson (optional)
-        crs="EPSG:4326",        # str : output CRS (defaults to universal WGS84)
-        output_file_type="geojson",  # geopackage | geojson | shapefile | networkx
-                                     # | matrix (or a list of several of them)
+    import multimodalpy as mmp
+
+    mmp.download_network(
+        "Valencia",
+        modes=["walking", "bike", "bus"],
+        output_dir="output",
+        formats=["geojson", "matrix"],
     )
 
-Modes are automatically split between OSM and GTFS::
+:func:`download_osm` and :func:`download_gtfs` return the standardized
+layers in memory instead, for a study area from :func:`multimodalpy.find_area`.
 
-    OSM  -> "walking", "bike", "driving"
-    GTFS -> "bus", "trains"
+Modes are split between the two sources: "walking", "bike" and "driving"
+come from OpenStreetMap; "bus" and "train" from the official GTFS feeds of
+Spain's National Access Point (NAP), which needs a free API key.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import geopandas as gpd
-    import networkx as nx
     import pandas as pd
-    from scipy.sparse import csr_array
 
-from . import _gtfs, get_area
-from ._gtfs import GTFS_EDGE_RENAME
+from . import _gtfs
+from ._boundaries import find_area
+from ._gtfs import GTFS_EDGE_RENAME, download_gtfs
+from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
+from ._osm import OSM_NETWORK_TYPES, download_osm
+from ._text import slugify
 from ._writers import (
-    GRAPH_JSON_EDGES_KEY,
     _gtfs_to_graph_json,
     _osm_layers_to_graph_json,
     _write_layers,
@@ -46,14 +48,22 @@ from ._writers import (
     _write_schedule_tables,
 )
 
+__all__ = [
+    "FORMATS",
+    "NAPAuthenticationError",
+    "download_gtfs",
+    "download_network",
+    "download_osm",
+]
+
 logger = logging.getLogger(__name__)
 
 
 # User mode -> download backend mapping. Any synonym recognized by
-# ``get_area.OSM_NETWORK_TYPES`` is accepted (e.g. "driving", "coche",
+# ``_osm.OSM_NETWORK_TYPES`` is accepted (e.g. "driving", "coche",
 # "car", "drive" are equivalent); the resulting layer always uses the
 # canonical English label ("walking", "bike", "driving").
-OSM_MODES = set(get_area.OSM_NETWORK_TYPES)
+OSM_MODES = set(OSM_NETWORK_TYPES)
 # NAP: 1 = bus, 2 = rail.
 GTFS_MODE_TO_NAP = {
     "bus": 1,
@@ -61,127 +71,8 @@ GTFS_MODE_TO_NAP = {
 }
 
 VALID_MODES = OSM_MODES | set(GTFS_MODE_TO_NAP)
-VALID_OUTPUT_TYPES = {"geopackage", "geojson", "shapefile", "networkx", "matrix"}
-
-
-def read_graph_json(
-    path: str | Path, *, parse_geometry: bool = True
-) -> nx.MultiDiGraph:
-    """Read a ``graph.json`` written by the networkx export.
-
-    Accepts files with the edge list under ``"edges"`` (current) or
-    ``"links"`` (files written with networkx < 3.6 before the key was
-    fixed). With ``parse_geometry=True`` each edge's ``geometry`` WKT text
-    is turned into a shapely geometry. The CRS of the node ``x`` / ``y``
-    and the edge geometries is in ``graph.graph["crs"]``.
-
-    Examples
-    --------
-    >>> G = read_graph_json("output/walking/graph.json")  # doctest: +SKIP
-    >>> G.graph["crs"]  # doctest: +SKIP
-    'EPSG:4326'
-    """
-    from networkx.readwrite import json_graph
-
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    edges_key = GRAPH_JSON_EDGES_KEY if GRAPH_JSON_EDGES_KEY in data else "links"
-    graph = json_graph.node_link_graph(data, edges=edges_key)
-
-    if parse_geometry:
-        from shapely import wkt
-
-        for _u, _v, attrs in graph.edges(data=True):
-            geom = attrs.get("geometry")
-            if isinstance(geom, str):
-                attrs["geometry"] = wkt.loads(geom)
-    return graph
-
-class MatrixData(NamedTuple):
-    """What :func:`read_matrix` returns: ``(matrix, nodes, meta, weight)``."""
-
-    #: Directed adjacency matrix (``scipy.sparse.csr_array``) of the chosen
-    #: weight: row = origin node, column = destination node. A missing entry
-    #: means there is no edge; ``inf`` means the edge exists but cannot be
-    #: travelled with this weight (e.g. a GTFS period with no service).
-    matrix: csr_array
-    #: One row per matrix row, in order: ``layer``, ``node_id``, ``x``, ``y``
-    #: (in ``meta["crs"]``) and ``in_area``.
-    nodes: pd.DataFrame
-    #: File metadata: ``crs``, ``mode``, ``dataset``, ``area``, ``weights``
-    #: (names and units), ``default_weight``, ...
-    meta: dict[str, Any]
-    #: Name of the weight in ``matrix``.
-    weight: str
-
-
-def read_matrix(path: str | Path, weight: str | None = None) -> MatrixData:
-    """Read a ``matrix.npz`` written by the matrix export.
-
-    Parameters
-    ----------
-    path : str | Path
-        The ``matrix.npz`` file, or the folder that holds it (e.g.
-        ``"output/walking"`` or ``"output/bus/<dataset>"``).
-    weight : str, optional
-        Weight to load: ``"tts"`` or ``"length"`` for walking / bike /
-        driving, or one of the GTFS travel-time columns (``"tts_m"``,
-        ``"tm_pam_wd"``, ...) for bus / train. Defaults to the file's
-        default weight (``tts`` for OSM, ``tts_m`` for GTFS). The weights
-        in a file are listed in ``meta["weights"]``.
-
-    Returns
-    -------
-    MatrixData
-        The matrix of that weight, the node table and the metadata.
-
-    Raises
-    ------
-    FileNotFoundError
-        If there is no ``matrix.npz`` at ``path``.
-    ValueError
-        If ``weight`` is not in the file, the file is not a multimodalpy
-        matrix, or it was written by a newer multimodalpy.
-
-    See Also
-    --------
-    main : writes the files with ``output_file_type="matrix"``.
-
-    Notes
-    -----
-    The file layout is described in the "Matrix" section of
-    ``DATA_SCHEMA.md``. It can also be opened without multimodalpy:
-    ``scipy.sparse.load_npz`` returns the default weight, and
-    ``numpy.load`` gives every array.
-
-    Examples
-    --------
-    >>> from scipy.sparse.csgraph import dijkstra  # doctest: +SKIP
-    >>> data = read_matrix("output/walking")  # doctest: +SKIP
-    >>> origin = data.nodes.index[data.nodes["node_id"] == 1234][0]  # doctest: +SKIP
-    >>> seconds = dijkstra(data.matrix, indices=origin, limit=600)  # doctest: +SKIP
-    """
-    # Imported here so ``import multimodalpy`` does not load numpy / pandas.
-    from . import _matrix
-
-    file_path = Path(path)
-    if file_path.is_dir():
-        file_path = file_path / "matrix.npz"
-    if not file_path.is_file():
-        raise FileNotFoundError(f"No matrix file at {file_path}.")
-
-    network = _matrix.read_network_matrix(file_path)
-    name = network.default_weight if weight is None else weight
-    if name not in network.weights:
-        raise ValueError(
-            f"Weight '{name}' is not in {file_path}. "
-            f"Available: {', '.join(sorted(network.weights))}"
-        )
-    return MatrixData(
-        matrix=network.to_scipy(name),
-        nodes=network.nodes,
-        meta=network.meta,
-        weight=name,
-    )
+#: Output formats accepted by :func:`download_network`.
+FORMATS = ("geojson", "shapefile", "geopackage", "networkx", "matrix")
 
 
 # ---------------------------------------------------------------------------
@@ -205,28 +96,32 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
-def main(
+def download_network(
     area_name: str,
     modes: Sequence[str] = ("walking",),
-    output_path: str | Path = "output",
+    output_dir: str | Path = "output",
     *,
     boundaries_path: str | Path | None = None,
     crs: str = "EPSG:4326",
-    output_file_type: str | Sequence[str] = "geojson",
+    formats: str | Sequence[str] = "geojson",
     # Optional extras (not essential for basic use):
     area_code: str | None = None,
     api_key: str | None = None,
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
-    multimodal: bool = False,
-    schedule: bool = False,
-    gtfs_zips: bool = False,
+    write_schedule: bool = False,
+    keep_gtfs_zips: bool = False,
     province: int | str | None = None,
     buffer_m: float = 0.0,
     connect_parts: bool = True,
 ) -> dict:
-    """Download and standardize a municipality's multimodal network.
+    """Download a municipality's transport networks and write them to disk.
+
+    Finds the municipality (see :func:`multimodalpy.find_area`), downloads
+    each mode (walking, bike and driving from OpenStreetMap, bus and train
+    from the NAP), standardizes them to the columns in ``DATA_SCHEMA.md``
+    and writes them in every format requested.
 
     Parameters
     ----------
@@ -235,16 +130,16 @@ def main(
     modes : list[str]
         Transport modes to download. Options: "walking", "bike", "driving",
         "bus", "train".
-    output_path : Path
-        Local download folder.
+    output_dir : str | Path
+        Folder to write to. Created if it does not exist.
     boundaries_path : Path, optional
         Shapefile (.shp) or GeoJSON (.geojson) with the geometries to select
         from. If not given, the packaged boundaries shapefile is used.
     crs : str
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.
-    output_file_type : str | list[str]
-        Download format(s): "geopackage", "geojson", "shapefile",
+    formats : str | list[str]
+        Output format(s): "geojson" (default), "shapefile", "geopackage",
         "networkx" or "matrix". Accepts a list to write several in a single
         pass (e.g. ["geojson", "matrix"]): the download and normalization
         only happen once, and only the writing step is repeated, instead of
@@ -266,10 +161,7 @@ def main(
         Peak periods for the per-column breakdown of the GTFS edges layer
         (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
         for everything else.
-    multimodal : bool
-        Reserved for the multimodal network, not implemented yet. Only
-        accepts False; True raises ``NotImplementedError``.
-    schedule : bool
+    write_schedule : bool
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
         download.
@@ -279,7 +171,7 @@ def main(
         file in the working folder or one of its parents. It's checked
         before anything is downloaded: without a key, bus/train are
         skipped with a ``UserWarning`` and the other layers are written.
-    gtfs_zips : bool
+    keep_gtfs_zips : bool
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
         and can be downloaded again.
@@ -306,34 +198,26 @@ def main(
         Manifest with the area, the modes, the folder and the files
         written.
     """
-    if multimodal:
-        raise NotImplementedError(
-            "The multimodal network isn't implemented yet; main() only "
-            "accepts multimodal=False."
-        )
     if isinstance(modes, str):
         modes = [modes]
 
-    # ``output_file_type`` accepts a single string ("geojson") or several
+    # ``formats`` accepts a single string ("geojson") or several
     # (["geojson", "shapefile"]). With several, steps 1-3 run only once and
     # only the writing step is repeated.
-    single_output_type = isinstance(output_file_type, str)
-    requested_types = (
-        [output_file_type] if single_output_type else list(output_file_type)
-    )
+    single_output_type = isinstance(formats, str)
+    requested_types = [formats] if single_output_type else list(formats)
     if not requested_types:
-        raise ValueError("output_file_type cannot be empty.")
+        raise ValueError("formats cannot be empty.")
 
-    output_file_types: list[str] = []
+    output_formats: list[str] = []
     for file_type in requested_types:
         normalized = str(file_type).strip().lower()
-        if normalized not in VALID_OUTPUT_TYPES:
+        if normalized not in FORMATS:
             raise ValueError(
-                f"output_file_type '{file_type}' is not valid. "
-                f"Options: {', '.join(sorted(VALID_OUTPUT_TYPES))}"
+                f"Format '{file_type}' is not valid. Options: {', '.join(FORMATS)}"
             )
-        if normalized not in output_file_types:  # ignore duplicates
-            output_file_types.append(normalized)
+        if normalized not in output_formats:  # ignore duplicates
+            output_formats.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
 
@@ -341,21 +225,21 @@ def main(
     # key only shows up after the OSM step, which can take minutes.
     gtfs_error: str | None = None
     if nap_modes:
-        api_key = get_area.resolve_nap_api_key(api_key)
+        api_key = resolve_nap_api_key(api_key)
         if api_key is None:
-            gtfs_error = f"ValueError: {get_area.missing_nap_key_message()}"
+            gtfs_error = f"ValueError: {missing_nap_key_message()}"
             warnings.warn(
-                f"Bus/train will be skipped. {get_area.missing_nap_key_message()}",
+                f"Bus/train will be skipped. {missing_nap_key_message()}",
                 UserWarning,
                 stacklevel=2,
             )
 
-    output_dir = Path(output_path)
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    area_slug = get_area.slugify(area_name)
+    area_slug = slugify(area_name)
 
     # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping).
-    boundary = get_area.find_area_boundary(
+    boundary = find_area(
         area_name,
         boundaries_path,
         area_code=area_code,
@@ -376,7 +260,7 @@ def main(
 
     # 2) OSM.
     if osm_modes:
-        osm_results = get_area.download_osm_layers(
+        osm_results = download_osm(
             boundary,
             modes=osm_modes,
             output_crs=crs,
@@ -397,7 +281,7 @@ def main(
         # throw away the OSM layers already built: it's logged, noted in
         # the manifest, and whatever could be obtained is written anyway.
         try:
-            gtfs_results = get_area.download_gtfs_layers(
+            gtfs_results = download_gtfs(
                 area_name,
                 boundary,
                 gtfs_zips_dir,
@@ -407,7 +291,7 @@ def main(
                 hour_band_size=gtfs_hour_band_size,
                 hour_range=gtfs_hour_range,
                 peak_periods=gtfs_peak_periods,
-                include_schedule_table=schedule,
+                include_schedule_table=write_schedule,
                 buffer_m=buffer_m,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
@@ -454,9 +338,7 @@ def main(
         # default period names (peak_am/peak_pm/rest_of_day); if a custom
         # ``gtfs_peak_periods`` is passed with other names, its combined
         # columns aren't filtered here automatically.
-        for period_name in list(_gtfs.DEFAULT_PEAK_PERIODS.keys()) + [
-            "rest_of_day"
-        ]:
+        for period_name in list(_gtfs.DEFAULT_PEAK_PERIODS.keys()) + ["rest_of_day"]:
             for day_type_name in ("weekday", "weekend"):
                 GTFS_EDGES_COLUMNS.append(
                     f"travel_time_seconds_mean_{period_name}_{day_type_name}"
@@ -481,12 +363,13 @@ def main(
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
             layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
 
-            if schedule and gtfs_out.get("schedule") is not None:
+            if write_schedule and gtfs_out.get("schedule") is not None:
                 schedule_tables[f"gtfs_{dataset}_schedule"] = gtfs_out["schedule"]
-                layer_paths[f"gtfs_{dataset}_schedule"] = f"{gtfs_mode}/{dataset}/schedule"
-                
+                layer_paths[f"gtfs_{dataset}_schedule"] = (
+                    f"{gtfs_mode}/{dataset}/schedule"
+                )
 
-    if nap_modes and not gtfs_zips:
+    if nap_modes and not keep_gtfs_zips:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
 
     # 4) Local write, once per requested format. The download and
@@ -495,7 +378,7 @@ def main(
     #    redoing the whole pipeline.
     written: list[str] = []
     written_by_format: dict[str, list[str]] = {}
-    for file_type in output_file_types:
+    for file_type in output_formats:
         if file_type == "networkx":
             files_here: list[str] = []
             # The boundary and the GTFS shapes layers are saved as
@@ -583,10 +466,8 @@ def main(
         "connect_parts": connect_parts,
         # Returned as it was requested: str if a single format string was
         # passed, list if several were requested.
-        "output_file_type": output_file_types[0]
-        if single_output_type
-        else output_file_types,
-        "output_path": str(output_dir),
+        "formats": output_formats[0] if single_output_type else output_formats,
+        "output_dir": str(output_dir),
         "osm_modes": osm_modes,
         "gtfs_datasets": list(gtfs_results),
         "files": written,
@@ -614,108 +495,3 @@ def main(
                 stacklevel=2,
             )
     return manifest
-
-
-# ---------------------------------------------------------------------------
-# Optional CLI: python -m multimodalpy.get_network --area "Valencia" ...
-# ---------------------------------------------------------------------------
-def _cli(argv: list[str] | None = None) -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Download a municipality's multimodal network."
-    )
-    parser.add_argument("--area", required=True, help="Municipality name.")
-    parser.add_argument(
-        "--modes", nargs="+", default=["walking"], help="Transport modes."
-    )
-    parser.add_argument("--output", default="output", help="Local download folder.")
-    parser.add_argument("--boundaries", help="Boundaries shapefile/GeoJSON (optional).")
-    parser.add_argument(
-        "--crs", default="EPSG:4326", help="Output CRS (defaults to WGS84)."
-    )
-    parser.add_argument(
-        "--output-file-type",
-        default=["geojson"],
-        nargs="+",
-        choices=sorted(VALID_OUTPUT_TYPES),
-        help="Output format(s); accepts several in a single pass.",
-    )
-    parser.add_argument(
-        "--api-key",
-        help=(
-            "NAP API key for bus/train. Defaults to NAP_API_KEY or a .env file; "
-            "prefer those, since a key typed here stays in the shell history."
-        ),
-    )
-    parser.add_argument(
-        "--area-code",
-        help="Municipality's 5-digit INE code or INSPIRE NATCODE (optional).",
-    )
-    parser.add_argument(
-        "--province",
-        help="Province name or INE code, to choose between same-name towns.",
-    )
-    parser.add_argument(
-        "--buffer-m",
-        type=float,
-        default=0.0,
-        help="Widen the download area by this many metres (default 0).",
-    )
-    parser.add_argument(
-        "--no-connect-parts",
-        dest="connect_parts",
-        action="store_false",
-        help="Don't add the roads joining the parts of a multi-part municipality.",
-    )
-    parser.add_argument(
-        "--clean-gtfs", action="store_true", help="Apply bus/train cleanup."
-    )
-    parser.add_argument(
-        "--gtfs-hour-band-size",
-        type=int,
-        default=1,
-        help=("Hour band (in hours) for the packed GTFS edges summary (option C)."),
-    )
-    parser.add_argument(
-        "--gtfs-hour-range",
-        type=int,
-        nargs=2,
-        metavar=("START", "END"),
-        help="Filter GTFS trips by hour window, e.g. --gtfs-hour-range 7 9",
-    )
-    parser.add_argument(
-        "--schedule",
-        action="store_true",
-        help="Also write the detailed schedule table for each GTFS feed.",
-    )
-    parser.add_argument(
-        "--gtfs-zips",
-        action="store_true",
-        help=(
-            "Keep the GTFS zip files downloaded from the NAP instead of deleting them."
-        ),
-    )
-    args = parser.parse_args(argv)
-
-    main(
-        area_name=args.area,
-        modes=args.modes,
-        output_path=args.output,
-        boundaries_path=args.boundaries,
-        crs=args.crs,
-        output_file_type=args.output_file_type,
-        area_code=args.area_code,
-        api_key=args.api_key,
-        province=args.province,
-        buffer_m=args.buffer_m,
-        connect_parts=args.connect_parts,
-        gtfs_hour_band_size=args.gtfs_hour_band_size,
-        gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
-        schedule=args.schedule,
-        gtfs_zips=args.gtfs_zips,
-    )
-
-
-if __name__ == "__main__":
-    _cli()

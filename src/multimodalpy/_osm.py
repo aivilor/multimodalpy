@@ -7,7 +7,7 @@ explicit creation of topology nodes (intersections, endpoints and linear
 vertices) from the edges' geometry, so the network stays complete even
 when ``osmnx`` simplifies the routing graph.
 
-Private module: not part of the public API, used by ``get_area``.
+Private module: the public entry point is ``multimodalpy.network``.
 
 Main functions:
 
@@ -17,9 +17,9 @@ Main functions:
 - ``add_mode_travel_time(edges, nodes, mode=...)`` -> travel time (``tts``)
 - ``build_final_osm_layers(graph, ...)``           -> final layers ready to export
 - ``add_edge_travel_time(graph, speed_kmh)``       -> simple travel time (legacy)
-- ``download_osm_layers(boundary, modes=...)``      -> download + final layers
+- ``download_osm(boundary, modes=...)``             -> download + final layers
 
-No file is written here; that's done by ``get_network``.
+No file is written here; that's done by ``_writers``.
 """
 
 from __future__ import annotations
@@ -858,7 +858,7 @@ def build_final_osm_layers(
 
     ``connector`` is ``True`` on the roads added outside the study area to
     join the parts of a multi-part municipality (the graph's ``connector``
-    edge attribute, see ``get_area.download_osm_layers``) and ``False``
+    edge attribute, see ``download_osm``) and ``False``
     everywhere else.
 
     Steps 1-2 run in a projected CRS in metres chosen from the graph
@@ -1094,7 +1094,7 @@ def _download_connected_graph(
 # ---------------------------------------------------------------------------
 # Download and standardize the OSM layers
 # ---------------------------------------------------------------------------
-def download_osm_layers(
+def download_osm(
     boundary: gpd.GeoDataFrame,
     *,
     modes: Iterable[str] = ("caminable",),

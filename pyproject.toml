@@ -46,9 +46,8 @@ dependencies = [
 
 
 
-# Uncomment if your package ships a command-line tool:
-# [project.scripts]
-# your-command = "your_package_name.cli:main"
+[project.scripts]
+multimodalpy = "multimodalpy._cli:main"
 
 [project.urls]
 Homepage = "https://github.com/aivilor/multimodalpy"

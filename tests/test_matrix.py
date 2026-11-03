@@ -18,7 +18,7 @@ from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import LineString, Point
 
 from multimodalpy import _matrix, _osm
-from multimodalpy.get_network import GTFS_EDGE_RENAME
+from multimodalpy._gtfs import GTFS_EDGE_RENAME
 
 
 def _abc_tables():

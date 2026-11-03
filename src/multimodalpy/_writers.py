@@ -254,7 +254,7 @@ def _gtfs_to_graph_json(
 
     Every edge carries ``edge_columns`` as attributes (by default, every
     column of ``edges``), with ``geometry`` as WKT, the same as the OSM
-    graphs. ``main()`` passes the columns kept in the GTFS edge layers, so
+    graphs. ``download_network()`` passes the columns kept in the GTFS edge layers, so
     the graph holds the same data as the other formats, under the long
     column names (JSON has no name length limit).
     """
@@ -316,7 +316,7 @@ def _write_matrices(
     """Write one ``matrix.npz`` per OSM mode and per GTFS dataset.
 
     Built from the same final layers as the other formats: OSM from the
-    ``download_osm_layers`` output, GTFS from the filtered and renamed edge
+    ``download_osm`` output, GTFS from the filtered and renamed edge
     layers, so the weights have the short column names (``tts_m``, ...).
     Networks with no edges are skipped. Returns the paths written, relative
     to ``output_dir``.
