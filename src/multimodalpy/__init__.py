@@ -14,7 +14,7 @@ Public modules:
     - network  : download_network() and the in-memory downloads.
     - area     : find_area(), the municipality's boundary.
     - io       : read_matrix() and read_graph(), to read the files written.
-    - analysis : isochrones() and the other network analyses.
+    - analysis : isochrones(), shortest_path() and the other network analyses.
 
 The most used functions are also available from the package itself.
 """
@@ -25,7 +25,7 @@ import logging
 from importlib.metadata import PackageNotFoundError, version
 
 from . import analysis, area, io, network
-from .analysis import isochrones
+from .analysis import isochrones, shortest_path
 from .area import find_area
 from .io import read_graph, read_matrix
 from .network import download_network
@@ -52,4 +52,5 @@ __all__ = [
     "network",
     "read_graph",
     "read_matrix",
+    "shortest_path",
 ]

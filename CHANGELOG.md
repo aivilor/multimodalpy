@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The API reference documents only each module's public names.
 
 ### Added
+- `shortest_path()` (`multimodalpy.analysis`, #78): the shortest path from
+  every origin to every destination (node ids or coordinates) within a
+  threshold in minutes (`weight="tts"`) or metres (`weight="length"`), on a
+  walking, bike or driving network in any output format. Returns a
+  GeoDataFrame with `origin`, `destination`, `time_min`, `length_m`,
+  `n_edges` and the path as a line (`geometry=False` for large tables); pairs
+  beyond the threshold are left out. Bus and train raise
+  `NotImplementedError` until the multimodal network is available.
 - `multimodalpy` command, installed with the package
   (`multimodalpy --area Valencia --modes walking`).
 - `find_area()` has a full docstring (parameters, errors, examples).

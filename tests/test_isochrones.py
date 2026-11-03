@@ -97,13 +97,13 @@ def test_weight_units_come_from_the_metadata():
 # ---------------------------------------------------------------------------
 def test_node_ids_are_used_as_they_are():
     matrix = grid_matrix()
-    assert _common.snap_origins(matrix, 4, 250).tolist() == [4]
-    assert _common.snap_origins(matrix, [0, 8], 250).tolist() == [0, 8]
+    assert _common.snap_points(matrix, 4, 250).tolist() == [4]
+    assert _common.snap_points(matrix, [0, 8], 250).tolist() == [0, 8]
 
 
 def test_unknown_node_ids_are_rejected():
     with pytest.raises(ValueError, match="node_id 99 is not in the network"):
-        _common.snap_origins(grid_matrix(), 99, 250)
+        _common.snap_points(grid_matrix(), 99, 250)
 
 
 def test_coordinates_snap_to_the_nearest_node():
@@ -111,9 +111,9 @@ def test_coordinates_snap_to_the_nearest_node():
     # 30 m right and 20 m up from node 4 (the centre).
     point = (X0 + SPACING + 30, Y0 + SPACING + 20)
 
-    assert _common.snap_origins(matrix, point, 250).tolist() == [4]
-    assert _common.snap_origins(matrix, Point(point), 250).tolist() == [4]
-    assert _common.snap_origins(matrix, [point, 0], 250).tolist() == [4, 0]
+    assert _common.snap_points(matrix, point, 250).tolist() == [4]
+    assert _common.snap_points(matrix, Point(point), 250).tolist() == [4]
+    assert _common.snap_points(matrix, [point, 0], 250).tolist() == [4, 0]
 
 
 def test_snapping_measures_metres_in_geographic_networks():
@@ -121,22 +121,22 @@ def test_snapping_measures_metres_in_geographic_networks():
     near = TO_WGS84.transform(X0 + 2 * SPACING + 40, Y0)  # 40 m from node 2
     far = TO_WGS84.transform(X0 + 2 * SPACING + 400, Y0)  # 400 m from node 2
 
-    assert _common.snap_origins(matrix, near, 250).tolist() == [2]
+    assert _common.snap_points(matrix, near, 250).tolist() == [2]
     with pytest.raises(ValueError, match=r"is 400 m from the nearest network node"):
-        _common.snap_origins(matrix, far, 250)
+        _common.snap_points(matrix, far, 250)
 
 
 def test_snapping_skips_nodes_without_edges():
     # An isolated node sits right on the coordinates; node 0 is 50 m away.
     matrix = grid_matrix(extra_nodes=[(100, X0 - 50, Y0)])
-    assert _common.snap_origins(matrix, (X0 - 50, Y0), 250).tolist() == [0]
+    assert _common.snap_points(matrix, (X0 - 50, Y0), 250).tolist() == [0]
 
 
 def test_networks_without_a_crs_cannot_snap_coordinates():
     matrix = grid_matrix()
     matrix.meta["crs"] = None
     with pytest.raises(ValueError, match="no CRS"):
-        _common.snap_origins(matrix, (X0, Y0), 250)
+        _common.snap_points(matrix, (X0, Y0), 250)
 
 
 # ---------------------------------------------------------------------------

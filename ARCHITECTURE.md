@@ -23,10 +23,11 @@ multimodalpy/
 │       ├── network.py         # public: download_network, download_osm, download_gtfs
 │       ├── area.py            # public: find_area
 │       ├── io.py              # public: read_matrix, read_graph
-│       ├── analysis/          # public: isochrones (one private file per analysis)
+│       ├── analysis/          # public: isochrones, shortest_path (one private file each)
 │       │   ├── __init__.py
 │       │   ├── _common.py     # shared: network loading, snapping, cutoffs, Dijkstra
-│       │   └── _isochrones.py
+│       │   ├── _isochrones.py
+│       │   └── _shortest_path.py
 │       ├── _cli.py            # the `multimodalpy` command
 │       ├── _boundaries.py     # boundaries file (pooch), study-area lookup, provinces
 │       ├── _nap.py            # NAP client: API key, .env, GTFS feed downloads
@@ -46,6 +47,7 @@ multimodalpy/
 │   ├── test_matrix.py
 │   ├── test_network_loading.py
 │   ├── test_isochrones.py
+│   ├── test_shortest_path.py
 │   ├── test_output_format.py
 │   └── test_topology_crs.py
 │
