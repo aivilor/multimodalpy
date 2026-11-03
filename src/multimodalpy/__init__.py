@@ -1,20 +1,22 @@
-"""multimodalpy - library to download and standardize multimodal networks.
+"""multimodalpy: transport networks for Spanish municipalities.
 
-Basic usage:
+Download the walking, bike and driving networks (OpenStreetMap) and the bus
+and train networks (official GTFS feeds) of a municipality, standardized and
+written to disk, and analyse them::
 
-    from multimodalpy import main
+    import multimodalpy as mmp
 
-    main("Valencia", modes=["walking", "bike"], output_path="output")
+    mmp.download_network("Valencia", modes=["walking", "bike"], output_dir="output")
+    areas = mmp.isochrones("output", origins=(-0.3763, 39.4699), cutoffs=[5, 10],
+                           mode="walking")
 
 Public modules:
-    - get_network    : main() entry point; downloads, standardizes and writes
-                       the networks per the user's settings.
-    - get_area       : study-area boundary lookup and OSM / GTFS downloads.
-    - isochrones     : area reachable from a point within a travel time
-                       (``from multimodalpy.isochrones import isochrones``).
+    - network  : download_network() and the in-memory downloads.
+    - area     : find_area(), the municipality's boundary.
+    - io       : read_matrix() and read_graph(), to read the files written.
+    - analysis : isochrones(), shortest_path() and the other network analyses.
 
-OSM and GTFS standardization happen in private modules (``_process_osm``,
-``_process_gtfs``) that are not part of the public API.
+The most used functions are also available from the package itself.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ from __future__ import annotations
 import logging
 from importlib.metadata import PackageNotFoundError, version
 
-from . import get_area, get_network, isochrones
-from .get_area import find_area_boundary
-from .get_network import main, read_graph_json, read_matrix
+from . import analysis, area, io, network
+from .analysis import isochrones, shortest_path
+from .area import find_area
+from .io import read_graph, read_matrix
+from .network import download_network
 
 # A library shouldn't write to the terminal on its own: without this
 # handler, Python would print WARNING-level alerts to stderr even if the
@@ -38,12 +42,15 @@ except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
 __all__ = [
-    "main",
-    "read_graph_json",
-    "read_matrix",
-    "find_area_boundary",
-    "get_network",
-    "get_area",
-    "isochrones",
     "__version__",
+    "analysis",
+    "area",
+    "download_network",
+    "find_area",
+    "io",
+    "isochrones",
+    "network",
+    "read_graph",
+    "read_matrix",
+    "shortest_path",
 ]

@@ -17,9 +17,8 @@ from scipy.sparse import load_npz
 from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import LineString, Point
 
-from multimodalpy import _matrix
-from multimodalpy import _process_osm as process_osm
-from multimodalpy.get_network import GTFS_EDGE_RENAME
+from multimodalpy import _matrix, _osm
+from multimodalpy._gtfs import GTFS_EDGE_RENAME
 
 
 def _abc_tables():
@@ -231,7 +230,7 @@ def _osm_layers(mode="drive"):
         2, 3, osmid=11, oneway=True, reversed=False,
         geometry=LineString([(0.001, 0), (0.002, 0)]), **common,
     )  # fmt: skip
-    return process_osm.build_final_osm_layers(graph, layer_id="d", mode=mode)
+    return _osm.build_final_osm_layers(graph, layer_id="d", mode=mode)
 
 
 def test_osm_matrix_follows_the_node_layer_and_one_way_streets():

@@ -1,9 +1,8 @@
-"""GTFS data standardization. Cleans bus + train data.
+"""GTFS networks: standardization of bus and train feeds, and their download.
 
-Private module: not part of the public API, used by ``get_area`` and
-``get_network``.
+Private module: the public entry point is ``multimodalpy.network``.
 
-This module has two parts:
+This module has three parts:
 
 1. Standardization: turns a GTFS feed (zip or folder) into GeoPandas
    layers -- ``nodes_stops`` (stops as points), ``edges`` (stop-to-stop
@@ -15,12 +14,17 @@ This module has two parts:
 2. Bus + train cleanup: snapping stops onto the route geometry and
    splitting the route lines into segments between consecutive stops, to
    get a coherent stop-segment-stop topology.
+3. Download: ``download_gtfs`` fetches the feeds of a study area
+   from the NAP (see ``_nap``) and standardizes each one. The short column
+   names of the edge layer (``GTFS_EDGE_RENAME``) are also defined here.
 
-No file is written here; that's done by ``get_network``.
+No file is written here; that's done by ``_writers``.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile, ZipFile
@@ -28,6 +32,12 @@ from zipfile import BadZipFile, ZipFile
 if TYPE_CHECKING:
     import geopandas as gpd
     import pandas as pd
+
+from ._boundaries import study_area_geometry
+from ._nap import download_gtfs_nap_zips
+from ._text import slugify
+
+logger = logging.getLogger(__name__)
 
 
 SOURCE_CRS = "EPSG:4326"
@@ -1116,3 +1126,132 @@ def normalize_gtfs_feed(
         stop_edges_gdf = stop_edges_gdf.to_crs(target_crs)
 
     return stops_gdf, stop_edges_gdf, schedule_df
+
+
+# ---------------------------------------------------------------------------
+# Short column names of the GTFS edge layer (Shapefile's 10-character limit)
+# ---------------------------------------------------------------------------
+# Shapefile truncates longer names and resolves collisions with numeric
+# suffixes, so the same column ended up named differently depending on the
+# format. The short names are applied to all three formats alike.
+# The full mapping is in DATA_SCHEMA.md.
+_GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
+
+
+_GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
+
+
+def _build_gtfs_edge_rename() -> dict[str, str]:
+    """Build the long-to-short name map for the GTFS edges layer."""
+    rename = {
+        "route_short_name": "route_sh",
+        "route_long_name": "route_ln",
+        "trip_count": "trips",
+        "days_of_week_summary": "days_week",
+        "hourly_travel_times": "h_tts",
+        "hourly_trip_counts": "h_trips",
+        "travel_time_seconds_mean": "tts_m",
+        "travel_time_seconds_median": "tts_md",
+        "travel_time_seconds_min": "tts_mn",
+        "travel_time_seconds_max": "tts_mx",
+    }
+    for period, short_period in _GTFS_PERIOD_ABBR.items():
+        rename[f"travel_time_seconds_mean_{period}"] = f"tts_m_{short_period}"
+        rename[f"travel_time_seconds_median_{period}"] = f"tts_md_{short_period}"
+        rename[f"trip_count_{period}"] = f"trips_{short_period}"
+    for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
+        rename[f"travel_time_seconds_mean_{day_type}"] = f"tts_m_{short_day}"
+        rename[f"trip_count_{day_type}"] = f"trips_{short_day}"
+    # Period x day-type is abbreviated further (tm_/trp_) because fitting
+    # all four parts doesn't work within ten characters any other way.
+    for period, short_period in _GTFS_PERIOD_ABBR.items():
+        for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
+            suffix = f"{short_period}_{short_day}"
+            rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{suffix}"
+            rename[f"trip_count_{period}_{day_type}"] = f"trp_{suffix}"
+    return rename
+
+
+GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
+
+
+# ---------------------------------------------------------------------------
+# Download (NAP) and standardize the GTFS layers
+# ---------------------------------------------------------------------------
+def download_gtfs(
+    area_name: str,
+    boundary: gpd.GeoDataFrame,
+    zip_dir: str | Path,
+    *,
+    modes: Iterable[int],
+    output_crs: str = "EPSG:4326",
+    clip_to_boundary: bool = True,
+    api_key: str | None = None,
+    hour_band_size: int = 1,
+    hour_range: tuple[int, int] | None = None,
+    peak_periods: dict[str, tuple[int, int]] | None = None,
+    include_schedule_table: bool = True,
+    province_code: int | None = None,
+    buffer_m: float = 0.0,
+) -> dict[str, dict[str, object]]:
+    """Download NAP GTFS data and returns normalized layers per dataset.
+
+    Returns ``{dataset: {"nodes_stops": gdf, "edges": gdf,
+    "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
+
+    ``province_code`` is the area's INE province code; if not given, it's
+    taken from the ``boundary``'s ``province_code`` column (filled in by
+    ``find_area``). See ``_nap.download_gtfs_nap_zips``.
+
+    ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
+    ``include_schedule_table`` are forwarded to the GTFS standardization
+    step; the resulting columns are described in the "GTFS edges" and
+    "GTFS schedule" sections of ``DATA_SCHEMA.md``.
+
+    ``buffer_m`` widens the clipping area by that many metres (see
+    :func:`study_area_geometry`), so stops just across the municipal
+    boundary are kept.
+    """
+    if province_code is None and "province_code" in getattr(boundary, "columns", []):
+        value = boundary["province_code"].iloc[0]
+        province_code = None if value is None or value != value else int(value)
+
+    zips = download_gtfs_nap_zips(
+        area_name,
+        zip_dir,
+        modes=modes,
+        api_key=api_key,
+        province_code=province_code,
+    )
+
+    filter_geometry = None
+    if clip_to_boundary and not boundary.empty:
+        filter_geometry = study_area_geometry(boundary, buffer_m=buffer_m)
+
+    results: dict[str, dict[str, object]] = {}
+    for zip_path in zips:
+        dataset_name = slugify(Path(zip_path).stem)
+        try:
+            stops, stop_edges, schedule = normalize_gtfs_feed(
+                zip_path,
+                dataset_name=dataset_name,
+                layer_id=dataset_name,
+                filter_geometry=filter_geometry,
+                target_crs=output_crs,
+                hour_band_size=hour_band_size,
+                hour_range=hour_range,
+                peak_periods=peak_periods,
+                include_schedule_table=include_schedule_table,
+            )
+        except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
+            logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
+            continue
+        results[dataset_name] = {
+            "nodes": stops,
+            "edges": stop_edges,
+            "schedule": schedule,
+            # "bus" or "train", inferred from the feed's route_type. Used
+            # by download_network to decide the dataset's output folder.
+            "mode": infer_transport_mode(zip_path),
+        }
+    return results

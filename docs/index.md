@@ -9,7 +9,8 @@ driving from OpenStreetMap, and bus and train from the official GTFS feeds of
 Spain's National Access Point (NAP). The layers share the same column names and
 are written as GeoJSON, Shapefile, GeoPackage, NetworkX graphs or sparse
 matrices for shortest-path calculations. On the walking, cycling and driving
-networks it also computes isochrones (`multimodalpy.isochrones`).
+networks it also computes isochrones and shortest paths
+(`multimodalpy.analysis`).
 
 Only municipalities in Spain are supported (not the Canary Islands with the
 default boundaries file). Each mode is exported as its own network; linking them
@@ -27,14 +28,20 @@ installing from source and for development.
 ## Quick start
 
 ```python
-from multimodalpy import get_network
+import multimodalpy as mmp
 
-manifest = get_network.main(
+manifest = mmp.download_network(
     "Valencia",
     modes=["walking", "bike", "driving"],
-    output_path="output",
-    output_file_type="geojson",
+    output_dir="output",
+    formats="geojson",
 )
+```
+
+The same from the command line:
+
+```bash
+multimodalpy --area Valencia --modes walking bike driving --formats geojson
 ```
 
 Bus and train (`modes=["bus", "train"]`) also need a free NAP API key, passed

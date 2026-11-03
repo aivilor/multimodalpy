@@ -1,12 +1,6 @@
 """Isochrones: the area reachable from a point within a travel time.
 
-Works on any network multimodalpy writes (see :func:`isochrones`). The
-network is always turned into the CSR matrix of the ``matrix`` format, so a
-single scipy Dijkstra gives the travel times from every origin to every node.
-
-Only walking, bike and driving networks are supported for now: a bus or train
-network on its own has no access on foot, waiting times or transfers, so its
-isochrones would be misleading. They will come with the multimodal network.
+Private module; the function is public as :func:`multimodalpy.analysis.isochrones`.
 """
 
 from __future__ import annotations
@@ -18,199 +12,17 @@ if TYPE_CHECKING:
     import geopandas as gpd
     import numpy as np
 
-    from ._matrix import NetworkMatrix
+
+from ._common import (
+    check_network_mode,
+    cutoff_values,
+    metric_transformer,
+    snap_points,
+    travel_costs,
+    weight_unit,
+)
 
 METHODS = ("edges", "hull")
-
-#: Cutoff unit for each weight unit: travel times are given in minutes,
-#: distances in metres.
-_CUTOFF_UNITS = {"s": ("min", 60.0), "m": ("m", 1.0)}
-
-
-# ---------------------------------------------------------------------------
-# Weights and cutoffs
-# ---------------------------------------------------------------------------
-def _weight_unit(matrix: NetworkMatrix, weight: str) -> str:
-    """Return the unit of ``weight`` (``"s"`` or ``"m"``) from the metadata."""
-    if weight not in matrix.weights:
-        raise ValueError(
-            f"Weight '{weight}' is not in this network. "
-            f"Available: {', '.join(sorted(matrix.weights))}"
-        )
-    units = {
-        entry["name"]: entry.get("unit") for entry in matrix.meta.get("weights", [])
-    }
-    unit = units.get(weight) or {"tts": "s", "length": "m"}.get(weight)
-    if unit not in _CUTOFF_UNITS:
-        raise ValueError(f"Weight '{weight}' has no time or distance unit.")
-    return unit
-
-
-def _cutoff_values(
-    cutoffs: float | Sequence[float], weight_unit: str
-) -> tuple[list[float], list[float], str]:
-    """Validate the cutoffs and convert them to the weight's unit.
-
-    Returns the cutoffs as given (sorted, without repeats), the same values
-    in the weight's unit (seconds or metres) and the cutoff unit label.
-    """
-    values = [cutoffs] if isinstance(cutoffs, (int, float)) else list(cutoffs)
-    if not values:
-        raise ValueError("cutoffs cannot be empty.")
-    try:
-        numbers = sorted({float(value) for value in values})
-    except (TypeError, ValueError):
-        raise ValueError(f"cutoffs must be numbers, got {values!r}.") from None
-    if numbers[0] <= 0:
-        raise ValueError(f"cutoffs must be greater than 0, got {numbers[0]:g}.")
-    label, factor = _CUTOFF_UNITS[weight_unit]
-    return numbers, [value * factor for value in numbers], label
-
-
-# ---------------------------------------------------------------------------
-# Coordinates in metres
-# ---------------------------------------------------------------------------
-def _metric_transformer(matrix: NetworkMatrix) -> tuple[Any, Any]:
-    """Return (to-metric transformer, metric CRS) for the network's nodes.
-
-    A CRS already in metres is used as is; otherwise (e.g. EPSG:4326) the
-    UTM zone of the network is estimated from its nodes.
-    """
-    import geopandas as gpd
-    from pyproj import CRS, Transformer
-
-    crs_text = matrix.meta.get("crs")
-    if not crs_text:
-        raise ValueError(
-            "The network has no CRS, so distances cannot be measured. Networks "
-            "written by multimodalpy always have one."
-        )
-    crs = CRS.from_user_input(crs_text)
-    units = {axis.unit_name for axis in crs.axis_info}
-    if crs.is_projected and units <= {"metre", "meter"}:
-        metric = crs
-    else:
-        nodes = matrix.nodes.dropna(subset=["x", "y"])
-        points = gpd.GeoSeries(gpd.points_from_xy(nodes["x"], nodes["y"]), crs=crs)
-        metric = points.estimate_utm_crs()
-    return Transformer.from_crs(crs, metric, always_xy=True), metric
-
-
-# ---------------------------------------------------------------------------
-# Origins
-# ---------------------------------------------------------------------------
-def _is_coordinate(value: object) -> bool:
-    """Tell whether ``value`` is a coordinate: two numbers or a shapely Point."""
-    if hasattr(value, "geom_type"):
-        return getattr(value, "geom_type", None) == "Point"
-    return (
-        isinstance(value, tuple)
-        and len(value) == 2
-        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
-    )
-
-
-def _xy(value: Any) -> tuple[float, float]:
-    """Return the x / y of a coordinate tuple or a shapely Point."""
-    if hasattr(value, "geom_type"):
-        return float(value.x), float(value.y)
-    return float(value[0]), float(value[1])
-
-
-def _origin_list(origins: object) -> list[object]:
-    """One origin or a list of them. A tuple of two numbers is a coordinate."""
-    if _is_coordinate(origins) or isinstance(origins, (str, int)):
-        return [origins]
-    if hasattr(origins, "item") and getattr(origins, "ndim", 1) == 0:  # numpy scalar
-        return [origins]
-    try:
-        items = list(origins)  # type: ignore[call-overload]
-    except TypeError:
-        return [origins]
-    if not items:
-        raise ValueError("origins cannot be empty.")
-    return items
-
-
-def _snap_origins(
-    matrix: NetworkMatrix, origins: object, max_snap_distance: float
-) -> np.ndarray:
-    """Matrix rows of the origins.
-
-    A ``node_id`` is used as is. A coordinate ``(x, y)`` or shapely Point, in
-    the network's CRS, is snapped to the nearest node with outgoing edges;
-    if that node is further than ``max_snap_distance`` metres, it is an
-    error rather than a silent start from a distant point.
-    """
-    import numpy as np
-    import pandas as pd
-    from scipy.spatial import cKDTree
-
-    items = _origin_list(origins)
-    rows = np.empty(len(items), dtype=np.int64)
-    ids = pd.Index(matrix.nodes["node_id"])
-
-    coordinates = [i for i, item in enumerate(items) if _is_coordinate(item)]
-    for i, item in enumerate(items):
-        if i in coordinates:
-            continue
-        position = ids.get_indexer([item])[0]
-        if position < 0:
-            raise ValueError(f"Origin node_id {item!r} is not in the network.")
-        rows[i] = position
-
-    if coordinates:
-        transformer, _ = _metric_transformer(matrix)
-        out_degree = np.diff(matrix.indptr)
-        xy = matrix.nodes[["x", "y"]].to_numpy(dtype=float)
-        candidates = np.flatnonzero((out_degree > 0) & np.isfinite(xy).all(axis=1))
-        if candidates.size == 0:
-            raise ValueError("The network has no nodes with edges to start from.")
-        node_x, node_y = transformer.transform(xy[candidates, 0], xy[candidates, 1])
-        tree = cKDTree(np.column_stack([node_x, node_y]))
-        for i in coordinates:
-            item = items[i]
-            x, y = _xy(item)
-            point = transformer.transform(x, y)
-            distance, nearest = tree.query(point)
-            if distance > max_snap_distance:
-                raise ValueError(
-                    f"Origin {x, y} is {distance:.0f} m from the nearest network "
-                    f"node, more than max_snap_distance={max_snap_distance:g} m. "
-                    "Check that the coordinates are in the network's CRS "
-                    f"({matrix.meta.get('crs')})."
-                )
-            rows[i] = candidates[nearest]
-    return rows
-
-
-# ---------------------------------------------------------------------------
-# Travel costs
-# ---------------------------------------------------------------------------
-def _travel_costs(
-    matrix: NetworkMatrix,
-    weight: str,
-    rows: np.ndarray,
-    limit: float,
-    *,
-    merge_origins: bool,
-) -> np.ndarray:
-    """Cost from the origins to every node, ``inf`` beyond ``limit``.
-
-    One scipy Dijkstra for all the origins. Returns one row per origin, or a
-    single row (the cost from the nearest origin) with ``merge_origins``.
-    """
-    import numpy as np
-    from scipy.sparse.csgraph import dijkstra
-
-    costs = dijkstra(
-        matrix.to_scipy(weight),
-        directed=True,
-        indices=rows,
-        limit=limit,
-        min_only=merge_origins,
-    )
-    return np.atleast_2d(costs)
 
 
 # ---------------------------------------------------------------------------
@@ -293,20 +105,6 @@ def _hull_polygon(
     return shapely.buffer(hull, buffer_distance) if buffer_distance > 0 else hull
 
 
-def _check_network_mode(matrix: NetworkMatrix) -> None:
-    from ._matrix import GTFS_MODES
-
-    mode = matrix.meta.get("mode")
-    layer = str(matrix.meta.get("layer") or "")
-    if mode in GTFS_MODES or layer.split("/")[0] in GTFS_MODES:
-        raise NotImplementedError(
-            f"Isochrones for {mode or layer} networks are not available yet: a "
-            "bus or train network alone has no walking access, waiting times or "
-            "transfers. They will come with the multimodal network. Use a "
-            "walking, bike or driving network."
-        )
-
-
 # ---------------------------------------------------------------------------
 # Public function
 # ---------------------------------------------------------------------------
@@ -330,13 +128,13 @@ def isochrones(
     network : str | Path | MatrixData | networkx.MultiDiGraph
         The network to travel on, in any form multimodalpy writes or reads:
 
-        - the output folder of :func:`multimodalpy.get_network.main` together
+        - the output folder of :func:`multimodalpy.download_network` together
           with ``mode`` (e.g. ``"output"``, ``mode="walking"``);
         - a network folder (``"output/walking"``);
         - a ``matrix.npz``, ``graph.json`` or ``.gpkg`` file (the GeoPackage
           needs ``mode``);
         - the result of :func:`multimodalpy.read_matrix` or
-          :func:`multimodalpy.read_graph_json`.
+          :func:`multimodalpy.read_graph`.
 
         In a folder, the first format found is used, in this order:
         ``matrix.npz``, ``graph.json``, GeoPackage, GeoJSON, Shapefile. Every
@@ -407,7 +205,7 @@ def isochrones(
 
     See Also
     --------
-    multimodalpy.get_network.main : downloads the networks.
+    multimodalpy.download_network : downloads the networks.
     multimodalpy.read_matrix : reads a ``matrix.npz``.
 
     Notes
@@ -429,7 +227,7 @@ def isochrones(
 
     Examples
     --------
-    >>> from multimodalpy.isochrones import isochrones  # doctest: +SKIP
+    >>> from multimodalpy import isochrones  # doctest: +SKIP
     >>> areas = isochrones(  # doctest: +SKIP
     ...     "output", origins=(-0.3763, 39.4699), cutoffs=[5, 10, 15],
     ...     mode="walking",
@@ -445,7 +243,7 @@ def isochrones(
     import geopandas as gpd
     import numpy as np
 
-    from ._matrix import load_network_matrix
+    from .._matrix import load_network_matrix
 
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}.")
@@ -460,13 +258,13 @@ def isochrones(
         raise ValueError("max_snap_distance must be greater than 0.")
 
     matrix = load_network_matrix(network, mode=mode)
-    _check_network_mode(matrix)
-    unit = _weight_unit(matrix, weight)
-    given, limits, label = _cutoff_values(cutoffs, unit)
-    rows = _snap_origins(matrix, origins, max_snap_distance)
-    costs = _travel_costs(matrix, weight, rows, limits[-1], merge_origins=merge_origins)
+    check_network_mode(matrix, "Isochrones")
+    unit = weight_unit(matrix, weight)
+    given, limits, label = cutoff_values(cutoffs, unit)
+    rows = snap_points(matrix, origins, max_snap_distance)
+    costs = travel_costs(matrix, weight, rows, limits[-1], merge_origins=merge_origins)
 
-    transformer, metric_crs = _metric_transformer(matrix)
+    transformer, metric_crs = metric_transformer(matrix)
     node_xy = matrix.nodes[["x", "y"]].to_numpy(dtype=float)
     x, y = transformer.transform(node_xy[:, 0], node_xy[:, 1])
     xy = np.column_stack([x, y])

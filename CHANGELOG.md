@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-03
+
+### Changed
+- **Breaking:** the public API is reorganised into four modules, one per task,
+  with clearer names (#77). There are no compatibility aliases; update your
+  code with this table:
+
+  | 0.3.0 | Now |
+  |---|---|
+  | `get_network.main()` | `multimodalpy.download_network()` (`network.download_network`) |
+  | `get_area.find_area_boundary()` | `multimodalpy.find_area()` (`area.find_area`) |
+  | `get_area.download_osm_layers()` | `network.download_osm()` |
+  | `get_area.download_gtfs_layers()` | `network.download_gtfs()` |
+  | `get_area.AmbiguousAreaError` | `area.AmbiguousAreaError` |
+  | `get_area.NAPAuthenticationError` | `network.NAPAuthenticationError` |
+  | `get_network.read_matrix()` | `multimodalpy.read_matrix()` (`io.read_matrix`) |
+  | `get_network.read_graph_json()` | `multimodalpy.read_graph()` (`io.read_graph`) |
+  | `from multimodalpy.isochrones import isochrones` | `multimodalpy.isochrones()` (`analysis.isochrones`) |
+  | `python -m multimodalpy.get_network` | `multimodalpy` or `python -m multimodalpy` |
+
+- **Breaking:** `download_network()` parameters renamed: `output_path` →
+  `output_dir`, `output_file_type` → `formats`, `schedule` →
+  `write_schedule`, `gtfs_zips` → `keep_gtfs_zips`. The manifest it returns
+  uses `formats` and `output_dir` as keys. Command-line flags follow:
+  `--output-dir`, `--formats`, `--write-schedule`, `--keep-gtfs-zips`.
+- The remaining helpers of `get_area` (`slugify`, `normalize_name`,
+  `levenshtein_*`, `resolve_nap_api_key`, `find_dotenv`, ...) are now private.
+- The API reference documents only each module's public names.
+
+### Added
+- `shortest_path()` (`multimodalpy.analysis`, #78): the shortest path from
+  every origin to every destination (node ids or coordinates) within a
+  threshold in minutes (`weight="tts"`) or metres (`weight="length"`), on a
+  walking, bike or driving network in any output format. Returns a
+  GeoDataFrame with `origin`, `destination`, `time_min`, `length_m`,
+  `n_edges` and the path as a line (`geometry=False` for large tables); pairs
+  beyond the threshold are left out. Bus and train raise
+  `NotImplementedError` until the multimodal network is available.
+- `multimodalpy` command, installed with the package
+  (`multimodalpy --area Valencia --modes walking`).
+- `find_area()` has a full docstring (parameters, errors, examples).
+
+### Removed
+- The `multimodal` parameter of `download_network()`, which only raised
+  `NotImplementedError`; it will come back with the multimodal network.
+- The `--clean-gtfs` command-line flag, which had no effect.
+
+[0.4.0]: https://github.com/aivilor/multimodalpy/compare/v0.3.0...v0.4.0
+
 ## [0.3.0] - 2026-10-30
 
 ### Added
@@ -213,7 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict resolution.
 
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.4.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
