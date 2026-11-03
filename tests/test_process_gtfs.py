@@ -1,4 +1,4 @@
-"""Tests for GTFS normalization (_process_gtfs), including the fast paths.
+"""Tests for GTFS normalization (_gtfs), including the fast paths.
 
 The feeds are tiny zips written to ``tmp_path``, so no network is needed.
 """
@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 
-from multimodalpy import _process_gtfs as process_gtfs
+from multimodalpy import _gtfs
 
 # A 0.1 x 0.1 degree study area.
 AREA = box(-0.45, 39.42, -0.35, 39.52)
@@ -97,7 +97,7 @@ def feed(tmp_path):
 
 
 def _edges(feed, **kwargs):
-    _, edges, _ = process_gtfs.normalize_gtfs_feed(
+    _, edges, _ = _gtfs.normalize_gtfs_feed(
         feed, dataset_name="ds", layer_id="ds", **kwargs
     )
     return edges.set_index(["from_node", "to_node", "route_id"]).sort_index()
@@ -118,7 +118,7 @@ def test_pack_by_group_matches_pack_key_value():
     ).drop_duplicates(["g1", "g2", "band"])
     rows.loc[rows.sample(frac=0.1, random_state=1).index, "value"] = np.nan
 
-    packed = process_gtfs._pack_by_group(rows, ["g1", "g2"], "band", "value")
+    packed = _gtfs._pack_by_group(rows, ["g1", "g2"], "band", "value")
     # NaN keys can't be looked up with .loc, so compare as plain dicts.
     actual = {
         tuple(None if pd.isna(part) else part for part in key): text
@@ -127,7 +127,7 @@ def test_pack_by_group_matches_pack_key_value():
 
     expected = {}
     for key, group in rows.groupby(["g1", "g2"], dropna=False):
-        text = process_gtfs._pack_key_value(group.set_index("band")["value"])
+        text = _gtfs._pack_key_value(group.set_index("band")["value"])
         if text is not None:
             expected[tuple(None if pd.isna(part) else part for part in key)] = text
 
@@ -175,7 +175,7 @@ def test_clip_gives_the_same_edges_as_clipping_after_aggregating(feed):
 
 
 def test_area_without_transit_gives_an_empty_layer_with_all_columns(feed):
-    _, edges, _ = process_gtfs.normalize_gtfs_feed(
+    _, edges, _ = _gtfs.normalize_gtfs_feed(
         feed, dataset_name="ds", layer_id="ds", filter_geometry=box(10, 10, 11, 11)
     )
     assert edges.empty
@@ -189,30 +189,29 @@ def test_area_without_transit_gives_an_empty_layer_with_all_columns(feed):
 # ---------------------------------------------------------------------------
 def _tables(feed):
     return {
-        name: process_gtfs.read_gtfs_table(feed, f"{name}.txt")
+        name: _gtfs.read_gtfs_table(feed, f"{name}.txt")
         for name in ("stop_times", "stops", "trips", "routes", "calendar")
     }
 
 
 def test_trip_records_are_built_once_with_the_schedule_table(feed, monkeypatch):
     calls = []
-    build = process_gtfs._build_stop_to_stop_trip_records
+    build = _gtfs._build_stop_to_stop_trip_records
 
     def counting_build(*args, **kwargs):
         calls.append(1)
         return build(*args, **kwargs)
 
-    monkeypatch.setattr(
-        process_gtfs, "_build_stop_to_stop_trip_records", counting_build
+    monkeypatch.setattr(_gtfs, "_build_stop_to_stop_trip_records", counting_build
     )
-    process_gtfs.normalize_gtfs_feed(
+    _gtfs.normalize_gtfs_feed(
         feed, dataset_name="ds", layer_id="ds", include_schedule_table=True
     )
     assert len(calls) == 1
 
 
 def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
-    _, edges, schedule = process_gtfs.normalize_gtfs_feed(
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
         feed,
         dataset_name="ds",
         layer_id="ds",
@@ -222,14 +221,14 @@ def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
     )
     t = _tables(feed)
     args = (t["stop_times"], t["stops"], t["trips"], t["routes"])
-    standalone_edges = process_gtfs.build_gtfs_stop_to_stop_edges_gdf(
+    standalone_edges = _gtfs.build_gtfs_stop_to_stop_edges_gdf(
         *args,
         dataset_name="ds",
         layer_id="ds",
         filter_geometry=AREA,
         calendar=t["calendar"],
     )
-    standalone_schedule = process_gtfs.build_gtfs_schedule_table(
+    standalone_schedule = _gtfs.build_gtfs_schedule_table(
         *args, dataset_name="ds", calendar=t["calendar"]
     )
     pd.testing.assert_frame_equal(

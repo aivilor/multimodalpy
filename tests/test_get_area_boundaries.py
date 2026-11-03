@@ -15,7 +15,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from multimodalpy import get_area
+from multimodalpy import _boundaries, _text, get_area
 
 # name, NATCODE, NATLEVNAME
 AREAS = [
@@ -163,9 +163,9 @@ def test_unrelated_name_is_not_forced_onto_a_town(boundaries_path):
 
 
 def test_typo_distance_handles_transpositions():
-    assert get_area._typo_distance("valencai", "valencia") == 1
+    assert _text._typo_distance("valencai", "valencia") == 1
     assert get_area.levenshtein_distance("valencai", "valencia") == 2
-    assert get_area._typo_distance("", "abc") == 3
+    assert _text._typo_distance("", "abc") == 3
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +200,9 @@ def test_non_municipal_territory_warns(boundaries_path):
 # Default file: coverage note and shapefile selection
 # ---------------------------------------------------------------------------
 def test_not_found_with_default_file_mentions_coverage(boundaries_path, monkeypatch):
-    monkeypatch.setattr(get_area, "_default_boundaries_path", lambda: boundaries_path)
+    monkeypatch.setattr(
+        _boundaries, "_default_boundaries_path", lambda: boundaries_path
+    )
     with pytest.raises(ValueError, match="Canary Islands"):
         get_area.find_area_boundary("Las Palmas de Gran Canaria")
 
@@ -218,12 +220,12 @@ def test_pick_shapefile_skips_macos_metadata():
         "/cache/recintos/recintos.dbf",
         "/cache/recintos/recintos.shp",
     ]
-    assert str(get_area._pick_shapefile(paths)) == "/cache/recintos/recintos.shp"
-    assert get_area._pick_shapefile(["/cache/__MACOSX/._a.shp"]) is None
+    assert str(_boundaries._pick_shapefile(paths)) == "/cache/recintos/recintos.shp"
+    assert _boundaries._pick_shapefile(["/cache/__MACOSX/._a.shp"]) is None
 
 
 def test_boundaries_release_hash_is_set():
-    assert get_area._BOUNDARIES_RELEASE_HASH.startswith("sha256:")
+    assert _boundaries._BOUNDARIES_RELEASE_HASH.startswith("sha256:")
 
 
 # ---------------------------------------------------------------------------

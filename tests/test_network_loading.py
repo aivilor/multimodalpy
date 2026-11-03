@@ -11,8 +11,7 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString
 
-from multimodalpy import _matrix, get_network, read_graph_json, read_matrix
-from multimodalpy import _process_osm as process_osm
+from multimodalpy import _matrix, _osm, _writers, read_graph_json, read_matrix
 
 
 @pytest.fixture
@@ -34,7 +33,7 @@ def layers():
         2, 3, osmid=11, oneway=True, reversed=False,
         geometry=LineString([(-0.375, 39.47), (-0.374, 39.47)]), **common,
     )  # fmt: skip
-    return process_osm.build_final_osm_layers(graph, layer_id="w", mode="walk")
+    return _osm.build_final_osm_layers(graph, layer_id="w", mode="walk")
 
 
 @pytest.fixture
@@ -61,7 +60,7 @@ def _write(fmt, layers, root):
         matrix = _matrix.osm_network_matrix(nodes, edges, mode="walking")
         _matrix.write_matrix(matrix, folder / "matrix.npz")
     elif fmt == "networkx":
-        get_network._osm_layers_to_graph_json(nodes, edges, folder / "graph.json")
+        _writers._osm_layers_to_graph_json(nodes, edges, folder / "graph.json")
     elif fmt == "geopackage":
         nodes.to_file(root / "valencia.gpkg", layer="osm_walking_nodes", driver="GPKG")
         edges.to_file(root / "valencia.gpkg", layer="osm_walking_edges", driver="GPKG")

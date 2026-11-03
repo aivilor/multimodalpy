@@ -15,7 +15,7 @@ import networkx as nx
 import pytest
 from shapely.geometry import LineString
 
-from multimodalpy import _process_osm as process_osm
+from multimodalpy import _osm
 
 # Centre of Valencia; the grid spacing is ~20 m in both directions, well
 # below the ~100 m that 3 decimals of a degree represent.
@@ -64,7 +64,7 @@ def _grid_graph(size: int = 3) -> nx.MultiDiGraph:
 
 @pytest.mark.parametrize("output_crs", ["EPSG:4326", "EPSG:25830", "EPSG:3857"])
 def test_close_intersections_are_not_merged(output_crs):
-    nodes, _ = process_osm.build_final_osm_layers(
+    nodes, _ = _osm.build_final_osm_layers(
         _grid_graph(), layer_id="walking", mode="walk", output_crs=output_crs
     )
     assert len(nodes) == 9
@@ -74,7 +74,7 @@ def test_close_intersections_are_not_merged(output_crs):
 def test_topology_is_identical_for_every_output_crs():
     results = {}
     for crs in ("EPSG:4326", "EPSG:25830", "EPSG:3857"):
-        nodes, edges = process_osm.build_final_osm_layers(
+        nodes, edges = _osm.build_final_osm_layers(
             _grid_graph(), layer_id="walking", mode="walk", output_crs=crs
         )
         assert nodes.crs.to_epsg() == int(crs.split(":")[1])
@@ -98,7 +98,7 @@ def test_topology_is_identical_for_every_output_crs():
 
 @pytest.mark.parametrize("output_crs", ["EPSG:4326", "EPSG:25830"])
 def test_edges_only_reference_existing_nodes(output_crs):
-    nodes, edges = process_osm.build_final_osm_layers(
+    nodes, edges = _osm.build_final_osm_layers(
         _grid_graph(), layer_id="walking", mode="walk", output_crs=output_crs
     )
     node_ids = set(nodes["node_id"].astype(str))
@@ -110,7 +110,7 @@ def test_edges_only_reference_existing_nodes(output_crs):
 
 def test_nodes_keep_their_real_position_after_reprojection():
     """Node geometry must stay within millimetres of the OSM coordinates."""
-    nodes, _ = process_osm.build_final_osm_layers(
+    nodes, _ = _osm.build_final_osm_layers(
         _grid_graph(), layer_id="walking", mode="walk", output_crs="EPSG:4326"
     )
     graph = _grid_graph()

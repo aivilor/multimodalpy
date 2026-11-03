@@ -16,9 +16,8 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
-from multimodalpy import _process_gtfs as process_gtfs
-from multimodalpy import _process_osm as process_osm
-from multimodalpy import get_area, get_network
+from multimodalpy import _gtfs, _osm, _writers, get_area, get_network
+
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal sample data, no network
@@ -157,8 +156,8 @@ def test_package_logger_is_silent_unless_configured():
 # Column names (Shapefile's 10-character limit)
 # ---------------------------------------------------------------------------
 def test_column_names_fit_the_shapefile_limit():
-    rename = process_osm.FINAL_EDGE_RENAME
-    osm = [rename.get(column, column) for column in process_osm.FINAL_EDGE_COLUMNS]
+    rename = _osm.FINAL_EDGE_RENAME
+    osm = [rename.get(column, column) for column in _osm.FINAL_EDGE_COLUMNS]
     gtfs = list(get_network.GTFS_EDGE_RENAME.values())
 
     assert all(len(name) <= 10 for name in osm + gtfs)
@@ -188,7 +187,7 @@ def test_shapefile_keeps_the_column_names(tmp_path, run_main):
     ],
 )
 def test_primary_highway_resolves_compound_tags_only(value, expected):
-    assert process_osm._primary_highway(value) == expected
+    assert _osm._primary_highway(value) == expected
 
 
 def test_osm_export_has_single_tags_numeric_maxspeed_and_raw_values():
@@ -216,7 +215,7 @@ def test_osm_export_has_single_tags_numeric_maxspeed_and_raw_values():
         **common,
     )
 
-    _, edges = process_osm.build_final_osm_layers(
+    _, edges = _osm.build_final_osm_layers(
         graph, layer_id="walking", mode="walk"
     )
     edges = edges.set_index("edge_id")
@@ -254,7 +253,7 @@ def _feed(tmp_path, route_types):
 def test_transport_mode_follows_the_majority_route_type(
     tmp_path, route_types, expected
 ):
-    assert process_gtfs.infer_transport_mode(_feed(tmp_path, route_types)) == expected
+    assert _gtfs.infer_transport_mode(_feed(tmp_path, route_types)) == expected
 
 
 def test_unreadable_feed_is_treated_as_bus(tmp_path):
@@ -264,8 +263,8 @@ def test_unreadable_feed_is_treated_as_bus(tmp_path):
     corrupt = tmp_path / "corrupt.zip"
     corrupt.write_bytes(b"not a zip")
 
-    assert process_gtfs.infer_transport_mode(missing_routes) == "bus"
-    assert process_gtfs.infer_transport_mode(corrupt) == "bus"
+    assert _gtfs.infer_transport_mode(missing_routes) == "bus"
+    assert _gtfs.infer_transport_mode(corrupt) == "bus"
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +290,8 @@ def _walk_graph_without_optional_tags() -> nx.MultiDiGraph:
 
 
 def test_osm_edges_always_have_the_standard_columns_in_order():
-    assert process_osm.STANDARD_EDGE_COLUMNS == STANDARD_EDGE_COLUMNS
-    _, edges = process_osm.build_final_osm_layers(
+    assert _osm.STANDARD_EDGE_COLUMNS == STANDARD_EDGE_COLUMNS
+    _, edges = _osm.build_final_osm_layers(
         _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
     )
     assert list(edges.columns) == STANDARD_EDGE_COLUMNS
@@ -302,10 +301,10 @@ def test_osm_edges_always_have_the_standard_columns_in_order():
 def test_osm_edges_keep_the_standard_columns_in_every_file_format(
     tmp_path, output_file_type
 ):
-    nodes, edges = process_osm.build_final_osm_layers(
+    nodes, edges = _osm.build_final_osm_layers(
         _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
     )
-    get_network._write_layers(
+    _writers._write_layers(
         {"osm_walking_edges": edges},
         tmp_path,
         output_file_type,
@@ -324,10 +323,10 @@ def test_osm_edges_keep_the_standard_columns_in_every_file_format(
 def test_osm_networkx_edges_carry_the_standard_attributes(tmp_path):
     import json
 
-    nodes, edges = process_osm.build_final_osm_layers(
+    nodes, edges = _osm.build_final_osm_layers(
         _walk_graph_without_optional_tags(), layer_id="walking", mode="walk"
     )
-    path = get_network._osm_layers_to_graph_json(
+    path = _writers._osm_layers_to_graph_json(
         nodes, edges, tmp_path / "walking" / "graph.json"
     )
     data = json.loads(path.read_text(encoding="utf-8"))

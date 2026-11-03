@@ -23,7 +23,7 @@ import pytest
 from shapely.geometry import LineString, Point, box
 
 import multimodalpy
-from multimodalpy import _matrix, get_network
+from multimodalpy import _matrix, _nap, _writers, get_network
 
 # Captured at import time, before any test monkeypatches it.
 REAL_FIND_AREA_BOUNDARY = get_network.get_area.find_area_boundary
@@ -210,7 +210,7 @@ def test_split_modes_rejects_unknown_mode():
 # Small helpers
 # ---------------------------------------------------------------------------
 def test_json_safe_handles_nan_lists_and_scalars():
-    json_safe = get_network._json_safe
+    json_safe = _writers._json_safe
     assert json_safe(float("nan")) is None
     assert json_safe(None) is None
     assert json_safe("text") == "text"
@@ -222,7 +222,7 @@ def test_json_safe_handles_nan_lists_and_scalars():
 
 def test_relative_name_uses_forward_slashes(tmp_path):
     path = tmp_path / "walking" / "nodes.geojson"
-    assert get_network._relative_name(path, tmp_path) == "walking/nodes.geojson"
+    assert _writers._relative_name(path, tmp_path) == "walking/nodes.geojson"
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ def test_write_layers_geojson_uses_layer_paths_and_skips_empty(tmp_path):
         "empty": gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"),
         "missing": None,
     }
-    written = get_network._write_layers(
+    written = _writers._write_layers(
         layers,
         tmp_path,
         "geojson",
@@ -251,7 +251,7 @@ def test_write_layers_geojson_uses_layer_paths_and_skips_empty(tmp_path):
 
 def test_write_layers_shapefile_keeps_short_column_names(tmp_path):
     nodes = make_osm_result()["nodes"]
-    written = get_network._write_layers(
+    written = _writers._write_layers(
         {"osm_walking_nodes": nodes},
         tmp_path,
         "shapefile",
@@ -266,7 +266,7 @@ def test_write_layers_shapefile_keeps_short_column_names(tmp_path):
 
 def test_write_layers_geopackage_puts_layers_in_one_file(tmp_path):
     osm = make_osm_result()
-    written = get_network._write_layers(
+    written = _writers._write_layers(
         {"nodes": osm["nodes"], "edges": osm["edges"]},
         tmp_path,
         "geopackage",
@@ -282,7 +282,7 @@ def test_write_layers_geopackage_puts_layers_in_one_file(tmp_path):
 def test_write_layers_rejects_unsupported_format(tmp_path):
     nodes = make_osm_result()["nodes"]
     with pytest.raises(ValueError, match="Unsupported format"):
-        get_network._write_layers(
+        _writers._write_layers(
             {"nodes": nodes},
             tmp_path,
             "csv",
@@ -296,7 +296,7 @@ def test_write_layers_rejects_unsupported_format(tmp_path):
 # ---------------------------------------------------------------------------
 def test_write_schedule_tables_csv_for_non_geopackage(tmp_path):
     schedule = make_gtfs_result()["schedule"]
-    written = get_network._write_schedule_tables(
+    written = _writers._write_schedule_tables(
         {
             "gtfs_ds1_schedule": schedule,
             "gtfs_empty_schedule": pd.DataFrame(),
@@ -314,14 +314,14 @@ def test_write_schedule_tables_csv_for_non_geopackage(tmp_path):
 
 def test_write_schedule_tables_geopackage_uses_plain_sqlite_table(tmp_path):
     osm = make_osm_result()
-    get_network._write_layers(
+    _writers._write_layers(
         {"nodes": osm["nodes"]},
         tmp_path,
         "geopackage",
         area_slug="valencia",
         layer_paths={},
     )
-    written = get_network._write_schedule_tables(
+    written = _writers._write_schedule_tables(
         {"gtfs_ds1_schedule": make_gtfs_result()["schedule"]},
         tmp_path,
         "geopackage",
@@ -349,7 +349,7 @@ def test_graph_json_stores_edges_under_edges_key(tmp_path):
     # The key is fixed by multimodalpy, not by the installed networkx
     # version (which wrote "links" before 3.6).
     result = make_gtfs_result()
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json"
     )
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -360,14 +360,14 @@ def test_gtfs_graph_json_records_the_crs(tmp_path):
     result = make_gtfs_result()
     nodes = result["nodes"].to_crs("EPSG:25830")
     edges = result["edges"].to_crs("EPSG:25830")
-    path = get_network._gtfs_to_graph_json(nodes, edges, tmp_path / "graph.json")
+    path = _writers._gtfs_to_graph_json(nodes, edges, tmp_path / "graph.json")
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["graph"]["crs"] == "EPSG:25830"
 
 def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
     result = make_gtfs_result()
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "bus" / "ds1" / "graph.json"
     )
 
@@ -390,7 +390,7 @@ def test_gtfs_to_graph_json_builds_stop_graph(tmp_path):
 def test_gtfs_graph_json_keeps_only_the_given_edge_columns(tmp_path):
     result = make_gtfs_result()
     columns = ["edge_id", "from_node", "to_node", "trip_count", "geometry"]
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json", edge_columns=columns
     )
 
@@ -432,7 +432,7 @@ def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
         geometry=[LineString([(-0.40, 39.40), (-0.10, 39.70)])],
         crs="EPSG:4326",
     )
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], edges, tmp_path / "graph.json"
     )
 
@@ -445,7 +445,7 @@ def test_gtfs_graph_json_places_stops_outside_the_area(tmp_path):
 
 def test_read_graph_json_round_trip(tmp_path):
     result = make_gtfs_result()
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json"
     )
     graph = multimodalpy.read_graph_json(path)
@@ -461,7 +461,7 @@ def test_read_graph_json_round_trip(tmp_path):
 
 def test_read_graph_json_reads_legacy_links_key(tmp_path):
     result = make_gtfs_result()
-    path = get_network._gtfs_to_graph_json(
+    path = _writers._gtfs_to_graph_json(
         result["nodes"], result["edges"], tmp_path / "graph.json"
     )
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -940,7 +940,7 @@ def sent_keys(monkeypatch):
         keys.append(headers["ApiKey"])
         return _NoDatasetsResponse()
 
-    monkeypatch.setattr(get_network.get_area, "_nap_get", fake_nap_get)
+    monkeypatch.setattr(_nap, "_nap_get", fake_nap_get)
     return keys
 
 

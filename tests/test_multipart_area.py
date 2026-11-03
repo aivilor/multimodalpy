@@ -24,8 +24,7 @@ import osmnx as ox
 import pytest
 from shapely.geometry import MultiPolygon, Point, box
 
-from multimodalpy import _process_osm as process_osm
-from multimodalpy import get_area, get_network
+from multimodalpy import _osm, get_area, get_network
 
 LON0, LAT0 = -2.0, 43.28
 KM_LON = 1 / (111.32 * math.cos(math.radians(LAT0)))
@@ -213,7 +212,7 @@ def test_connect_parts_false_leaves_the_parts_separate(downloads):
 
 def test_connector_column_is_false_for_graphs_without_the_attribute():
     graph = _street_graph().subgraph([1, 2, 3]).copy()
-    _, edges = process_osm.build_final_osm_layers(graph, layer_id="d", mode="drive")
+    _, edges = _osm.build_final_osm_layers(graph, layer_id="d", mode="drive")
     assert edges["connector"].tolist() == [False] * len(edges)
 
 
