@@ -5,7 +5,8 @@
    :toctree: _autosummary
    :recursive:
 
-   multimodalpy.get_network
-   multimodalpy.get_area
-   multimodalpy.isochrones
+   multimodalpy.network
+   multimodalpy.area
+   multimodalpy.io
+   multimodalpy.analysis
 ```

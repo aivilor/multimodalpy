@@ -24,8 +24,7 @@ import osmnx as ox
 import pytest
 from shapely.geometry import MultiPolygon, Point, box
 
-from multimodalpy import _process_osm as process_osm
-from multimodalpy import get_area, get_network
+from multimodalpy import _cli, _osm, network
 
 LON0, LAT0 = -2.0, 43.28
 KM_LON = 1 / (111.32 * math.cos(math.radians(LAT0)))
@@ -126,9 +125,7 @@ def _boundary(geometry) -> gpd.GeoDataFrame:
 
 def _layers(geometry, **kwargs):
     with pytest.warns(UserWarning) if kwargs.pop("expect_warning", False) else _no_op():
-        result = get_area.download_osm_layers(
-            _boundary(geometry), modes=["driving"], **kwargs
-        )
+        result = network.download_osm(_boundary(geometry), modes=["driving"], **kwargs)
     return result["driving"]
 
 
@@ -149,10 +146,10 @@ def _routable(edges) -> nx.DiGraph:
 # ---------------------------------------------------------------------------
 def test_parts_are_joined_in_both_directions(downloads):
     out = _layers(MultiPolygon([MAIN, EXCLAVE]))
-    network = _routable(out["edges"])
+    graph = _routable(out["edges"])
 
-    assert nx.has_path(network, 1, 22)  # main part -> exclave
-    assert nx.has_path(network, 22, 1)  # exclave -> main part
+    assert nx.has_path(graph, 1, 22)  # main part -> exclave
+    assert nx.has_path(graph, 22, 1)  # exclave -> main part
 
 
 def test_only_the_connecting_roads_are_added_and_marked(downloads):
@@ -178,14 +175,14 @@ def test_network_is_downloaded_over_the_hull_of_the_parts(downloads):
 
 def test_part_without_road_access_is_reported_not_fatal(downloads):
     with pytest.warns(UserWarning, match=r"part\(s\) 3 "):
-        out = get_area.download_osm_layers(
+        out = network.download_osm(
             _boundary(MultiPolygon([MAIN, EXCLAVE, ISLET])), modes=["driving"]
         )["driving"]
 
     assert out["unconnected_parts"] == [3]  # numbered by size: the islet is 3rd
-    network = _routable(out["edges"])
-    assert nx.has_path(network, 1, 22)  # the exclave is still joined
-    assert 41 in network  # the islet's streets are kept
+    graph = _routable(out["edges"])
+    assert nx.has_path(graph, 1, 22)  # the exclave is still joined
+    assert 41 in graph  # the islet's streets are kept
 
 
 # ---------------------------------------------------------------------------
@@ -207,30 +204,32 @@ def test_connect_parts_false_leaves_the_parts_separate(downloads):
     (call,) = downloads
     assert call["polygon"].equals(area)
     assert not out["edges"]["connector"].any()
-    network = _routable(out["edges"])
-    assert not nx.has_path(network, 1, 22)  # what happened before this fix
+    graph = _routable(out["edges"])
+    assert not nx.has_path(graph, 1, 22)  # what happened before this fix
 
 
 def test_connector_column_is_false_for_graphs_without_the_attribute():
     graph = _street_graph().subgraph([1, 2, 3]).copy()
-    _, edges = process_osm.build_final_osm_layers(graph, layer_id="d", mode="drive")
+    _, edges = _osm.build_final_osm_layers(graph, layer_id="d", mode="drive")
     assert edges["connector"].tolist() == [False] * len(edges)
 
 
 # ---------------------------------------------------------------------------
 # main() and the CLI
 # ---------------------------------------------------------------------------
-def test_main_connects_by_default_and_reports_unconnected_parts(tmp_path, monkeypatch):
+def test_download_network_connects_by_default_and_reports_unconnected_parts(
+    tmp_path, monkeypatch
+):
     seen = {}
     boundary = _boundary(MultiPolygon([MAIN, EXCLAVE, ISLET]))
-    monkeypatch.setattr(get_area, "find_area_boundary", lambda *a, **k: boundary)
-    real = get_area.download_osm_layers
+    monkeypatch.setattr(network, "find_area", lambda *a, **k: boundary)
+    real = network.download_osm
 
     def spy(*args, **kwargs):
         seen.update(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(get_area, "download_osm_layers", spy)
+    monkeypatch.setattr(network, "download_osm", spy)
     monkeypatch.setattr(
         ox,
         "graph_from_polygon",
@@ -240,7 +239,9 @@ def test_main_connects_by_default_and_reports_unconnected_parts(tmp_path, monkey
     )
 
     with pytest.warns(UserWarning, match=r"part\(s\) 3 "):
-        manifest = get_network.main("Test", modes=["driving"], output_path=tmp_path)
+        manifest = network.download_network(
+            "Test", modes=["driving"], output_dir=tmp_path
+        )
 
     assert seen["connect_parts"] is True
     assert manifest["connect_parts"] is True
@@ -252,6 +253,8 @@ def test_main_connects_by_default_and_reports_unconnected_parts(tmp_path, monkey
 )
 def test_cli_connect_parts_flag(monkeypatch, argv, expected):
     captured = {}
-    monkeypatch.setattr(get_network, "main", lambda **kwargs: captured.update(kwargs))
-    get_network._cli(["--area", "Donostia", *argv])
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
+    _cli.main(["--area", "Donostia", *argv])
     assert captured["connect_parts"] is expected

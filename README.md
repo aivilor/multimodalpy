@@ -62,13 +62,13 @@ pip install -e . --group dev
 Street networks need no setup:
 
 ```python
-from multimodalpy import get_network
+import multimodalpy as mmp
 
-manifest = get_network.main(
+manifest = mmp.download_network(
     "Valencia",
     modes=["walking", "bike", "driving"],
-    output_path="output",
-    output_file_type="geojson",
+    output_dir="output",
+    formats="geojson",
 )
 print(manifest["files"])
 ```
@@ -82,7 +82,7 @@ Public transport data comes from the NAP API, which needs a free API key:
 register on the [NAP portal](https://nap.transportes.gob.es). The key is looked
 for in this order:
 
-1. `main(..., api_key="...")`, or `--api-key` in the command line;
+1. `download_network(..., api_key="...")`, or `--api-key` in the command line;
 2. the `NAP_API_KEY` environment variable;
 3. a `.env` file in the folder you run Python from **or any parent folder**
    (so a `.env` at the root of your project also works from `notebooks/`):
@@ -96,7 +96,7 @@ accident. Prefer the environment variable or `.env` over `--api-key`, which
 stays in your shell history.
 
 ```python
-manifest = get_network.main("Valencia", modes=["walking", "bus", "train"])
+manifest = mmp.download_network("Valencia", modes=["walking", "bus", "train"])
 ```
 
 The key is checked before anything is downloaded. Without one, a warning says
@@ -108,11 +108,12 @@ also written and a warning explains why there is no bus or train data
 ### Command line
 
 ```bash
-python -m multimodalpy.get_network --area Valencia --modes walking bus \
-    --output output --output-file-type geojson geopackage --buffer-m 500
+multimodalpy --area Valencia --modes walking bus \
+    --output-dir output --formats geojson geopackage --buffer-m 500
 ```
 
-Run `python -m multimodalpy.get_network --help` for every option.
+Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
+same way.
 
 ## What you get
 
@@ -124,7 +125,7 @@ output/
 ├── driving/                 nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
-└── <area>.gpkg              only with output_file_type="geopackage"
+└── <area>.gpkg              only with formats="geopackage"
 ```
 
 - **Street edges** (every mode): `edge_id`, `from_node`, `to_node`, `highway`,
@@ -141,7 +142,7 @@ in [DATA_SCHEMA.md](DATA_SCHEMA.md).
 
 ### Shortest paths: the matrix format
 
-`output_file_type="matrix"` writes each network as one `matrix.npz`: a directed
+`formats="matrix"` writes each network as one `matrix.npz`: a directed
 sparse adjacency matrix (CSR) with one vector per weight (`tts` and `length`
 for streets, the travel-time statistics for bus and train). Read it with
 `read_matrix` and pass it to scipy's shortest-path functions:
@@ -166,10 +167,10 @@ are not modelled. See the
 travel time, on a walking, bike or driving network:
 
 ```python
-from multimodalpy.isochrones import isochrones
+from multimodalpy import isochrones
 
 areas = isochrones(
-    "output",                     # output folder of main()
+    "output",                     # output folder of download_network()
     origins=(-0.3763, 39.4699),   # (x, y) in the network's CRS, or a node_id
     cutoffs=[5, 10, 15],          # minutes
     mode="walking",
@@ -191,19 +192,32 @@ will come with the multimodal network.
 | Option | Default | What it does |
 |---|---|---|
 | `modes` | `["walking"]` | Any of `walking`, `bike`, `driving`, `bus`, `train`. Spanish synonyms work too (`caminable`, `bicicleta`, `coche`). |
-| `output_file_type` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
+| `output_dir` | `"output"` | Folder to write to. |
+| `formats` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer, e.g. `"EPSG:25830"` for metres in Spain. |
 | `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
 | `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
 | `boundaries_path` | packaged file | Your own boundaries file (Shapefile or GeoJSON). |
-| `schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
+| `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
+| `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
 
-`main()` writes the files and returns a manifest (a dictionary listing them).
-To work with the layers in memory instead, use the functions in
-`multimodalpy.get_area`, which return GeoDataFrames. See the
+`download_network()` writes the files and returns a manifest (a dictionary
+listing them).
+
+## The library
+
+| Module | What it is for |
+|---|---|
+| `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
+| `multimodalpy.area` | `find_area()`: the municipality's boundary. |
+| `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
+| `multimodalpy.analysis` | `isochrones()` and the other network analyses. |
+
+`download_network`, `find_area`, `read_matrix`, `read_graph` and `isochrones`
+are also available from the package itself (`multimodalpy.find_area`). See the
 [API reference](https://multimodalpy.readthedocs.io/en/latest/api.html).
 
 ## How it works

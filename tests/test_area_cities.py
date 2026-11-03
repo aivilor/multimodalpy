@@ -1,6 +1,6 @@
-"""Tests for city/area resolution in ``multimodalpy.get_area``.
+"""Tests for city/area resolution (``multimodalpy.area``).
 
-``find_area_boundary`` and ``_select_area_rows`` never touch the network:
+``find_area`` and ``_select_area_rows`` never touch the network:
 they read a local boundaries file and match a name against it. These tests
 build a small synthetic boundaries file with several real Spanish
 municipalities (including accents and a NATCODE per town) and exercise the
@@ -14,12 +14,12 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from multimodalpy import get_area
+from multimodalpy import _boundaries, area
 
 # name, NATCODE (INSPIRE, <2 pais><2 ccaa><2 provincia><5 municipio>),
 # expected province.
 # The 5-digit municipio segment starts with the same 2 provincia digits, matching
-# the real format (see the "34074040136" -> Segovia example in get_area.py).
+# the real format (see the "34074040136" -> Segovia example in _boundaries.py).
 CITIES = [
     ("Valencia", "34" + "10" + "46" + "46250", 46),
     ("Madrid", "34" + "13" + "28" + "28079", 28),
@@ -53,8 +53,8 @@ def boundaries_path(tmp_path):
 # Exact / case / accent-insensitive matching, one per city
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
-def test_find_area_boundary_exact_name(boundaries_path, name, natcode, province):
-    result = get_area.find_area_boundary(name, boundaries_path)
+def test_find_area_exact_name(boundaries_path, name, natcode, province):
+    result = area.find_area(name, boundaries_path)
     row = result.iloc[0]
     assert row["matched_value"] == name
     assert row["matched_column"] == "nombre"
@@ -64,10 +64,8 @@ def test_find_area_boundary_exact_name(boundaries_path, name, natcode, province)
 
 
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
-def test_find_area_boundary_is_case_insensitive(
-    boundaries_path, name, natcode, province
-):
-    result = get_area.find_area_boundary(name.upper(), boundaries_path)
+def test_find_area_is_case_insensitive(boundaries_path, name, natcode, province):
+    result = area.find_area(name.upper(), boundaries_path)
     assert result.iloc[0]["matched_value"] == name
 
 
@@ -80,10 +78,10 @@ def test_find_area_boundary_is_case_insensitive(
         ("  Valencia  ", "Valencia"),  # surrounding whitespace
     ],
 )
-def test_find_area_boundary_ignores_accents_case_and_whitespace(
+def test_find_area_ignores_accents_case_and_whitespace(
     boundaries_path, query, expected_name
 ):
-    result = get_area.find_area_boundary(query, boundaries_path)
+    result = area.find_area(query, boundaries_path)
     assert result.iloc[0]["matched_value"] == expected_name
 
 
@@ -99,34 +97,32 @@ def test_find_area_boundary_ignores_accents_case_and_whitespace(
         ("Barcelona ", "Barcelona"),  # trailing space, still exact after normalize
     ],
 )
-def test_find_area_boundary_tolerates_small_typos(boundaries_path, typo, expected_name):
-    result = get_area.find_area_boundary(typo, boundaries_path)
+def test_find_area_tolerates_small_typos(boundaries_path, typo, expected_name):
+    result = area.find_area(typo, boundaries_path)
     assert result.iloc[0]["matched_value"] == expected_name
 
 
-def test_find_area_boundary_rejects_name_too_different_from_any_city(boundaries_path):
+def test_find_area_rejects_name_too_different_from_any_city(boundaries_path):
     with pytest.raises(ValueError, match="No boundary found"):
-        get_area.find_area_boundary("Ciudad Que No Existe Del Todo", boundaries_path)
+        area.find_area("Ciudad Que No Existe Del Todo", boundaries_path)
 
 
 # ---------------------------------------------------------------------------
 # area_code lookup (exact NATCODE match, bypasses name matching entirely)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
-def test_find_area_boundary_by_area_code(boundaries_path, name, natcode, province):
+def test_find_area_by_area_code(boundaries_path, name, natcode, province):
     # area_name is irrelevant once area_code matches; it's only stored on the result.
-    result = get_area.find_area_boundary(
-        "nombre que no se usa", boundaries_path, area_code=natcode
-    )
+    result = area.find_area("nombre que no se usa", boundaries_path, area_code=natcode)
     row = result.iloc[0]
     assert row["matched_column"] == "NATCODE"
     assert row["matched_value"] == natcode
     assert row["province_code"] == province
 
 
-def test_find_area_boundary_unknown_area_code_raises(boundaries_path):
+def test_find_area_unknown_area_code_raises(boundaries_path):
     with pytest.raises(ValueError, match="No boundary found"):
-        get_area.find_area_boundary("Valencia", boundaries_path, area_code="00000000")
+        area.find_area("Valencia", boundaries_path, area_code="00000000")
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +130,7 @@ def test_find_area_boundary_unknown_area_code_raises(boundaries_path):
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
 def test_province_code_from_natcode(name, natcode, province):
-    assert get_area.province_code_from_natcode(natcode) == province
+    assert _boundaries.province_code_from_natcode(natcode) == province
 
 
 @pytest.mark.parametrize(
@@ -142,17 +138,17 @@ def test_province_code_from_natcode(name, natcode, province):
     [None, "", "abc", "123", "999999999"],  # too short / non-numeric / out of range
 )
 def test_province_code_from_natcode_returns_none_for_unusable_input(bad_value):
-    assert get_area.province_code_from_natcode(bad_value) is None
+    assert _boundaries.province_code_from_natcode(bad_value) is None
 
 
 def test_province_code_from_natcode_accepts_bare_five_digit_ine_code():
     # "40136" -> Segovia municipality, province digits are the first two.
-    assert get_area.province_code_from_natcode("40136") == 40
+    assert _boundaries.province_code_from_natcode("40136") == 40
 
 
 # Multiple name columns: the first column with a hit wins, per
 # DEFAULT_NAME_COLUMNS order
-def test_find_area_boundary_falls_back_to_second_name_column(tmp_path):
+def test_find_area_falls_back_to_second_name_column(tmp_path):
     gdf = gpd.GeoDataFrame(
         {
             # "nombre" is checked before "provincia" in DEFAULT_NAME_COLUMNS,
@@ -166,13 +162,13 @@ def test_find_area_boundary_falls_back_to_second_name_column(tmp_path):
     path = tmp_path / "boundaries.geojson"
     gdf.to_file(path, driver="GeoJSON")
 
-    result = get_area.find_area_boundary("Cuenca", path)
+    result = area.find_area("Cuenca", path)
     row = result.iloc[0]
     assert row["matched_column"] == "provincia"
     assert row["matched_value"] == "Cuenca"
 
 
-def test_find_area_boundary_raises_when_no_name_column_present(tmp_path):
+def test_find_area_raises_when_no_name_column_present(tmp_path):
     gdf = gpd.GeoDataFrame(
         {"unrelated_column": ["x"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
     )
@@ -180,38 +176,36 @@ def test_find_area_boundary_raises_when_no_name_column_present(tmp_path):
     gdf.to_file(path, driver="GeoJSON")
 
     with pytest.raises(ValueError, match="No name column found"):
-        get_area.find_area_boundary("Cuenca", path)
+        area.find_area("Cuenca", path)
 
 
 # ---------------------------------------------------------------------------
 # File-level validation
 # ---------------------------------------------------------------------------
-def test_find_area_boundary_rejects_unsupported_suffix(tmp_path):
+def test_find_area_rejects_unsupported_suffix(tmp_path):
     bad_path = tmp_path / "boundaries.gpkg"
     bad_path.write_bytes(b"")
     with pytest.raises(ValueError, match="only accepts shapefile"):
-        get_area.find_area_boundary("Valencia", bad_path)
+        area.find_area("Valencia", bad_path)
 
 
-def test_find_area_boundary_missing_file_raises(tmp_path):
+def test_find_area_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        get_area.find_area_boundary("Valencia", tmp_path / "does_not_exist.geojson")
+        area.find_area("Valencia", tmp_path / "does_not_exist.geojson")
 
 
-def test_find_area_boundary_empty_file_raises(tmp_path):
+def test_find_area_empty_file_raises(tmp_path):
     gdf = gpd.GeoDataFrame({"nombre": []}, geometry=[], crs="EPSG:4326")
     path = tmp_path / "boundaries.geojson"
     gdf.to_file(path, driver="GeoJSON")
     with pytest.raises(ValueError, match="is empty"):
-        get_area.find_area_boundary("Valencia", path)
+        area.find_area("Valencia", path)
 
 
 # ---------------------------------------------------------------------------
 # Output CRS
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES[:3])
-def test_find_area_boundary_reprojects_to_target_crs(
-    boundaries_path, name, natcode, province
-):
-    result = get_area.find_area_boundary(name, boundaries_path, target_crs="EPSG:25830")
+def test_find_area_reprojects_to_target_crs(boundaries_path, name, natcode, province):
+    result = area.find_area(name, boundaries_path, target_crs="EPSG:25830")
     assert result.crs.to_epsg() == 25830

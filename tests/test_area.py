@@ -1,4 +1,4 @@
-"""Tests for the study-area fixes in ``multimodalpy.get_area``.
+"""Tests for the study-area fixes in ``multimodalpy.area``.
 
 The synthetic boundaries file reproduces cases found in the real IGN
 municipal file: bilingual names ("Elx/Elche"), names contained in other
@@ -15,7 +15,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from multimodalpy import get_area
+from multimodalpy import _boundaries, _text, area, network
 
 # name, NATCODE, NATLEVNAME
 AREAS = [
@@ -56,7 +56,7 @@ def boundaries_path(tmp_path):
 
 
 def find(path, name, **kwargs):
-    return get_area.find_area_boundary(name, path, **kwargs).iloc[0]
+    return area.find_area(name, path, **kwargs).iloc[0]
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ def test_whole_word_match_skips_longer_words(boundaries_path):
 
 
 def test_substring_matching_several_towns_is_ambiguous(boundaries_path):
-    with pytest.raises(get_area.AmbiguousAreaError) as excinfo:
+    with pytest.raises(area.AmbiguousAreaError) as excinfo:
         find(boundaries_path, "Sebasti")
     assert len(excinfo.value.candidates) == 2
 
@@ -99,7 +99,7 @@ def test_substring_matching_several_towns_is_ambiguous(boundaries_path):
 # Same name in two provinces
 # ---------------------------------------------------------------------------
 def test_shared_name_raises_with_both_candidates(boundaries_path):
-    with pytest.raises(get_area.AmbiguousAreaError, match="province=") as excinfo:
+    with pytest.raises(area.AmbiguousAreaError, match="province=") as excinfo:
         find(boundaries_path, "Castejón")
     labels = " ".join(excinfo.value.candidates)
     assert "Navarra" in labels and "Cuenca" in labels
@@ -138,7 +138,7 @@ def test_province_with_no_rows_raises(boundaries_path):
 # Fuzzy matching
 # ---------------------------------------------------------------------------
 def test_typo_tied_between_two_towns_is_ambiguous(boundaries_path):
-    with pytest.raises(get_area.AmbiguousAreaError) as excinfo:
+    with pytest.raises(area.AmbiguousAreaError) as excinfo:
         find(boundaries_path, "Gerona")
     labels = " ".join(excinfo.value.candidates)
     assert "Girona" in labels and "Gerena" in labels
@@ -163,9 +163,9 @@ def test_unrelated_name_is_not_forced_onto_a_town(boundaries_path):
 
 
 def test_typo_distance_handles_transpositions():
-    assert get_area._typo_distance("valencai", "valencia") == 1
-    assert get_area.levenshtein_distance("valencai", "valencia") == 2
-    assert get_area._typo_distance("", "abc") == 3
+    assert _text._typo_distance("valencai", "valencia") == 1
+    assert _text.levenshtein_distance("valencai", "valencia") == 2
+    assert _text._typo_distance("", "abc") == 3
 
 
 # ---------------------------------------------------------------------------
@@ -200,9 +200,11 @@ def test_non_municipal_territory_warns(boundaries_path):
 # Default file: coverage note and shapefile selection
 # ---------------------------------------------------------------------------
 def test_not_found_with_default_file_mentions_coverage(boundaries_path, monkeypatch):
-    monkeypatch.setattr(get_area, "_default_boundaries_path", lambda: boundaries_path)
+    monkeypatch.setattr(
+        _boundaries, "_default_boundaries_path", lambda: boundaries_path
+    )
     with pytest.raises(ValueError, match="Canary Islands"):
-        get_area.find_area_boundary("Las Palmas de Gran Canaria")
+        area.find_area("Las Palmas de Gran Canaria")
 
 
 def test_not_found_with_own_file_has_no_coverage_note(boundaries_path):
@@ -218,30 +220,30 @@ def test_pick_shapefile_skips_macos_metadata():
         "/cache/recintos/recintos.dbf",
         "/cache/recintos/recintos.shp",
     ]
-    assert str(get_area._pick_shapefile(paths)) == "/cache/recintos/recintos.shp"
-    assert get_area._pick_shapefile(["/cache/__MACOSX/._a.shp"]) is None
+    assert str(_boundaries._pick_shapefile(paths)) == "/cache/recintos/recintos.shp"
+    assert _boundaries._pick_shapefile(["/cache/__MACOSX/._a.shp"]) is None
 
 
 def test_boundaries_release_hash_is_set():
-    assert get_area._BOUNDARIES_RELEASE_HASH.startswith("sha256:")
+    assert _boundaries._BOUNDARIES_RELEASE_HASH.startswith("sha256:")
 
 
 # ---------------------------------------------------------------------------
 # Buffer
 # ---------------------------------------------------------------------------
 def test_study_area_geometry_buffer_widens_the_area(boundaries_path):
-    boundary = get_area.find_area_boundary("Sevilla", boundaries_path)
-    exact = get_area.study_area_geometry(boundary)
-    buffered = get_area.study_area_geometry(boundary, buffer_m=500)
+    boundary = area.find_area("Sevilla", boundaries_path)
+    exact = _boundaries.study_area_geometry(boundary)
+    buffered = _boundaries.study_area_geometry(boundary, buffer_m=500)
     assert buffered.contains(exact)
     assert buffered.area > exact.area
     assert exact.equals(boundary.geometry.iloc[0])
 
 
 def test_study_area_geometry_rejects_negative_buffer(boundaries_path):
-    boundary = get_area.find_area_boundary("Sevilla", boundaries_path)
+    boundary = area.find_area("Sevilla", boundaries_path)
     with pytest.raises(ValueError, match="buffer_m"):
-        get_area.study_area_geometry(boundary, buffer_m=-10)
+        _boundaries.study_area_geometry(boundary, buffer_m=-10)
 
 
 def test_download_osm_layers_uses_buffer_and_truncate_by_edge(
@@ -249,7 +251,7 @@ def test_download_osm_layers_uses_buffer_and_truncate_by_edge(
 ):
     import osmnx as ox
 
-    boundary = get_area.find_area_boundary("Sevilla", boundaries_path)
+    boundary = area.find_area("Sevilla", boundaries_path)
     captured = {}
 
     def fake_graph_from_polygon(polygon, **kwargs):
@@ -259,7 +261,7 @@ def test_download_osm_layers_uses_buffer_and_truncate_by_edge(
 
     monkeypatch.setattr(ox, "graph_from_polygon", fake_graph_from_polygon)
     with pytest.raises(RuntimeError, match="stop after capturing"):
-        get_area.download_osm_layers(boundary, modes=["walking"], buffer_m=300)
+        network.download_osm(boundary, modes=["walking"], buffer_m=300)
 
     assert captured["truncate_by_edge"] is True
     assert captured["polygon"].area > boundary.geometry.iloc[0].area

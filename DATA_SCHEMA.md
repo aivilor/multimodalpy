@@ -1,26 +1,26 @@
 # Data schema
 
-Reference for everything `multimodalpy.get_network.main()` writes to disk: where
+Reference for everything `multimodalpy.download_network()` writes to disk: where
 each layer goes, what every column means and how each value is computed.
 
 ## Output layout
 
 ```
-output_path/
+output_dir/
 ├── study_area_boundary.geojson
 ├── driving/                 nodes  edges
 ├── walking/                 nodes  edges
 ├── bike/                    nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
-├── gtfs_zips/               only with gtfs_zips=True
-└── <area>.gpkg              only with output_file_type="geopackage"
+├── gtfs_zips/               only with keep_gtfs_zips=True
+└── <area>.gpkg              only with formats="geopackage"
 ```
 
 GeoJSON and Shapefile write one file per layer inside its mode folder (a
 Shapefile is five files: `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`). GeoPackage is a
 single file at the root holding every layer, so it is not split into folders.
-`schedule.csv` is only written with `schedule=True`. NetworkX writes one `graph.json`
+`schedule.csv` is only written with `write_schedule=True`. NetworkX writes one `graph.json`
  per mode folder instead of `nodes` and `edges`
 (see [NetworkX graphs](#networkx-graphs-graphjson)), and the matrix export one
 `matrix.npz` (see [Matrix](#matrix-matrixnpz)).
@@ -48,18 +48,18 @@ funicular 7, monorail 12) and under `bus/` otherwise. The feed itself is read
 rather than the NAP metadata, because the NAP declares some datasets as bus and
 rail at once (Cercanías Renfe). An unreadable feed is treated as bus.
 
-## `main()` parameters that shape the output
+## `download_network()` parameters that shape the output
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `output_file_type` | `"geojson"` | A format or a list of formats. With a list, download and normalisation run once and only the writing step repeats. |
+| `formats` | `"geojson"` | A format or a list of formats. With a list, download and normalisation run once and only the writing step repeats. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer. |
 | `connect_parts` | `True` | Add the roads joining the parts of a multi-part municipality (see "Municipalities in several parts"). |
-| `schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
-| `gtfs_zips` | `False` | Keep the zips downloaded from the NAP. Off by default: they are only the raw input and can be downloaded again. |
-| `multimodal` | `False` | Reserved for the multimodal network, not implemented yet. `True` raises `NotImplementedError`. |
+| `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
+| `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP. Off by default: they are only the raw input and can be downloaded again. |
 
-`main()` prints nothing. It returns a manifest with the files written and, when a
+`download_network()` prints nothing. It returns a manifest with the files written
+(`files`, and `files_by_format` when several formats were asked for) and, when a
 public transport mode was requested but produced no data, a `gtfs_status` field
 saying why. When parts of a multi-part municipality could not be connected, an
 `unconnected_parts` field lists them per mode, e.g. `{"driving": [3]}`. Diagnostic messages go through `logging` and are silent unless the
@@ -280,13 +280,13 @@ any other way. `tm_` is mean travel time and `trp_` is number of trips.
 
 ## GTFS schedule
 
-Written only with `schedule=True`: one row per trip and edge, with no geometry.
+Written only with `write_schedule=True`: one row per trip and edge, with no geometry.
 It is **not** clipped to the study area, so it holds the full timetable of every
 downloaded feed, including operators with no stop inside the area.
 
 ## NetworkX graphs (`graph.json`)
 
-With `output_file_type="networkx"` each network is written as one
+With `formats="networkx"` each network is written as one
 `graph.json`: `<mode>/graph.json` for OSM and `<bus|train>/<dataset>/graph.json`
 for GTFS, next to `study_area_boundary.geojson`. Each file is a NetworkX
 `MultiDiGraph` in node-link JSON:
@@ -305,7 +305,7 @@ for GTFS, next to `study_area_boundary.geojson`. Each file is a NetworkX
 - The edge list is always under `"edges"`, whatever networkx version wrote it.
   Files written before this was fixed may use `"links"`.
 - `graph.crs` is the CRS of the node `x` / `y` and of the edge geometries, the
-  same as the `crs` passed to `main()`.
+  same as the `crs` passed to `download_network()`.
 - `geometry` is WKT text.
 - Several edges can join the same pair of nodes; `key` tells them apart.
 
@@ -322,13 +322,13 @@ A GTFS edge that crosses the study-area boundary keeps its stop outside the
 area, which the stops layer drops. In the graph that stop is still a node, with
 its position taken from the edge geometry and its name from the feed.
 
-Read a file with `multimodalpy.read_graph_json`, which accepts either edge key
+Read a file with `multimodalpy.read_graph`, which accepts either edge key
 and turns `geometry` into shapely objects:
 
 ```python
-from multimodalpy import read_graph_json
+from multimodalpy import read_graph
 
-G = read_graph_json("output/walking/graph.json")
+G = read_graph("output/walking/graph.json")
 G.graph["crs"]                          # 'EPSG:4326'
 u, v, k, attrs = next(iter(G.edges(keys=True, data=True)))
 attrs["geometry"]                       # shapely LineString
@@ -339,7 +339,7 @@ Without multimodalpy, use networkx directly:
 
 ## Matrix (`matrix.npz`)
 
-With `output_file_type="matrix"` each network is written as one `matrix.npz`:
+With `formats="matrix"` each network is written as one `matrix.npz`:
 `<mode>/matrix.npz` for OSM and `<bus|train>/<dataset>/matrix.npz` for GTFS,
 next to `study_area_boundary.geojson`. It is the network as a **directed sparse
 adjacency matrix** in CSR (compressed sparse row) form, made for shortest-path
@@ -425,12 +425,12 @@ A GTFS matrix only has the weights present in its edge layer.
 |---|---|
 | `format_version` | Version of this layout, currently 1. |
 | `layer`, `mode`, `dataset` | Network of the file (`dataset` is `null` for OSM). |
-| `area` | Municipality name passed to `main()`. |
-| `crs` | CRS of `node_x` / `node_y`, the `crs` passed to `main()`. |
+| `area` | Municipality name passed to `download_network()`. |
+| `crs` | CRS of `node_x` / `node_y`, the `crs` passed to `download_network()`. |
 | `weights` | Weight names and units, e.g. `[{"name": "tts", "unit": "s"}, …]`. |
 | `default_weight` | Weight stored in `data`. |
 | `gtfs_periods` | GTFS only: start and end hour of each peak period behind `pam` / `ppm`, e.g. `{"peak_am": [7, 9], "peak_pm": [17, 20]}`. `rod` is every other hour. |
-| `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `main()`, or `null`. |
+| `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `download_network()`, or `null`. |
 | `multimodalpy_version` | Version that wrote the file. |
 
 A newer `format_version` is rejected when reading instead of being misread.
@@ -458,7 +458,7 @@ peak = read_matrix("output/bus/<dataset>", weight="tm_pam_wd")
 
 Without multimodalpy, `scipy.sparse.load_npz(path)` returns the default weight
 and `numpy.load(path)` every array.  
-`multimodalpy.isochrones.isochrones` works on this matrix, and turns every other
+`multimodalpy.isochrones` works on this matrix, and turns every other
 format into it first.
 
 ---

@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Breaking:** the public API is reorganised into four modules, one per task,
+  with clearer names (#77). There are no compatibility aliases; update your
+  code with this table:
+
+  | 0.3.0 | Now |
+  |---|---|
+  | `get_network.main()` | `multimodalpy.download_network()` (`network.download_network`) |
+  | `get_area.find_area_boundary()` | `multimodalpy.find_area()` (`area.find_area`) |
+  | `get_area.download_osm_layers()` | `network.download_osm()` |
+  | `get_area.download_gtfs_layers()` | `network.download_gtfs()` |
+  | `get_area.AmbiguousAreaError` | `area.AmbiguousAreaError` |
+  | `get_area.NAPAuthenticationError` | `network.NAPAuthenticationError` |
+  | `get_network.read_matrix()` | `multimodalpy.read_matrix()` (`io.read_matrix`) |
+  | `get_network.read_graph_json()` | `multimodalpy.read_graph()` (`io.read_graph`) |
+  | `from multimodalpy.isochrones import isochrones` | `multimodalpy.isochrones()` (`analysis.isochrones`) |
+  | `python -m multimodalpy.get_network` | `multimodalpy` or `python -m multimodalpy` |
+
+- **Breaking:** `download_network()` parameters renamed: `output_path` →
+  `output_dir`, `output_file_type` → `formats`, `schedule` →
+  `write_schedule`, `gtfs_zips` → `keep_gtfs_zips`. The manifest it returns
+  uses `formats` and `output_dir` as keys. Command-line flags follow:
+  `--output-dir`, `--formats`, `--write-schedule`, `--keep-gtfs-zips`.
+- The remaining helpers of `get_area` (`slugify`, `normalize_name`,
+  `levenshtein_*`, `resolve_nap_api_key`, `find_dotenv`, ...) are now private.
+- The API reference documents only each module's public names.
+
+### Added
+- `multimodalpy` command, installed with the package
+  (`multimodalpy --area Valencia --modes walking`).
+- `find_area()` has a full docstring (parameters, errors, examples).
+
+### Removed
+- The `multimodal` parameter of `download_network()`, which only raised
+  `NotImplementedError`; it will come back with the multimodal network.
+- The `--clean-gtfs` command-line flag, which had no effect.
+
 ## [0.3.0] - 2026-10-30
 
 ### Added
