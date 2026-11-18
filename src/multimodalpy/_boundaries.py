@@ -219,16 +219,6 @@ def province_code_from_natcode(value: object) -> int | None:
     return None
 
 
-def _find_province_code(gdf: gpd.GeoDataFrame) -> int | None:
-    """Look up the province code in the boundary's code columns."""
-    for column in _existing_columns(gdf, PROVINCE_CODE_COLUMNS):
-        for raw_value in gdf[column].dropna().tolist():
-            code = province_code_from_natcode(raw_value)
-            if code is not None:
-                return code
-    return None
-
-
 def _row_province_codes(gdf: gpd.GeoDataFrame) -> pd.Series | None:
     """INE province code of every row, or ``None`` with no code column."""
     columns = _existing_columns(gdf, PROVINCE_CODE_COLUMNS)
@@ -543,46 +533,257 @@ def study_area_geometry(
     return metric.geometry.buffer(buffer_m).to_crs(crs).iloc[0]
 
 
+# ---------------------------------------------------------------------------
+# Study-area resolution (geometry -> provinces and municipalities)
+# ---------------------------------------------------------------------------
+# Equal-area CRS (ETRS89-LAEA Europe) for the overlap shares, so a hectare
+# counts the same in Girona and in Huelva.
+_AREA_CRS = "EPSG:3035"
+
+#: Share of the study area a province must hold for its GTFS feeds to be
+#: downloaded. A study area drawn along municipal lines, but with another
+#: precision than the packaged file, grazes the neighbouring municipalities
+#: and provinces: without a minimum, each of those slivers would add a
+#: province to the download.
+MIN_PROVINCE_SHARE = 0.05
+
+#: A municipality is listed when at least this share of it is inside the
+#: study area, or it holds at least this share of the study area.
+MIN_MUNICIPALITY_SHARE = 0.05
+
+_COVERAGE_NOTE = (
+    "multimodalpy covers peninsular Spain, the Balearic Islands, Ceuta and "
+    "Melilla, but not the Canary Islands"
+)
+
+
+def _read_boundaries_file(path: str | Path) -> gpd.GeoDataFrame:
+    """Read a boundaries file, checking its format, contents and CRS."""
+    path = Path(path)
+    if path.suffix.lower() not in ALLOWED_BOUNDARY_SUFFIXES:
+        raise ValueError(
+            "boundaries_path only accepts shapefile (.shp) or geojson "
+            f"(.geojson/.json). Received: {path.suffix}"
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"Boundaries file does not exist: {path}")
+
+    import geopandas as gpd
+
+    gdf = gpd.read_file(path)
+    if gdf.empty:
+        raise ValueError(f"Boundaries file is empty: {path}")
+    if gdf.crs is None:
+        raise ValueError(
+            f"Boundaries file has no CRS defined: {path}. Define it (e.g. the "
+            ".prj file of a shapefile, or set_crs() in geopandas and save the "
+            "file again) so its coordinates can be placed."
+        )
+    return gdf
+
+
+def _ine_code(value: object) -> str | None:
+    """5-digit INE municipality code from an INSPIRE NATCODE or INE code."""
+    digits = re.sub(r"\D", "", "" if value is None else str(value))
+    if len(digits) >= 8:
+        return digits[-5:]
+    if len(digits) == 5:
+        return digits
+    return None
+
+
+def _municipality_rows(gdf: gpd.GeoDataFrame) -> pd.Series:
+    """Mask of the rows that are municipalities (not shared territories)."""
+    import pandas as pd
+
+    if "NATLEVNAME" not in gdf.columns:
+        return pd.Series(True, index=gdf.index)
+    return gdf["NATLEVNAME"].astype(str) == "Municipio"
+
+
+def _municipalities_of(
+    rows: gpd.GeoDataFrame, name_column: str
+) -> tuple[list[str], list[str]]:
+    """INE codes and names of the municipalities among ``rows``, in order.
+
+    A municipality drawn as several polygons appears once. Rows without a
+    readable code (or without a code column) are listed by name.
+    """
+    code_columns = _existing_columns(rows, PROVINCE_CODE_COLUMNS)
+    codes: list[str] = []
+    names: list[str] = []
+    seen: set[str] = set()
+    for index in rows.index[_municipality_rows(rows)]:
+        name = str(rows.loc[index, name_column])
+        code = _ine_code(rows.loc[index, code_columns[0]]) if code_columns else None
+        key = code or name
+        if key in seen:
+            continue
+        seen.add(key)
+        codes.append(code or "")
+        names.append(name)
+    return codes, names
+
+
+def _province_labels(codes: Iterable[int]) -> list[str]:
+    return [PROVINCE_NAMES[code][0] for code in codes]
+
+
+def _area_from_geometry(
+    gdf: gpd.GeoDataFrame,
+) -> tuple[list[int], list[str], list[str]]:
+    """Provinces and municipalities a study area overlaps.
+
+    The geometry is crossed with the packaged municipal boundaries. Returns
+    the INE codes of the provinces holding at least ``MIN_PROVINCE_SHARE``
+    of the area (largest share first), and the INE codes and names of the
+    municipalities that pass ``MIN_MUNICIPALITY_SHARE`` (by code).
+    """
+    import geopandas as gpd
+
+    area = gdf.to_crs(_AREA_CRS).geometry.make_valid().union_all()
+    if area.is_empty or area.area <= 0:
+        raise ValueError(
+            "The boundaries file has no polygon with an area: the study area "
+            "must be a polygon (points and lines are not accepted)."
+        )
+
+    municipalities = gpd.read_file(
+        _default_boundaries_path(),
+        bbox=gpd.GeoSeries([area], crs=_AREA_CRS),
+    )
+    municipalities = municipalities.to_crs(_AREA_CRS)
+    overlap = municipalities.geometry.make_valid().intersection(area).area
+    municipalities = municipalities.assign(_overlap=overlap)
+    municipalities = municipalities.loc[municipalities["_overlap"] > 0]
+
+    total = area.area
+    covered = municipalities["_overlap"].sum() / total
+    provinces = municipalities["NATCODE"].map(province_code_from_natcode)
+    is_municipality = _municipality_rows(municipalities)
+    shares = (
+        municipalities.loc[is_municipality & provinces.notna(), "_overlap"]
+        .groupby(provinces.loc[is_municipality & provinces.notna()].astype(int))
+        .sum()
+        / total
+    )
+    # Largest share first; equal shares (to 6 decimals) by province code.
+    selected = shares.loc[shares >= MIN_PROVINCE_SHARE]
+    selected = sorted(
+        selected.index, key=lambda code: (-round(selected[code], 6), code)
+    )
+    if not selected:
+        raise ValueError(
+            "The study area is outside the area covered by the library: no "
+            f"province holds at least {MIN_PROVINCE_SHARE:.0%} of it "
+            f"({covered:.0%} of it lies within the municipal boundaries). "
+            f"{_COVERAGE_NOTE}."
+        )
+    if covered < 1 - MIN_PROVINCE_SHARE:
+        warnings.warn(
+            f"{1 - covered:.0%} of the study area is outside the municipal "
+            "boundaries (sea, or outside the covered area): no bus or train "
+            f"data is downloaded there. {_COVERAGE_NOTE}.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    own_share = municipalities["_overlap"] / municipalities.geometry.area
+    area_share = municipalities["_overlap"] / total
+    listed = municipalities.loc[
+        is_municipality
+        & (
+            (own_share >= MIN_MUNICIPALITY_SHARE)
+            | (area_share >= MIN_MUNICIPALITY_SHARE)
+        )
+    ]
+    listed = listed.assign(_code=listed["NATCODE"].map(_ine_code)).sort_values("_code")
+    name_column = _existing_columns(listed, ("NAMEUNIT", *DEFAULT_NAME_COLUMNS))[0]
+    mun_codes, mun_names = _municipalities_of(listed, name_column)
+    return [int(code) for code in selected], mun_codes, mun_names
+
+
+def boundary_for_export(boundary: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Return the study-area layer with its list columns joined as ``"a; b"``.
+
+    GeoJSON, Shapefile and GeoPackage store no lists, so ``prov_codes``,
+    ``prov_names``, ``mun_codes`` and ``mun_names`` are written as text.
+    """
+    out = boundary.copy()
+    for column in out.columns:
+        if column == out.geometry.name:
+            continue
+        if out[column].map(lambda value: isinstance(value, list)).any():
+            out[column] = out[column].map(
+                lambda value: (
+                    "; ".join(str(item) for item in value)
+                    if isinstance(value, list)
+                    else value
+                )
+            )
+    return out
+
+
 def find_area(
-    area_name: str,
+    area_name: str | None = None,
     boundaries_path: str | Path | None = None,
     *,
     area_code: str | None = None,
     province: int | str | None = None,
-    name_columns: Iterable[str] | None = None,
-    code_columns: Iterable[str] | None = None,
     target_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
-    """Find a municipality and return its boundary as a single polygon.
+    """Find the study area: a municipality by name, or your own polygon.
+
+    There are two ways to give the area:
+
+    - **By name** (``area_name`` or ``area_code``): the municipality is
+      looked up in the packaged municipal boundaries.
+    - **By geometry** (``boundaries_path``): the polygons in the file
+      (several are merged into one) are the study area, whatever their
+      columns. They are crossed with the packaged municipal boundaries to
+      know which provinces and municipalities the area overlaps; a
+      province counts when it holds at least 5% of the area
+      (``MIN_PROVINCE_SHARE``). Its GTFS feeds are then downloaded, and
+      everything is clipped to your polygon.
 
     Parameters
     ----------
-    area_name : str
+    area_name : str, optional
         Municipality name. Matching ignores accents and case, accepts either
         part of a bilingual name (``"Elche"`` finds ``Elx/Elche``) and
         tolerates small typos; looser matches emit a ``UserWarning`` naming
-        the area picked.
+        the area picked. With ``boundaries_path`` it is only the area's
+        label, and defaults to the file name (``"pateval"`` for
+        ``pateval.geojson``).
     boundaries_path : str | Path, optional
-        Shapefile (``.shp``) or GeoJSON (``.geojson`` / ``.json``) to search
-        in. By default, the packaged municipal boundaries: peninsular Spain,
-        the Balearic Islands, Ceuta and Melilla (not the Canary Islands).
+        Shapefile (``.shp``) or GeoJSON (``.geojson`` / ``.json``) with the
+        study area. It must have a CRS (any one: it's converted); the area
+        must overlap the covered territory: peninsular Spain, the Balearic
+        Islands, Ceuta and Melilla (not the Canary Islands).
     area_code : str, optional
         The municipality's 5-digit INE code (``"46250"``) or its full
-        INSPIRE NATCODE (``"34104646250"``), to pick it exactly.
+        INSPIRE NATCODE (``"34104646250"``), to pick it exactly. Only by
+        name.
     province : str | int, optional
         Province name or INE code (1-52), to choose between municipalities
-        that share a name.
-    name_columns, code_columns : list of str, optional
-        Columns of ``boundaries_path`` holding the names and codes, for
-        files with other column names than the default one.
+        that share a name. Only by name.
     target_crs : str
         CRS of the result. Defaults to ``"EPSG:4326"``.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        One row: the municipality's polygon (several polygons are dissolved
-        into one), with its name, codes and ``province_code``.
+        One row with the study area's polygon and:
+
+        - ``area_name``: the label used for the output files;
+        - ``prov_codes`` / ``prov_names``: INE codes and names of the
+          provinces, whose GTFS feeds are downloaded;
+        - ``mun_codes`` / ``mun_names``: INE codes and names of the
+          municipalities in the area;
+        - ``matched_column``, ``matched_value``, ``matched_rows`` and
+          ``area_code``: how the name was found (empty by geometry, except
+          ``matched_rows``, the number of polygons merged);
+        - ``source_path``: the boundaries file read.
 
     Raises
     ------
@@ -590,53 +791,73 @@ def find_area(
         If the name matches several different municipalities; the error
         lists them, so ``area_code`` or ``province`` can choose one.
     ValueError
-        If no municipality matches, or ``boundaries_path`` is not a
-        Shapefile or GeoJSON.
+        If no municipality matches; if ``boundaries_path`` is not a
+        Shapefile or GeoJSON, has no CRS or lies outside the covered
+        territory; or if ``area_code`` or ``province`` are given with
+        ``boundaries_path``.
 
     Examples
     --------
     >>> from multimodalpy import find_area  # doctest: +SKIP
     >>> valencia = find_area("Valencia")  # doctest: +SKIP
     >>> castejon = find_area("Castejón", province="Navarra")  # doctest: +SKIP
+    >>> metro = find_area(boundaries_path="pateval.geojson")  # doctest: +SKIP
+    >>> metro[["prov_names", "mun_names"]]  # doctest: +SKIP
     """
-    using_default_file = boundaries_path is None
-    if boundaries_path is None:
-        boundaries_path = _default_boundaries_path()
-    boundaries_path = Path(boundaries_path)
-
-    if boundaries_path.suffix.lower() not in ALLOWED_BOUNDARY_SUFFIXES:
-        raise ValueError(
-            "boundaries_path only accepts shapefile (.shp) or geojson "
-            f"(.geojson/.json). Received: {boundaries_path.suffix}"
-        )
-    if not boundaries_path.exists():
-        raise FileNotFoundError(f"Boundaries file does not exist: {boundaries_path}")
-
     import geopandas as gpd
 
-    gdf = gpd.read_file(boundaries_path)
-    if gdf.empty:
-        raise ValueError(f"Boundaries file is empty: {boundaries_path}")
-    if gdf.crs is None:
-        raise ValueError("Boundaries file has no CRS defined.")
+    if boundaries_path is not None:
+        if area_code is not None or province is not None:
+            raise ValueError(
+                "area_code and province only apply to a search by name; with "
+                "boundaries_path the study area is the file's geometry."
+            )
+        boundaries_path = Path(boundaries_path)
+        gdf = _read_boundaries_file(boundaries_path)
+        prov_codes, mun_codes, mun_names = _area_from_geometry(gdf)
+        geometry = gdf.to_crs(target_crs).geometry.make_valid().union_all()
+        label = area_name or boundaries_path.stem
+        return gpd.GeoDataFrame(
+            [
+                {
+                    "area_name": label,
+                    "prov_codes": prov_codes,
+                    "prov_names": _province_labels(prov_codes),
+                    "mun_codes": mun_codes,
+                    "mun_names": mun_names,
+                    "matched_column": None,
+                    "matched_value": None,
+                    "matched_rows": len(gdf),
+                    "area_code": None,
+                    "source_path": str(boundaries_path),
+                }
+            ],
+            geometry=[geometry],
+            crs=target_crs,
+        )
 
+    if not area_name and not area_code:
+        raise ValueError(
+            "Give the study area: area_name (or area_code) to look a "
+            "municipality up, or boundaries_path with your own polygon."
+        )
+
+    default_path = _default_boundaries_path()
+    gdf = _read_boundaries_file(default_path)
     try:
         rows, matched_column, matched_value = _select_area_rows(
             gdf,
-            area_name,
+            area_name or "",
             area_code=area_code,
-            name_columns=name_columns,
-            code_columns=code_columns,
             province=province,
         )
     except AmbiguousAreaError:
         raise
     except ValueError as exc:
-        if using_default_file and str(exc).startswith("No boundary found"):
+        if str(exc).startswith("No boundary found"):
             raise ValueError(
-                f"{exc} The default boundaries file covers peninsular Spain, "
-                "the Balearic Islands, Ceuta and Melilla, but not the Canary "
-                "Islands; for other areas pass boundaries_path=...."
+                f"{exc} {_COVERAGE_NOTE}; for an area of your own pass "
+                "boundaries_path=...."
             ) from None
         raise
 
@@ -651,22 +872,35 @@ def find_area(
                 stacklevel=2,
             )
 
+    name_columns = _existing_columns(rows, DEFAULT_NAME_COLUMNS)
+    name_column = name_columns[0] if name_columns else matched_column
+    mun_codes, mun_names = _municipalities_of(rows, name_column)
+    row_provinces = _row_province_codes(rows)
+    prov_codes = (
+        []
+        if row_provinces is None
+        else sorted({int(code) for code in row_provinces.dropna()})
+    )
+
     rows = rows.to_crs(target_crs)
     geometry = rows.geometry.union_all()
+    label = area_name or (mun_names[0] if mun_names else str(area_code))
 
     return gpd.GeoDataFrame(
         [
             {
-                "area_name": area_name,
+                "area_name": label,
+                # INE province codes (1-52): the region ids understood by
+                # the NAP API.
+                "prov_codes": prov_codes,
+                "prov_names": _province_labels(prov_codes),
+                "mun_codes": mun_codes,
+                "mun_names": mun_names,
                 "matched_column": matched_column,
                 "matched_value": matched_value,
                 "matched_rows": len(rows),
                 "area_code": area_code,
-                # INE province code (1-52); this is the region id understood
-                # by the NAP API. Can be None if the boundaries file doesn't
-                # include any recognizable code column.
-                "province_code": _find_province_code(rows),
-                "source_path": str(boundaries_path),
+                "source_path": str(default_path),
             }
         ],
         geometry=[geometry],

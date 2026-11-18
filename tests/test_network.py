@@ -25,6 +25,7 @@ from shapely.geometry import LineString, Point, box
 
 import multimodalpy
 from multimodalpy import (
+    _boundaries,
     _cli,
     _gtfs,
     _matrix,
@@ -105,7 +106,15 @@ def make_gtfs_result(mode: str = "bus") -> dict:
 @pytest.fixture
 def boundary() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(
-        [{"area_name": "Valencia", "province_code": 46}],
+        [
+            {
+                "area_name": "Valencia",
+                "prov_codes": [46],
+                "prov_names": ["Valencia/València"],
+                "mun_codes": ["46250"],
+                "mun_names": ["València"],
+            }
+        ],
         geometry=[box(-0.5, 39.3, -0.2, 39.6)],
         crs="EPSG:4326",
     )
@@ -587,28 +596,63 @@ def test_download_network_passes_boundary_arguments_and_reprojects_output(
     assert layer.crs.to_epsg() == 25830
 
 
-def test_download_network_with_real_boundary_file(tmp_path, backends, monkeypatch):
+def test_download_network_with_real_find_area(tmp_path, backends, monkeypatch):
     """End to end through the real ``find_area`` (OSM still faked)."""
     monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
-    boundaries = gpd.GeoDataFrame(
-        {"nombre": ["Segovia", "Madrid"], "NATCODE": ["34074040136", "34132828079"]},
+    packaged = gpd.GeoDataFrame(
+        {"NAMEUNIT": ["Segovia", "Madrid"], "NATCODE": ["34074040136", "34132828079"]},
         geometry=[box(-4.2, 40.9, -4.0, 41.0), box(-3.8, 40.3, -3.5, 40.6)],
         crs="EPSG:4326",
     )
-    path = tmp_path / "boundaries.geojson"
-    boundaries.to_file(path, driver="GeoJSON")
+    path = tmp_path / "packaged.geojson"
+    packaged.to_file(path, driver="GeoJSON")
+    monkeypatch.setattr(_boundaries, "_default_boundaries_path", lambda: path)
 
     manifest = network.download_network(
-        "Segovia",
-        modes=["walking"],
-        output_dir=tmp_path / "out",
-        boundaries_path=path,
+        "Segovia", modes=["walking"], output_dir=tmp_path / "out"
     )
 
     assert "walking/nodes.geojson" in manifest["files"]
     used = backends["osm"][0]["boundary"].iloc[0]
     assert used["matched_value"] == "Segovia"
-    assert used["province_code"] == 40
+    assert used["prov_codes"] == [40]
+
+
+@pytest.mark.parametrize(
+    "file_format", ["geojson", "shapefile", "geopackage", "matrix"]
+)
+def test_study_area_boundary_lists_are_written_as_text(tmp_path, backends, file_format):
+    network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path, formats=file_format
+    )
+    if file_format == "geopackage":
+        layer = gpd.read_file(tmp_path / "valencia.gpkg", layer="study_area_boundary")
+    else:
+        suffix = ".shp" if file_format == "shapefile" else ".geojson"
+        layer = gpd.read_file(tmp_path / f"study_area_boundary{suffix}")
+    row = layer.iloc[0]
+    assert str(row["prov_codes"]) == "46"
+    assert row["mun_names"] == "València"
+
+
+def test_download_gtfs_takes_the_provinces_from_the_boundary(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_zips(area_name, output_dir, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(
+        [{"area_name": "AMV", "prov_codes": [46, 12]}],
+        geometry=[box(-0.5, 39.3, -0.2, 39.6)],
+        crs="EPSG:4326",
+    )
+    assert network.download_gtfs("AMV", boundary, tmp_path, modes=[1]) == {}
+    assert seen["province_codes"] == [46, 12]
+
+    network.download_gtfs("AMV", boundary, tmp_path, modes=[1], province_codes=[3])
+    assert seen["province_codes"] == [3]
 
 
 # ---------------------------------------------------------------------------

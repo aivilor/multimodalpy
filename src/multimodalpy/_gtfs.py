@@ -1191,7 +1191,7 @@ def download_gtfs(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_schedule_table: bool = True,
-    province_code: int | None = None,
+    province_codes: Iterable[int] | None = None,
     buffer_m: float = 0.0,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
@@ -1199,9 +1199,11 @@ def download_gtfs(
     Returns ``{dataset: {"nodes_stops": gdf, "edges": gdf,
     "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
 
-    ``province_code`` is the area's INE province code; if not given, it's
-    taken from the ``boundary``'s ``province_code`` column (filled in by
-    ``find_area``). See ``_nap.download_gtfs_nap_zips``.
+    ``province_codes`` are the INE codes of the provinces whose feeds are
+    downloaded; if not given, they're taken from the ``boundary``'s
+    ``prov_codes`` column (filled in by ``find_area``). A dataset published
+    for several of them is downloaded once. See
+    ``_nap.download_gtfs_nap_zips``.
 
     ``hour_band_size`` / ``hour_range`` / ``peak_periods`` /
     ``include_schedule_table`` are forwarded to the GTFS standardization
@@ -1212,16 +1214,16 @@ def download_gtfs(
     :func:`study_area_geometry`), so stops just across the municipal
     boundary are kept.
     """
-    if province_code is None and "province_code" in getattr(boundary, "columns", []):
-        value = boundary["province_code"].iloc[0]
-        province_code = None if value is None or value != value else int(value)
+    if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
+        value = boundary["prov_codes"].iloc[0]
+        province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
     zips = download_gtfs_nap_zips(
         area_name,
         zip_dir,
         modes=modes,
         api_key=api_key,
-        province_codes=None if province_code is None else [province_code],
+        province_codes=province_codes,
     )
 
     filter_geometry = None

@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from . import _gtfs
-from ._boundaries import find_area
+from ._boundaries import boundary_for_export, find_area
 from ._gtfs import GTFS_EDGE_RENAME, download_gtfs
 from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
 from ._osm import OSM_NETWORK_TYPES, download_osm
@@ -247,8 +247,11 @@ def download_network(
         target_crs="EPSG:4326",
     )
 
+    # The study area as written: its list columns (provinces and
+    # municipalities) joined as text, which every format can store.
+    boundary_layer = boundary_for_export(boundary).to_crs(crs)
     layers: dict[str, gpd.GeoDataFrame | None] = {
-        "study_area_boundary": boundary.to_crs(crs)
+        "study_area_boundary": boundary_layer
     }
     # Relative path, without extension, of each layer inside the output folder.
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
@@ -383,7 +386,7 @@ def download_network(
             files_here: list[str] = []
             # The boundary and the GTFS shapes layers are saved as
             # supporting GeoJSON.
-            boundary.to_crs(crs).to_file(
+            boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
             files_here.append("study_area_boundary.geojson")
@@ -414,7 +417,7 @@ def download_network(
         elif file_type == "matrix":
             # As with networkx, the boundary goes alongside as GeoJSON so
             # the folder is self-contained.
-            boundary.to_crs(crs).to_file(
+            boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
             files_here = ["study_area_boundary.geojson"]
