@@ -29,7 +29,7 @@ multimodalpy/
 │       │   ├── _isochrones.py
 │       │   └── _shortest_path.py
 │       ├── _cli.py            # the `multimodalpy` command
-│       ├── _boundaries.py     # boundaries file (pooch), study-area lookup, provinces
+│       ├── _boundaries.py     # boundaries file (pooch), study area by name or geometry
 │       ├── _nap.py            # NAP client: API key, .env, GTFS feed downloads
 │       ├── _osm.py            # OSM download and standardization per mode
 │       ├── _gtfs.py           # GTFS download and standardization
@@ -42,6 +42,7 @@ multimodalpy/
 │   ├── test_network.py
 │   ├── test_area.py
 │   ├── test_area_cities.py
+│   ├── test_area_geometry.py
 │   ├── test_multipart_area.py
 │   ├── test_gtfs.py
 │   ├── test_matrix.py

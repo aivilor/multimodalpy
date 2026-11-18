@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Breaking:** `boundaries_path` is now the study area itself, not a file to
+  look a municipality name up in (#83). Before, `download_network()` and
+  `find_area()` searched `area_name` in the file's name columns, so a file
+  without the columns the library knows (e.g. the polygon of a *Plan de Acción
+  Territorial*, with `pat` and `objectid`) failed with
+  `No name column found in the boundaries file`. Now:
+  - the file's polygons are merged into one (`union_all()`) and are the study
+    area, whatever their columns: `area_name`, `area_code`, `name_columns` and
+    `code_columns` are not needed;
+  - any CRS is accepted and converted, but the file must define one: a file
+    without a CRS (e.g. a shapefile without `.prj`) raises `ValueError`;
+  - the area is crossed with the packaged municipal boundaries to find the
+    provinces and municipalities it overlaps. A province counts when it holds
+    at least 5% of the area, so the slivers along the edge of a polygon drawn
+    with another precision do not add neighbouring provinces. Its bus and train
+    feeds are downloaded, and everything is clipped to your polygon;
+  - an area outside the covered territory (peninsular Spain, the Balearic
+    Islands, Ceuta and Melilla; not the Canary Islands) raises `ValueError`
+    before anything is downloaded or written. When more than 5% of the area is
+    outside the municipal boundaries (the sea, Portugal), a `UserWarning` says
+    so.
+- **Breaking:** `find_area()` returns the lists `prov_codes`, `prov_names`,
+  `mun_codes` and `mun_names` (INE codes and names of the provinces and
+  municipalities of the area) instead of `province_code`. The search by name
+  always uses the packaged boundaries, so `name_columns` and `code_columns` are
+  removed, and `area_code` or `province` together with `boundaries_path` raise
+  `ValueError`.
+- **Breaking:** `download_gtfs()` takes `province_codes` (a list) instead of
+  `province_code`, and reads them from the boundary's `prov_codes`.
+- `download_network()`: `area_name` is optional. With `boundaries_path` it is
+  only the label of the files and the manifest, and defaults to the file name
+  (`pateval.geojson` → `pateval.gpkg`); with `area_code` alone, it is the
+  municipality's name. The area is resolved before the output folder is
+  created, so a wrong area leaves nothing behind.
+- The `study_area_boundary` layer has the columns `prov_codes`, `prov_names`,
+  `mun_codes` and `mun_names`, as text joined with `"; "`. The manifest adds
+  `boundaries_path`, `provinces` and `municipalities`.
+- Command line: `--area` is no longer required; give `--area`, `--area-code` or
+  `--boundaries` (`multimodalpy --boundaries pateval.geojson --modes bus`).
+
+  | 0.4.0 | Now |
+  |---|---|
+  | `download_network("Valencia", boundaries_path="my_municipalities.shp")` | `download_network("Valencia")` (packaged boundaries) |
+  | (not possible) | `download_network(boundaries_path="my_area.geojson")` |
+  | `find_area(...)["province_code"]` | `find_area(...)["prov_codes"]` (a list) |
+  | `find_area(name, path, name_columns=..., code_columns=...)` | removed: give the area as a geometry |
+  | `download_gtfs(..., province_code=46)` | `download_gtfs(..., province_codes=[46])` |
+
+### Fixed
+- A study area spanning several provinces only got the bus and train feeds of
+  one, and a boundaries file without a province code had its province guessed
+  from `area_name`, even with `province=` given (#83). The feeds of every
+  province of the area are now downloaded, and a feed published for several of
+  them (e.g. Renfe) only once. The NAP download report
+  (`nap_download_report.csv`) has a `province_code` column.
+
 ## [0.4.0] - 2026-11-03
 
 ### Changed

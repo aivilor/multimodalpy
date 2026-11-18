@@ -39,6 +39,18 @@ the GeoPackage:
 | GTFS edges | `<bus\|train>/<dataset>/edges` | `gtfs_<dataset>_edges` |
 | GTFS schedule | `<bus\|train>/<dataset>/schedule.csv` | `gtfs_<dataset>_schedule` (attribute table) |
 
+The study area layer has one row, the area's polygon, with these columns.
+GeoJSON, Shapefile and GeoPackage store no lists, so the lists are written as
+text joined with `"; "` (`"46; 12"`); `find_area()` returns them as lists.
+
+| Column | Content |
+|---|---|
+| `area_name` | Label of the area: the name given, or the boundaries file's name |
+| `prov_codes`, `prov_names` | INE codes and names of the provinces whose GTFS feeds are downloaded |
+| `mun_codes`, `mun_names` | 5-digit INE codes and names of the municipalities in the area |
+| `matched_column`, `matched_value`, `matched_rows`, `area_code` | How a municipality name was found; with your own polygon, only `matched_rows` (polygons merged) |
+| `source_path` | Boundaries file read |
+
 `<mode>` is `driving`, `walking` or `bike`. `<dataset>` is the name of the GTFS
 file downloaded from the NAP, normalised (e.g. `20260921_040013_renfe_cerca`).
 
@@ -58,7 +70,9 @@ rail at once (Cercanías Renfe). An unreadable feed is treated as bus.
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
 | `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP. Off by default: they are only the raw input and can be downloaded again. |
 
-`download_network()` prints nothing. It returns a manifest with the files written
+`download_network()` prints nothing. It returns a manifest with the area
+(`area_name`, `boundaries_path`, and its `provinces` and `municipalities` as
+`{"code", "name"}` lists), the files written
 (`files`, and `files_by_format` when several formats were asked for) and, when a
 public transport mode was requested but produced no data, a `gtfs_status` field
 saying why. When parts of a multi-part municipality could not be connected, an
@@ -464,7 +478,7 @@ this matrix, and turn every other format into it first.
 
 ---
 
-## From municipality to data
+## From study area to data
 
 **Municipality → polygon.** The name is looked up in the boundaries file in
 increasingly loose steps, and the first step with a hit decides: the whole name,
@@ -484,7 +498,27 @@ do the 7 non-municipal territories in the file (Gibraltar, Isla del Perejil, …
 which belong to no province.
 
 The default file covers peninsular Spain, the Balearic Islands, Ceuta and
-Melilla, **not the Canary Islands**; use `boundaries_path=` for other areas.
+Melilla, **not the Canary Islands**.
+
+**Your own polygon → provinces and municipalities.** With `boundaries_path`, the
+file's polygons are the study area, merged into one whatever their columns.
+The file must define its CRS; any one is accepted and converted. The area is
+crossed with the municipal boundaries, measuring areas in an equal-area CRS
+(EPSG:3035):
+
+- a **province** counts when it holds at least **5%** of the area, and its GTFS
+  feeds are downloaded. A polygon drawn along municipal lines, but with another
+  precision, grazes the neighbouring municipalities; without a minimum, each
+  sliver would add a province to the download;
+- a **municipality** is listed when at least 5% of it is inside the area, or
+  it holds at least 5% of the area (a small area inside a large municipality);
+- if no province holds 5% of the area, the area is outside the covered
+  territory and `find_area()` raises `ValueError`; if more than 5% of the area
+  is outside the municipal boundaries (the sea, Portugal), a `UserWarning` says
+  so, since no bus or train data exists there.
+
+OSM is downloaded and GTFS clipped with the user's polygon, not with the
+municipalities'. `area_code` and `province` only apply to a search by name.
 
 **Boundary buffer.** The exported `study_area_boundary` is always the exact
 municipal boundary. `buffer_m` (default 0) widens only the area used to download
@@ -511,7 +545,9 @@ space: the municipality ones return 404, and the autonomous-community ones fall
 inside the province range and silently return **another province's data**. So
 the province is never matched by name. It is read from the boundary's
 `NATCODE`, shaped `<2 country><2 region><2 province><5 municipality>`, and used
-directly as the region id.
+directly as the region id. A study area spanning several provinces downloads
+the feeds of each one; a feed published for several of them (Renfe) is
+downloaded once.
 
 ## Known limitations
 
