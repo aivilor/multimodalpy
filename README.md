@@ -23,9 +23,9 @@ network analysis. On the walking, cycling and driving networks, `multimodalpy`
 also computes isochrones (the area reachable from a point within a travel time)
 and shortest paths between sets of points.
 
-> **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
-> Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
-> boundaries file (you can pass your own with `boundaries_path`).
+> **Scope.** Only Spain is supported: a municipality, or a study area of your
+> own (a metropolitan area, a district), in peninsular Spain, the Balearic
+> Islands, Ceuta or Melilla. The Canary Islands are not covered.
 >
 > **Status.** Each mode is exported as its own network. Linking them into a
 > single multimodal network (e.g. walking to and from stops) is planned but not
@@ -106,11 +106,38 @@ If the NAP rejects the key, or has no feeds for the area, the street layers are
 also written and a warning explains why there is no bus or train data
 (`manifest["gtfs_status"]`).
 
+### Your own study area
+
+To work on an area that is not one municipality (a metropolitan area, a
+district, a planning area), pass a Shapefile or GeoJSON with its polygon as
+`boundaries_path`. No name or code columns are needed, and any CRS works as
+long as the file defines one:
+
+```python
+manifest = mmp.download_network(
+    boundaries_path="pateval.geojson",
+    modes=["walking", "bus", "train"],
+    output_dir="output",
+)
+manifest["provinces"]       # [{"code": 46, "name": "Valencia/València"}]
+manifest["municipalities"]  # every municipality in the area
+```
+
+The polygons in the file are merged into one, and everything is downloaded and
+clipped to it. It is crossed with the packaged municipal boundaries to know which
+provinces' bus and train feeds to download: a province counts when it holds at
+least 5% of the area, so the edges of a polygon drawn with another precision do
+not add neighbouring provinces. The files are named after the file
+(`pateval.gpkg`) unless you pass `area_name`. An area outside Spain's covered
+territory raises an error. Use `multimodalpy.find_area(boundaries_path=...)` to
+check the provinces and municipalities before downloading.
+
 ### Command line
 
 ```bash
 multimodalpy --area Valencia --modes walking bus \
     --output-dir output --formats geojson geopackage --buffer-m 500
+multimodalpy --boundaries pateval.geojson --modes walking bus
 ```
 
 Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
@@ -221,11 +248,11 @@ paths and is much faster.
 | `output_dir` | `"output"` | Folder to write to. |
 | `formats` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer, e.g. `"EPSG:25830"` for metres in Spain. |
-| `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
-| `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
+| `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). Only with a municipality name. |
+| `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`, instead of its name. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
 | `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
-| `boundaries_path` | packaged file | Your own boundaries file (Shapefile or GeoJSON). |
+| `boundaries_path` | `None` | A Shapefile or GeoJSON with your own study area, instead of a municipality (see "Your own study area"). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
@@ -238,7 +265,7 @@ listing them).
 | Module | What it is for |
 |---|---|
 | `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
-| `multimodalpy.area` | `find_area()`: the municipality's boundary. |
+| `multimodalpy.area` | `find_area()`: the study area's polygon, provinces and municipalities. |
 | `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
 | `multimodalpy.analysis` | `isochrones()`, `shortest_path()` and the other network analyses. |
 
@@ -252,14 +279,16 @@ listing them).
    (accents, bilingual names such as `Elx/Elche` and small typos are handled)
    to get its polygon and province code. If the name fits several
    municipalities, you get the list of candidates and pick one with
-   `province` or `area_code`, instead of a merged area.
+   `province` or `area_code`, instead of a merged area. A polygon of your own
+   (`boundaries_path`) is crossed with the municipal boundaries instead, to get
+   the provinces and municipalities it overlaps.
 2. **Streets.** `osmnx` downloads the OSM network inside the polygon (widened
    by `buffer_m` if set). If the municipality is made of separate parts, the
    shortest roads joining them are added, so the network is not split into
    islands.
    `multimodalpy` adds a node at every real intersection, splits the edges
    there and computes a travel time per mode.
-3. **Public transport.** The province's GTFS feeds are downloaded from the NAP,
+3. **Public transport.** The GTFS feeds of the area's provinces are downloaded from the NAP,
    clipped to the area and turned into stop-to-stop edges with timetable
    statistics.
 4. **Export.** Every layer is written in the requested formats with the same
