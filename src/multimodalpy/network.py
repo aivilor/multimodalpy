@@ -1,8 +1,8 @@
 """Transport networks: download, standardize and write them.
 
 :func:`download_network` is the library's main function: give it a
-municipality and the modes, and it writes every network in the formats
-requested::
+municipality (or a file with your own study area) and the modes, and it
+writes every network in the formats requested::
 
     import multimodalpy as mmp
 
@@ -12,6 +12,7 @@ requested::
         output_dir="output",
         formats=["geojson", "matrix"],
     )
+    mmp.download_network(boundaries_path="metro_area.geojson", modes=["bus"])
 
 :func:`download_osm` and :func:`download_gtfs` return the standardized
 layers in memory instead, for a study area from :func:`multimodalpy.find_area`.
@@ -97,7 +98,7 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # Main function
 # ---------------------------------------------------------------------------
 def download_network(
-    area_name: str,
+    area_name: str | None = None,
     modes: Sequence[str] = ("walking",),
     output_dir: str | Path = "output",
     *,
@@ -116,25 +117,32 @@ def download_network(
     buffer_m: float = 0.0,
     connect_parts: bool = True,
 ) -> dict:
-    """Download a municipality's transport networks and write them to disk.
+    """Download a study area's transport networks and write them to disk.
 
-    Finds the municipality (see :func:`multimodalpy.find_area`), downloads
-    each mode (walking, bike and driving from OpenStreetMap, bus and train
-    from the NAP), standardizes them to the columns in ``DATA_SCHEMA.md``
-    and writes them in every format requested.
+    Finds the study area (see :func:`multimodalpy.find_area`): a
+    municipality by name, or the polygon in ``boundaries_path``. Then it
+    downloads each mode (walking, bike and driving from OpenStreetMap, bus
+    and train from the NAP), standardizes them to the columns in
+    ``DATA_SCHEMA.md`` and writes them in every format requested.
 
     Parameters
     ----------
-    area_name : str
-        Name of the municipality to download.
+    area_name : str, optional
+        Name of the municipality to download. With ``boundaries_path`` it is
+        only the label of the output files (``<area_name>.gpkg``) and the
+        manifest, and defaults to the file name.
     modes : list[str]
         Transport modes to download. Options: "walking", "bike", "driving",
         "bus", "train".
     output_dir : str | Path
         Folder to write to. Created if it does not exist.
-    boundaries_path : Path, optional
-        Shapefile (.shp) or GeoJSON (.geojson) with the geometries to select
-        from. If not given, the packaged boundaries shapefile is used.
+    boundaries_path : str | Path, optional
+        Shapefile (.shp) or GeoJSON (.geojson) with your own study area: its
+        polygons (merged into one) are the area, whatever their columns, in
+        any CRS (the file must define one). The provinces holding at least
+        5% of it give the bus and train feeds; everything is clipped to the
+        polygon. It must overlap peninsular Spain, the Balearic Islands,
+        Ceuta or Melilla. Not combined with ``area_code`` or ``province``.
     crs : str
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.
@@ -175,6 +183,9 @@ def download_network(
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
         and can be downloaded again.
+    area_code : str, optional
+        The municipality's 5-digit INE code or INSPIRE NATCODE, to pick it
+        exactly (then ``area_name`` is not needed).
     province : str | int, optional
         Province name or INE code (1-52), to choose between municipalities
         that share a name (e.g. "Castejón" exists in Cuenca and Navarra).
@@ -195,8 +206,8 @@ def download_network(
     Returns
     -------
     dict
-        Manifest with the area, the modes, the folder and the files
-        written.
+        Manifest with the area (with its ``provinces`` and
+        ``municipalities``), the modes, the folder and the files written.
     """
     if isinstance(modes, str):
         modes = [modes]
@@ -234,11 +245,8 @@ def download_network(
                 stacklevel=2,
             )
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    area_slug = slugify(area_name)
-
-    # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping).
+    # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping),
+    #    before creating anything: a wrong area fails without side effects.
     boundary = find_area(
         area_name,
         boundaries_path,
@@ -246,13 +254,18 @@ def download_network(
         province=province,
         target_crs="EPSG:4326",
     )
+    # The label find_area settled on: the name given, the municipality's
+    # name (with area_code alone) or the boundaries file's name.
+    area_name = str(boundary["area_name"].iloc[0])
+    area_slug = slugify(area_name)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # The study area as written: its list columns (provinces and
     # municipalities) joined as text, which every format can store.
     boundary_layer = boundary_for_export(boundary).to_crs(crs)
-    layers: dict[str, gpd.GeoDataFrame | None] = {
-        "study_area_boundary": boundary_layer
-    }
+    layers: dict[str, gpd.GeoDataFrame | None] = {"study_area_boundary": boundary_layer}
     # Relative path, without extension, of each layer inside the output folder.
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
@@ -461,8 +474,26 @@ def download_network(
         written_by_format[file_type] = files_here
         written.extend(files_here)
 
+    area_row = boundary.iloc[0]
     manifest: dict[str, Any] = {
         "area_name": area_name,
+        "boundaries_path": None if boundaries_path is None else str(boundaries_path),
+        "provinces": [
+            {"code": int(code), "name": name}
+            for code, name in zip(
+                area_row.get("prov_codes") or [],
+                area_row.get("prov_names") or [],
+                strict=True,
+            )
+        ],
+        "municipalities": [
+            {"code": code, "name": name}
+            for code, name in zip(
+                area_row.get("mun_codes") or [],
+                area_row.get("mun_names") or [],
+                strict=True,
+            )
+        ],
         "modes": list(modes),
         "crs": crs,
         "buffer_m": buffer_m,

@@ -577,16 +577,17 @@ def test_download_network_passes_boundary_arguments_and_reprojects_output(
         "Valencia",
         modes=["walking"],
         output_dir=tmp_path,
-        boundaries_path="my_boundaries.geojson",
         area_code="46250",
+        province="Valencia",
         crs="EPSG:25830",
         formats="geopackage",
     )
 
     call = backends["boundary"][0]
     assert call["area_name"] == "Valencia"
-    assert call["boundaries_path"] == "my_boundaries.geojson"
+    assert call["boundaries_path"] is None
     assert call["area_code"] == "46250"
+    assert call["province"] == "Valencia"
     assert call["target_crs"] == "EPSG:4326"  # the search always runs in WGS84
     assert backends["osm"][0]["output_crs"] == "EPSG:25830"
 
@@ -616,6 +617,126 @@ def test_download_network_with_real_find_area(tmp_path, backends, monkeypatch):
     used = backends["osm"][0]["boundary"].iloc[0]
     assert used["matched_value"] == "Segovia"
     assert used["prov_codes"] == [40]
+
+
+# ---------------------------------------------------------------------------
+# Study area from your own boundaries file
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def own_area(tmp_path, monkeypatch, backends):
+    """Real ``find_area`` over a synthetic packaged file, and a PAT-like polygon.
+
+    The polygon has none of the usual name or code columns (like a
+    "Plan de Acción Territorial" file) and is in EPSG:25830; it covers
+    Valencia's municipality and 30% of a Castellón one.
+    """
+    monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
+    packaged = gpd.GeoDataFrame(
+        {
+            "NAMEUNIT": ["València", "Sagunt/Sagunto", "Vinaròs"],
+            "NATCODE": ["34104646250", "34104646220", "34101212138"],
+            "NATLEVNAME": ["Municipio"] * 3,
+        },
+        geometry=[
+            box(720_000, 4_370_000, 730_000, 4_380_000),
+            box(730_000, 4_370_000, 740_000, 4_380_000),
+            box(720_000, 4_380_000, 730_000, 4_390_000),
+        ],
+        crs="EPSG:25830",
+    ).to_crs("EPSG:4258")
+    packaged_path = tmp_path / "packaged.shp"
+    packaged.to_file(packaged_path)
+    monkeypatch.setattr(_boundaries, "_default_boundaries_path", lambda: packaged_path)
+
+    study = gpd.GeoDataFrame(
+        {"objectid": [1], "pat": ["PAT Metropolitano"], "pat_abrevi": ["PATEVAL"]},
+        geometry=[box(720_000, 4_370_000, 730_000, 4_384_300)],
+        crs="EPSG:25830",
+    )
+    path = tmp_path / "pateval.geojson"
+    study.to_file(path)
+    return path
+
+
+@pytest.mark.filterwarnings("ignore:No bus/train layers")  # fake NAP: no feeds
+def test_download_network_with_only_a_boundaries_file(tmp_path, own_area, backends):
+    manifest = network.download_network(
+        boundaries_path=own_area,
+        modes=["walking", "bus"],
+        output_dir=tmp_path / "out",
+        formats=["geopackage", "matrix"],
+    )
+
+    # The label is the file name: pateval.gpkg, and so for the GTFS step.
+    assert manifest["area_name"] == "pateval"
+    assert "pateval.gpkg::study_area_boundary" in manifest["files"]
+    assert backends["gtfs"][0]["area_name"] == "pateval"
+    assert manifest["boundaries_path"] == str(own_area)
+
+    # Both provinces hold at least 5% of the area: both feeds are asked for.
+    used = backends["osm"][0]["boundary"].iloc[0]
+    assert used["prov_codes"] == [46, 12]
+    assert manifest["provinces"] == [
+        {"code": 46, "name": "Valencia/València"},
+        {"code": 12, "name": "Castellón/Castelló"},
+    ]
+    assert manifest["municipalities"] == [
+        {"code": "12138", "name": "Vinaròs"},
+        {"code": "46250", "name": "València"},
+    ]
+
+    layer = gpd.read_file(
+        tmp_path / "out" / "pateval.gpkg", layer="study_area_boundary"
+    )
+    assert layer.iloc[0]["prov_codes"] == "46; 12"
+    # The polygon is the user's (14.3 km tall), not the municipalities' (20 km).
+    assert layer.to_crs("EPSG:25830").area.iloc[0] == pytest.approx(143e6, rel=1e-3)
+
+
+def test_download_network_area_name_labels_a_boundaries_file(
+    tmp_path, own_area, backends
+):
+    manifest = network.download_network(
+        "Área Metropolitana",
+        boundaries_path=own_area,
+        output_dir=tmp_path,
+        formats="geopackage",
+    )
+    assert manifest["area_name"] == "Área Metropolitana"
+    assert (tmp_path / "area_metropolitana.gpkg").exists()
+
+
+def test_download_network_outside_the_coverage_writes_nothing(
+    tmp_path, own_area, backends
+):
+    far_away = gpd.GeoDataFrame(
+        geometry=[box(-15.6, 27.9, -15.3, 28.2)], crs="EPSG:4326"
+    )
+    path = tmp_path / "canarias.geojson"
+    far_away.to_file(path)
+    with pytest.raises(ValueError, match="outside the area covered"):
+        network.download_network(boundaries_path=path, output_dir=tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+    assert backends["osm"] == []
+
+
+def test_download_network_needs_an_area(tmp_path, monkeypatch, backends):
+    monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
+    with pytest.raises(ValueError, match="Give the study area"):
+        network.download_network(output_dir=tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_download_network_with_area_code_alone_uses_the_municipality_name(
+    tmp_path, own_area, backends
+):
+    manifest = network.download_network(
+        area_code="46250", output_dir=tmp_path, formats="geopackage"
+    )
+    assert manifest["area_name"] == "València"
+    assert manifest["boundaries_path"] is None
+    assert manifest["municipalities"] == [{"code": "46250", "name": "València"}]
+    assert (tmp_path / "valencia.gpkg").exists()
 
 
 @pytest.mark.parametrize(
@@ -1099,9 +1220,20 @@ def test_cli_defaults(monkeypatch):
     assert captured["keep_gtfs_zips"] is False
 
 
-def test_cli_requires_area_and_valid_output_type():
+def test_cli_accepts_a_boundaries_file_without_area(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
+    _cli.main(["--boundaries", "pateval.geojson", "--modes", "bus"])
+    assert captured["area_name"] is None
+    assert captured["boundaries_path"] == "pateval.geojson"
+
+
+def test_cli_requires_area_and_valid_output_type(capsys):
     with pytest.raises(SystemExit):
         _cli.main([])
+    assert "--area, --area-code or --boundaries" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         _cli.main(["--area", "Valencia", "--formats", "csv"])
 

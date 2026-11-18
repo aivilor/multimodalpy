@@ -29,7 +29,7 @@ def _layer(columns, geometry):
 @pytest.fixture
 def fake_boundary():
     polygon = Polygon([(0, 0), (0, 1), (1, 1), (1, 0)])
-    return _layer({"name": ["fake_area"]}, [polygon])
+    return _layer({"area_name": ["Valencia"]}, [polygon])
 
 
 @pytest.fixture
