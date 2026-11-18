@@ -1221,7 +1221,7 @@ def download_gtfs(
         zip_dir,
         modes=modes,
         api_key=api_key,
-        province_code=province_code,
+        province_codes=None if province_code is None else [province_code],
     )
 
     filter_geometry = None

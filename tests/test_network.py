@@ -980,7 +980,7 @@ def sent_keys(monkeypatch):
 def test_nap_key_is_read_from_dotenv_file(no_env_key, sent_keys):
     (no_env_key / ".env").write_text('NAP_API_KEY="from-dotenv"\n', "utf-8")
     zips = _nap.download_gtfs_nap_zips(
-        "Valencia", no_env_key / "zips", province_code=46
+        "Valencia", no_env_key / "zips", province_codes=[46]
     )
     assert zips == []
     assert sent_keys == ["from-dotenv"]
@@ -991,13 +991,15 @@ def test_environment_variable_takes_priority_over_dotenv(
 ):
     (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
     monkeypatch.setenv("NAP_API_KEY", "from-env")
-    _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
+    _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_codes=[46])
     assert sent_keys == ["from-env"]
 
 
 def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
     with pytest.raises(ValueError, match="Missing NAP API key"):
-        _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
+        _nap.download_gtfs_nap_zips(
+            "Valencia", no_env_key / "zips", province_codes=[46]
+        )
     assert sent_keys == []
 
 
@@ -1131,12 +1133,104 @@ def test_rejected_key_while_downloading_files_stops_with_auth_error(
     monkeypatch.setattr(requests, "get", fake_get)
 
     with pytest.raises(_nap.NAPAuthenticationError, match="Invalid"):
-        _nap.download_gtfs_nap_zips("Valencia", tmp_path, modes=[1], province_code=46)
+        _nap.download_gtfs_nap_zips(
+            "Valencia", tmp_path, modes=[1], province_codes=[46]
+        )
 
     # Stopped at the first file instead of trying (and failing) every one.
     assert not any(url.endswith("/fichero/11/descarga") for url in requested)
     report = pd.read_csv(tmp_path / "nap_download_report.csv")
     assert report["status"].tolist() == ["failed"]
+
+
+@pytest.fixture
+def nap_two_provinces(monkeypatch):
+    """Fake NAP: Valencia (46) and Castellón (12) both list Renfe (file 30)."""
+    import requests
+
+    requested: list[str] = []
+    datasets = {
+        46: [
+            {
+                "id": 1,
+                "nombre": "EMT",
+                "tiposTransporte": [{"id": 1}],
+                "ficheros": [{"id": 10}],
+            },
+            {
+                "id": 3,
+                "nombre": "Renfe",
+                "tiposTransporte": [{"id": 2}],
+                "ficheros": [{"id": 30}],
+            },
+        ],
+        12: [
+            {
+                "id": 2,
+                "nombre": "TRAM",
+                "tiposTransporte": [{"id": 1}],
+                "ficheros": [{"id": 20}],
+            },
+            {
+                "id": 3,
+                "nombre": "Renfe",
+                "tiposTransporte": [{"id": 2}],
+                "ficheros": [{"id": 30}],
+            },
+        ],
+    }
+
+    def fake_get(url, headers=None, timeout=None):
+        requested.append(url)
+        if "/conjunto-dato/region/" in url:
+            region = int(url.rsplit("/", 1)[1])
+            if region not in datasets:
+                return _NoDatasetsResponse()
+            return _Response(payload={"data": datasets[region]})
+        if "/fichero/" in url:
+            file_id = url.split("/fichero/")[1].split("/")[0]
+            return _Response(
+                payload={
+                    "data": {
+                        "enlaceDescarga": f"https://files.example/{file_id}.zip",
+                        "nombreFichero": f"feed_{file_id}.zip",
+                    }
+                }
+            )
+        return _Response()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    return requested
+
+
+def test_nap_downloads_every_province_once_per_file(tmp_path, nap_two_provinces):
+    zips = _nap.download_gtfs_nap_zips(
+        "AMV", tmp_path, modes=[1, 2], province_codes=[46, 12]
+    )
+    assert sorted(path.name for path in zips) == [
+        "feed_10.zip",
+        "feed_20.zip",
+        "feed_30.zip",
+    ]
+    downloads = [url for url in nap_two_provinces if url.endswith("/descarga")]
+    assert len(downloads) == 3  # Renfe is listed twice but downloaded once
+    report = pd.read_csv(tmp_path / "nap_download_report.csv")
+    assert report["province_code"].tolist() == [46, 46, 12]
+
+
+def test_nap_province_without_datasets_is_skipped(tmp_path, nap_two_provinces):
+    zips = _nap.download_gtfs_nap_zips(
+        "AMV", tmp_path, modes=[1], province_codes=[1, 46, 46]
+    )
+    assert [path.name for path in zips] == ["feed_10.zip"]
+    regions = [url for url in nap_two_provinces if "/conjunto-dato/" in url]
+    assert len(regions) == 2  # province 1 (empty) and 46, asked only once
+
+
+def test_nap_rejects_invalid_province_codes(tmp_path, nap_two_provinces):
+    with pytest.raises(ValueError, match="between 1 and 52"):
+        _nap.download_gtfs_nap_zips("AMV", tmp_path, province_codes=[46, 99])
+    assert nap_two_provinces == []  # checked before any request
 
 
 def test_download_network_without_key_warns_before_downloading_and_skips_gtfs(

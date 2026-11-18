@@ -141,83 +141,46 @@ def _nap_get(url: str, headers: dict, timeout: int = 60) -> requests.Response:
 # ---------------------------------------------------------------------------
 # GTFS feeds
 # ---------------------------------------------------------------------------
-def download_gtfs_nap_zips(
-    area_name: str,
-    output_dir: str | Path,
-    *,
-    modes: Iterable[int] = (1, 2),
-    api_key: str | None = None,
-    base_url: str = NAP_BASE_URL,
-    fail_fast: bool = False,
-    province_code: int | None = None,
-) -> list[Path]:
-    """Download the NAP GTFS zip files for the study area's province.
+def _province_by_name(area_name: str, base_url: str, headers: dict) -> int:
+    """Guess the province from ``area_name`` (fallback without a code).
 
-    NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.
-    The key is taken from ``api_key``, the ``NAP_API_KEY`` environment
-    variable or a ``.env`` file (see :func:`resolve_nap_api_key`). A key
-    the NAP rejects raises :class:`NAPAuthenticationError`, also when it
-    happens while downloading the files.
-
-    ``province_code`` is the INE province code (1-52), which is exactly
-    the region id understood by the API. This is the reliable path, and
-    the one used by ``network.download_network``, which gets it from the
-    boundary. If not given, ``area_name`` is compared against the names of
-    the 52 province entries in the ``/region`` listing; never against the
-    municipality or region (CCAA) entries, which return 404 or another
-    province's data (see ``NAP_PROVINCE_IDS``).
-
-    If the province has no published dataset, the API responds with 404:
-    that isn't an error, so it's logged and an empty list is returned
-    instead of raising an exception.
+    Only the province entries (``tipo == "0"``) of the ``/region`` listing
+    are compared: the municipality and region (CCAA) entries return 404 or
+    another province's data (see ``NAP_PROVINCE_IDS``).
     """
-    import pandas as pd
-    import requests
+    regions_response = _nap_get(f"{base_url}/region", headers=headers)
+    regions_response.raise_for_status()
+    regions = regions_response.json().get("data", [])
+    if not regions:
+        raise ValueError("The NAP API did not return any region.")
 
-    api_key = resolve_nap_api_key(api_key)
-    if not api_key:
-        raise ValueError(missing_nap_key_message())
+    provinces = [item for item in regions if str(item.get("tipo")) == "0"]
+    if not provinces:
+        raise ValueError("The NAP API did not return any province region (tipo=0).")
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    headers = {"ApiKey": api_key}
+    target = normalize_name(area_name)
+    best_region = max(
+        provinces,
+        key=lambda item: difflib.SequenceMatcher(
+            None, target, normalize_name(item.get("nombre", ""))
+        ).ratio(),
+    )
+    logger.warning(
+        "Could not infer the province for '%s' from the boundaries "
+        "file; using province '%s' based on name similarity, which "
+        "may not be correct.",
+        area_name,
+        best_region.get("nombre"),
+    )
+    return int(best_region["id"])
 
-    if province_code is not None and int(province_code) not in NAP_PROVINCE_IDS:
-        raise ValueError(
-            f"province_code '{province_code}' is not valid: must be an "
-            "INE province code between 1 and 52."
-        )
 
-    region_id = int(province_code) if province_code is not None else None
-    if region_id is None:
-        regions_response = _nap_get(f"{base_url}/region", headers=headers)
-        regions_response.raise_for_status()
-        regions = regions_response.json().get("data", [])
-        if not regions:
-            raise ValueError("The NAP API did not return any region.")
+def _province_datasets(region_id: int, base_url: str, headers: dict) -> list[dict]:
+    """Datasets the NAP publishes for one province.
 
-        # Only province entries (``tipo == "0"``) have an id that the
-        # datasets endpoint knows how to interpret.
-        provinces = [item for item in regions if str(item.get("tipo")) == "0"]
-        if not provinces:
-            raise ValueError("The NAP API did not return any province region (tipo=0).")
-
-        target = normalize_name(area_name)
-        best_region = max(
-            provinces,
-            key=lambda item: difflib.SequenceMatcher(
-                None, target, normalize_name(item.get("nombre", ""))
-            ).ratio(),
-        )
-        region_id = int(best_region["id"])
-        logger.warning(
-            "Could not infer the province for '%s' from the boundaries "
-            "file; using province '%s' based on name similarity, which "
-            "may not be correct.",
-            area_name,
-            best_region.get("nombre"),
-        )
-
+    A province with nothing published answers 404: that isn't an error, so
+    it's logged and an empty list is returned.
+    """
     datasets_response = _nap_get(
         f"{base_url}/conjunto-dato/region/{region_id}",
         headers=headers,
@@ -237,7 +200,7 @@ def download_gtfs_nap_zips(
         ):
             logger.info(
                 "NAP has no published datasets for region %s; no GTFS "
-                "will be downloaded.",
+                "will be downloaded for it.",
                 region_id,
             )
             return []
@@ -250,67 +213,136 @@ def download_gtfs_nap_zips(
         )
 
     datasets_response.raise_for_status()
-    datasets = datasets_response.json().get("data", [])
+    return list(datasets_response.json().get("data", []))
+
+
+def download_gtfs_nap_zips(
+    area_name: str,
+    output_dir: str | Path,
+    *,
+    modes: Iterable[int] = (1, 2),
+    api_key: str | None = None,
+    base_url: str = NAP_BASE_URL,
+    fail_fast: bool = False,
+    province_codes: Iterable[int] | None = None,
+) -> list[Path]:
+    """Download the NAP GTFS zip files for the study area's provinces.
+
+    NAP mode ids: 1 bus, 2 rail, 3 maritime, 4 air.
+    The key is taken from ``api_key``, the ``NAP_API_KEY`` environment
+    variable or a ``.env`` file (see :func:`resolve_nap_api_key`). A key
+    the NAP rejects raises :class:`NAPAuthenticationError`, also when it
+    happens while downloading the files.
+
+    ``province_codes`` are the INE province codes (1-52), which are exactly
+    the region ids understood by the API. This is the reliable path, and
+    the one used by ``network.download_network``, which gets them from the
+    boundary. A study area spanning several provinces downloads the
+    datasets of each one; a dataset published for several of them (e.g.
+    Renfe) is downloaded once. If no code is given, ``area_name`` is
+    compared against the names of the 52 provinces (see
+    :func:`_province_by_name`).
+
+    A province with no published dataset is skipped (the API responds with
+    404); if none has any, an empty list is returned instead of raising.
+    """
+    import pandas as pd
+    import requests
+
+    api_key = resolve_nap_api_key(api_key)
+    if not api_key:
+        raise ValueError(missing_nap_key_message())
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    headers = {"ApiKey": api_key}
+
+    region_ids: list[int] = []
+    for code in province_codes or ():
+        if int(code) not in NAP_PROVINCE_IDS:
+            raise ValueError(
+                f"Province code '{code}' is not valid: must be an INE province "
+                "code between 1 and 52."
+            )
+        if int(code) not in region_ids:
+            region_ids.append(int(code))
+    if not region_ids:
+        region_ids = [_province_by_name(area_name, base_url, headers)]
+
     mode_set = {int(mode) for mode in modes}
 
     downloaded: list[Path] = []
     report_rows: list[dict[str, object]] = []
-    for dataset in datasets:
-        dataset_modes = {int(item["id"]) for item in dataset.get("tiposTransporte", [])}
-        if mode_set and dataset_modes.isdisjoint(mode_set):
-            continue
+    seen_files: set[object] = set()
 
-        for file_info in dataset.get("ficheros", []):
-            file_id = file_info.get("id")
-            if file_id is None:
-                continue
-            row = {
-                "dataset_id": dataset.get("id"),
-                "dataset_name": dataset.get("nombre"),
-                "file_id": file_id,
-                "status": "pending",
-                "file_name": None,
-                "path": None,
-                "error": None,
-            }
-            try:
-                # Through _nap_get, like the other NAP calls, so a rejected
-                # key raises a clear NAPAuthenticationError instead of
-                # becoming one more "failed" row in the report.
-                link_response = _nap_get(
-                    f"{base_url}/fichero/{file_id}/descarga", headers=headers
-                )
-                link_response.raise_for_status()
-                payload = link_response.json().get("data", {})
-                download_url = payload.get("enlaceDescarga")
-                file_name = payload.get("nombreFichero") or f"nap_gtfs_{file_id}.zip"
-                row["file_name"] = file_name
-                if not download_url:
-                    raise ValueError("The NAP response did not include enlaceDescarga")
-
-                zip_response = requests.get(download_url, timeout=120)
-                zip_response.raise_for_status()
-                path = output_dir / file_name
-                path.write_bytes(zip_response.content)
-                downloaded.append(path)
-                row["status"] = "downloaded"
-                row["path"] = str(path)
-            except Exception as exc:  # noqa: BLE001 - logged and execution continues
-                row["status"] = "failed"
-                row["error"] = str(exc)
-                # A rejected key fails every file the same way: stop and
-                # report it, as with fail_fast.
-                if fail_fast or isinstance(exc, NAPAuthenticationError):
-                    report_rows.append(row)
-                    pd.DataFrame(report_rows).to_csv(
-                        output_dir / "nap_download_report.csv", index=False
-                    )
-                    raise
-            report_rows.append(row)
-
-    if report_rows:
+    def write_report() -> None:
         pd.DataFrame(report_rows).to_csv(
             output_dir / "nap_download_report.csv", index=False
         )
+
+    for region_id in region_ids:
+        for dataset in _province_datasets(region_id, base_url, headers):
+            dataset_modes = {
+                int(item["id"]) for item in dataset.get("tiposTransporte", [])
+            }
+            if mode_set and dataset_modes.isdisjoint(mode_set):
+                continue
+
+            for file_info in dataset.get("ficheros", []):
+                file_id = file_info.get("id")
+                # A dataset listed under several provinces (e.g. Renfe)
+                # is downloaded only the first time.
+                if file_id is None or file_id in seen_files:
+                    continue
+                seen_files.add(file_id)
+                row = {
+                    "province_code": region_id,
+                    "dataset_id": dataset.get("id"),
+                    "dataset_name": dataset.get("nombre"),
+                    "file_id": file_id,
+                    "status": "pending",
+                    "file_name": None,
+                    "path": None,
+                    "error": None,
+                }
+                try:
+                    # Through _nap_get, like the other NAP calls, so a
+                    # rejected key raises a clear NAPAuthenticationError
+                    # instead of becoming one more "failed" row in the report.
+                    link_response = _nap_get(
+                        f"{base_url}/fichero/{file_id}/descarga", headers=headers
+                    )
+                    link_response.raise_for_status()
+                    payload = link_response.json().get("data", {})
+                    download_url = payload.get("enlaceDescarga")
+                    file_name = (
+                        payload.get("nombreFichero") or f"nap_gtfs_{file_id}.zip"
+                    )
+                    row["file_name"] = file_name
+                    if not download_url:
+                        raise ValueError(
+                            "The NAP response did not include enlaceDescarga"
+                        )
+
+                    zip_response = requests.get(download_url, timeout=120)
+                    zip_response.raise_for_status()
+                    path = output_dir / file_name
+                    path.write_bytes(zip_response.content)
+                    downloaded.append(path)
+                    row["status"] = "downloaded"
+                    row["path"] = str(path)
+                except Exception as exc:  # noqa: BLE001 - logged and execution continues
+                    row["status"] = "failed"
+                    row["error"] = str(exc)
+                    # A rejected key fails every file the same way: stop and
+                    # report it, as with fail_fast.
+                    if fail_fast or isinstance(exc, NAPAuthenticationError):
+                        report_rows.append(row)
+                        write_report()
+                        raise
+                report_rows.append(row)
+
+    if report_rows:
+        write_report()
 
     return downloaded
