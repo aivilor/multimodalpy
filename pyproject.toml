@@ -69,7 +69,8 @@ docs = [
   # Or, if you prefer MkDocs: "mkdocs-material", "mkdocstrings[python]"
 ]
 lint = [
-  "ruff",
+  # Pinned: each ruff release may format differently, and CI checks the format.
+  "ruff==0.17.5",
   "mypy",
 ]
 dev = [
@@ -89,6 +90,9 @@ addopts = "--cov=multimodalpy --cov-report=term-missing"
 [tool.ruff]
 line-length = 88
 src = ["src", "tests"]
+# Recent ruff releases also format the code examples in Markdown files; the
+# documentation keeps its own layout.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 

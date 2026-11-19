@@ -546,7 +546,6 @@ def read_network_matrix(path: str | Path) -> NetworkMatrix:
     )
 
 
-
 # ---------------------------------------------------------------------------
 # Loading a network from any output format
 # ---------------------------------------------------------------------------
@@ -788,4 +787,3 @@ def load_network_matrix(network: Any, *, mode: str | None = None) -> NetworkMatr
         "network must be a path, a networkx graph or the result of read_matrix; "
         f"got {type(network).__name__}."
     )
-

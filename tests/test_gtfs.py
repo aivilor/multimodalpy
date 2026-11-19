@@ -202,8 +202,7 @@ def test_trip_records_are_built_once_with_the_schedule_table(feed, monkeypatch):
         calls.append(1)
         return build(*args, **kwargs)
 
-    monkeypatch.setattr(_gtfs, "_build_stop_to_stop_trip_records", counting_build
-    )
+    monkeypatch.setattr(_gtfs, "_build_stop_to_stop_trip_records", counting_build)
     _gtfs.normalize_gtfs_feed(
         feed, dataset_name="ds", layer_id="ds", include_schedule_table=True
     )
