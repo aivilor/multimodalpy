@@ -13,6 +13,7 @@ output_dir/
 ├── bike/                    nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
+├── gtfs_report.csv          with bus or train: what happened to each NAP dataset
 ├── gtfs_zips/               only with keep_gtfs_zips=True
 └── <area>.gpkg              only with formats="geopackage"
 ```
@@ -55,7 +56,10 @@ Every column name has at most ten characters, so none is cut short in a
 Shapefile.
 
 `<mode>` is `driving`, `walking` or `bike`. `<dataset>` is the name of the GTFS
-file downloaded from the NAP, normalised (e.g. `20260921_040013_renfe_cerca`).
+file downloaded from the NAP, normalised and without the timestamp the NAP puts
+in front of it (`20261119_050013_RENFE_CERCA.zip` gives `renfe_cerca`), so it is
+the same on every download. Two files that end up with the same name get `_2`,
+`_3`… in the order they were downloaded.
 
 A GTFS dataset goes under `train/` when most of its routes have a rail
 `route_type` in `routes.txt` and under `bus/` otherwise. Rail types are the
@@ -69,6 +73,27 @@ feed is treated as bus.
 Only the feeds of the modes asked for are written: a feed the NAP returns for
 `bus` whose routes turn out to be rail (or the other way round) is skipped and
 listed in the manifest's `skipped_datasets`, e.g. `{"renfe_cerca": "train"}`.
+
+### GTFS report (`gtfs_report.csv`)
+
+With bus or train, `gtfs_report.csv` and the manifest's `gtfs_report` list every
+NAP dataset of the area's provinces and what happened to it, one row per file
+(or per dataset, when nothing was downloaded from it):
+
+| Column | Meaning |
+|---|---|
+| `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP) |
+| `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
+| `file_id`, `file_name` | NAP file |
+| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `failed` (download) or `failed_processing` |
+| `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
+| `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
+| `error` | Why it failed |
+
+A dataset that could not be used at all (every file failed, or processing did)
+raises a `UserWarning` naming it. One that got a file is fine even if the NAP
+lists other files it no longer serves. The NAP only offers what is published for
+each province: an operator missing from the report is not on the NAP.
 
 ## `download_network()` parameters that shape the output
 
@@ -220,9 +245,14 @@ the node has no known tag but is an `intersection`, the generic penalty applies.
 |---|---|---|
 | `node_id` | text | `stop_id` in the GTFS feed |
 | `stop_name` | text | Stop name |
+| `in_area` | boolean | Whether the stop is inside the study area |
 | `geometry` | Point | Stop position |
 
-Only stops inside the study area are kept.
+The stops are the ones the [edges](#gtfs-edges) use: every stop that starts or
+ends an edge, and only those. A feed's `stops.txt` often lists stops no trip
+serves (a regional stop catalogue, stations, entrances), and those are left out.
+An edge that crosses the boundary ends at a stop outside the study area: that
+stop is kept with `in_area = false`, so every edge has both its nodes.
 
 ## GTFS edges
 
@@ -230,11 +260,16 @@ One edge per pair of consecutive stops of a route, with travel time statistics
 aggregated over every trip that runs it. Columns are listed with their former,
 long name.
 
+A segment that takes more than 3 hours between two consecutive stops is an error
+in the feed (a time typed on the wrong hour or day): its travel time is left
+empty, so it counts in `trips` but not in the travel times, and a `UserWarning`
+says how many there were in the study area.
+
 ### Identification
 
 | Column | Former name | Meaning |
 |---|---|---|
-| `edge_id` | — | Edge identifier |
+| `edge_id` | — | Edge identifier: `<dataset>_<route_id>_<from_node>_<to_node>`, unique in the layer |
 | `from_node` | — | Origin stop |
 | `to_node` | — | Destination stop |
 | `route_id` | — | Route identifier |
@@ -314,8 +349,9 @@ any other way. `tm_` is mean travel time and `trp_` is number of trips.
 ## GTFS schedule
 
 Written only with `write_schedule=True`: one row per trip and edge, with no geometry.
-It is **not** clipped to the study area, so it holds the full timetable of every
-downloaded feed, including operators with no stop inside the area.
+It is clipped like the [edges](#gtfs-edges): it holds the segments of the trips
+that touch the study area, so every row has its edge. Join it to the edges by
+`edge_id`: each row matches exactly one edge, the one of its route.
 
 ## NetworkX graphs (`graph.json`)
 
@@ -345,7 +381,7 @@ for GTFS, next to `study_area_boundary.geojson`. Each file is a NetworkX
 | | OSM graph | GTFS graph |
 |---|---|---|
 | Node `id` | `node_id` (integer) | `stop_id` (text) |
-| Node attributes | `x`, `y`, `node_role` | `x`, `y`, `stop_name` |
+| Node attributes | `x`, `y`, `node_role` | `x`, `y`, `stop_name`, `in_area` |
 | Edge attributes | the 14 [OSM edge](#osm-edges) columns | the [GTFS edge](#gtfs-edges) columns, with their long names |
 
 `from_node` / `to_node` repeat `source` / `target`. They are kept so every edge
@@ -447,10 +483,9 @@ A GTFS matrix only has the weights present in its edge layer.
 - **Direction.** OSM edges are already directed (a two-way street is one edge in
   each direction), so one-way streets are respected.
 - **Node order.** OSM rows follow the `nodes` layer, including isolated nodes,
-  which are rows with no edges. GTFS rows follow the stops layer first, then the
-  stops outside the study area that are reached by an edge crossing the
-  boundary, with `node_in_area = false` and their position taken from the edge
-  geometry, as in the [NetworkX graphs](#networkx-graphs-graphjson).
+  which are rows with no edges. GTFS rows follow the [stops layer](#gtfs-stops),
+  which already holds the stops outside the study area that end an edge crossing
+  the boundary, with `node_in_area = false` (its `in_area`).
 
 ### Metadata (`meta`)
 
@@ -574,7 +609,6 @@ downloaded once.
 - In the **networkx** export, GTFS graphs keep the long attribute names
   (`trip_count`, `travel_time_seconds_mean`, …), since JSON has no name length
   limit. OSM graphs follow the edge schema above.
-- The **GTFS schedule** is not clipped to the study area (see above).
 - `lanes` is still exported as text and can hold `;`-joined values.
 - In the **networkx** export, OSM node ids are integers and GTFS node ids are
   text, so the graphs cannot be joined on node id as they are.

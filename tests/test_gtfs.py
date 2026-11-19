@@ -228,12 +228,37 @@ def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
         calendar=t["calendar"],
     )
     standalone_schedule = _gtfs.build_gtfs_schedule_table(
-        *args, dataset_name="ds", calendar=t["calendar"]
+        *args, dataset_name="ds", calendar=t["calendar"], filter_geometry=AREA
     )
     pd.testing.assert_frame_equal(
         edges.reset_index(drop=True), standalone_edges.reset_index(drop=True)
     )
     pd.testing.assert_frame_equal(schedule, standalone_schedule)
+
+
+# ---------------------------------------------------------------------------
+# Schedule: clipped like the edges
+# ---------------------------------------------------------------------------
+def test_schedule_is_clipped_to_the_edges(feed):
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=True,
+    )
+    assert set(schedule["edge_id"]) == set(edges["edge_id"])
+    assert "t5" not in set(schedule["trip_id"])  # X -> Y never touches the area
+    assert "t4" in set(schedule["trip_id"])  # W -> E crosses it, as its edge does
+    # t1: A-B, B-C; t2: A-B; t3: B-C; t4: W-E.
+    assert len(schedule) == 5
+
+
+def test_schedule_without_an_area_keeps_every_trip(feed):
+    *_, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", include_schedule_table=True
+    )
+    assert set(schedule["trip_id"]) == {"t1", "t2", "t3", "t4", "t5"}
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +400,343 @@ def test_every_period_column_of_a_feed_is_kept(feed):
     rename = _gtfs.gtfs_edge_rename(periods)
     assert rename["travel_time_seconds_mean_morning"] == "tts_m_mor"
     assert rename["trip_count_evening_weekday"] == "trp_eve_wd"
+
+
+# ---------------------------------------------------------------------------
+# Nodes: the stops the edges use
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def catalogue_feed(tmp_path):
+    """A feed whose stops.txt lists more than its trips use.
+
+    A, B, Q inside the area; W outside, ending an edge that crosses the
+    boundary; U inside but served by no trip; ST a parent station
+    (location_type 1), which trips never use; N inside, served only at
+    23:00.
+    """
+    stops = {
+        "A": (39.45, -0.42, 0),
+        "B": (39.46, -0.41, 0),
+        "Q": (39.47, -0.40, 0),
+        "W": (39.47, -0.60, 0),
+        "U": (39.48, -0.39, 0),
+        "ST": (39.45, -0.42, 1),
+        "N": (39.49, -0.38, 0),
+    }
+    with zipfile.ZipFile(tmp_path / "catalogue.zip", "w") as zf:
+        zf.writestr(
+            "stops.txt",
+            "stop_id,stop_name,stop_lat,stop_lon,location_type\n"
+            + "\n".join(
+                f"{s},Stop {s},{la},{lo},{t}" for s, (la, lo, t) in stops.items()
+            )
+            + "\n",
+        )
+        zf.writestr("routes.txt", "route_id,route_short_name,route_type\nR1,1,3\n")
+        zf.writestr("trips.txt", "route_id,service_id,trip_id\nR1,WD,t1\nR1,WD,t2\n")
+        zf.writestr(
+            "calendar.txt",
+            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
+            "sunday,start_date,end_date\nWD,1,1,1,1,1,0,0,20260101,20261231\n",
+        )
+        zf.writestr(
+            "stop_times.txt",
+            "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+            "t1,07:00:00,07:00:00,A,1\nt1,07:05:00,07:05:00,B,2\n"
+            "t1,07:20:00,07:20:00,W,3\n"
+            "t2,23:00:00,23:00:00,Q,1\nt2,23:04:00,23:04:00,N,2\n",
+        )
+    return tmp_path / "catalogue.zip"
+
+
+def _layers(feed, **kwargs):
+    nodes, edges, _ = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=False,
+        **kwargs,
+    )
+    return nodes.set_index("node_id"), edges
+
+
+@pytest.mark.parametrize(
+    ("hour_range", "expected"),
+    [
+        (None, {"A": True, "B": True, "W": False, "Q": True, "N": True}),
+        # Q and N are only served at 23:00: no edge, so no node.
+        ((6, 22), {"A": True, "B": True, "W": False}),
+    ],
+)
+def test_nodes_are_the_stops_the_edges_use(catalogue_feed, hour_range, expected):
+    nodes, edges = _layers(catalogue_feed, hour_range=hour_range)
+    assert nodes["in_area"].to_dict() == expected
+    used = set(edges["from_node"]) | set(edges["to_node"])
+    assert set(nodes.index) == used  # every node has an edge, every edge its nodes
+    assert "U" not in nodes.index  # served by no trip
+    assert "ST" not in nodes.index  # parent station
+
+
+def test_nodes_without_an_area_are_all_inside(catalogue_feed):
+    nodes, _ = _gtfs.normalize_gtfs_feed(
+        catalogue_feed, dataset_name="ds", layer_id="ds", include_schedule_table=False
+    )[:2]
+    assert nodes["in_area"].all()
+    assert set(nodes["node_id"]) == {"A", "B", "W", "Q", "N"}
+
+
+def test_no_edges_no_nodes(tmp_path, catalogue_feed):
+    far = box(10, 10, 11, 11)
+    nodes, edges, _ = _gtfs.normalize_gtfs_feed(
+        catalogue_feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=far,
+        include_schedule_table=False,
+    )
+    assert edges.empty
+    assert nodes.empty
+    assert "in_area" in nodes.columns
+
+
+def test_stops_layer_without_stop_ids_keeps_the_stops_in_the_area():
+    stops = pd.DataFrame(
+        {
+            "stop_id": ["A", "W", "A"],
+            "stop_name": ["a", "w", "a again"],
+            "stop_lat": [39.45, 39.47, 39.45],
+            "stop_lon": [-0.42, -0.60, -0.42],
+        }
+    )
+    gdf = _gtfs.build_gtfs_stops_gdf(
+        stops, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+    )
+    assert gdf["node_id"].tolist() == ["A"]  # W outside, A only once
+    assert gdf["in_area"].tolist() == [True]
+
+
+# ---------------------------------------------------------------------------
+# Edge ids: one per pair of stops and route
+# ---------------------------------------------------------------------------
+def test_edge_ids_are_unique_when_routes_share_a_pair_of_stops(feed):
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=True,
+    )
+    assert edges["edge_id"].is_unique
+    # B -> C is served by R1 (t1) and R2 (t3): two edges, two ids.
+    b_to_c = edges[(edges["from_node"] == "B") & (edges["to_node"] == "C")]
+    assert sorted(b_to_c["edge_id"]) == ["ds_R1_B_C", "ds_R2_B_C"]
+    # Each schedule row joins exactly one edge, of its own route.
+    joined = schedule.merge(edges[["edge_id", "route_id"]], on="edge_id", how="left")
+    assert len(joined) == len(schedule)
+    assert (joined["route_id_x"] == joined["route_id_y"]).all()
+
+
+def test_edge_id_without_a_route_id():
+    frame = pd.DataFrame(
+        {"route_id": ["R1", None], "from_node": ["A", "A"], "to_node": ["B", "B"]}
+    )
+    assert _gtfs._edge_ids("ds", frame).tolist() == ["ds_R1_A_B", "ds__A_B"]
+
+
+# ---------------------------------------------------------------------------
+# Impossible segment times
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def feed_with_a_typo(tmp_path):
+    """t2's A -> B "takes" 10 h (17:16 typed for 08:16); t3's B -> C exactly 3 h."""
+    trips = [("R1", "WD", "t1"), ("R1", "WD", "t2"), ("R2", "WD", "t3")]
+    trips.append(("R4", "WD", "t5"))
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+        ("t2", "08:10:00", "08:10:00", "A", 1),
+        ("t2", "18:10:00", "18:10:00", "B", 2),
+        ("t3", "14:00:00", "14:00:00", "B", 1),
+        ("t3", "17:00:00", "17:00:00", "C", 2),
+        # Outside the area: not counted in the warning.
+        ("t5", "10:00:00", "10:00:00", "X", 1),
+        ("t5", "23:00:00", "23:00:00", "Y", 2),
+    ]
+    routes = [("R1", "1", 3), ("R2", "2", 3), ("R4", "4", 3)]
+    return _write_feed(tmp_path / "typo.zip", routes, trips, stop_times)
+
+
+def test_impossible_segment_times_are_left_empty(feed_with_a_typo):
+    with pytest.warns(UserWarning, match=r"ds: 1 segment\(s\).*more than 3 h"):
+        _, edges, schedule = _gtfs.normalize_gtfs_feed(
+            feed_with_a_typo,
+            dataset_name="ds",
+            layer_id="ds",
+            filter_geometry=AREA,
+            include_schedule_table=True,
+        )
+    times = schedule.set_index("trip_id")["travel_time_seconds"]
+    assert np.isnan(times["t2"])
+    assert times["t3"] == 3 * 3600  # exactly the limit is kept
+    a_to_b = edges.set_index("edge_id").loc["ds_R1_A_B"]
+    assert a_to_b["trip_count"] == 2  # the trip still ran
+    assert a_to_b["travel_time_seconds_mean"] == 300  # from t1 only
+    assert a_to_b["travel_time_seconds_max"] == 300
+    assert "implausible_time" not in schedule.columns
+
+
+def test_no_warning_without_impossible_times(feed):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _gtfs.normalize_gtfs_feed(
+            feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+        )
+
+
+# ---------------------------------------------------------------------------
+# Medians (documented, but not computed before 0.5.1)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def feed_with_a_slow_trip(tmp_path):
+    """A -> B: 5, 6 and 20 minutes, all in the morning peak."""
+    trips = [("R1", "WD", f"t{i}") for i in (1, 2, 3)]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+        ("t2", "07:30:00", "07:30:00", "A", 1),
+        ("t2", "07:36:00", "07:36:00", "B", 2),
+        ("t3", "08:00:00", "08:00:00", "A", 1),
+        ("t3", "08:20:00", "08:20:00", "B", 2),
+    ]
+    return _write_feed(tmp_path / "slow.zip", [("R1", "1", 3)], trips, stop_times)
+
+
+def test_median_travel_times_are_computed(feed_with_a_slow_trip):
+    _, edges, _ = _gtfs.normalize_gtfs_feed(
+        feed_with_a_slow_trip,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=False,
+    )
+    edge = edges.iloc[0]
+    assert edge["travel_time_seconds_mean"] == pytest.approx((300 + 360 + 1200) / 3)
+    assert edge["travel_time_seconds_median"] == 360  # not pulled by the slow trip
+    assert edge["travel_time_seconds_median_peak_am"] == 360
+    assert pd.isna(edge["travel_time_seconds_median_rest_of_day"])
+    # Every median column the layer documents is there, under its short name too.
+    rename = _gtfs.gtfs_edge_rename()
+    medians = [c for c in _gtfs.gtfs_edge_columns() if "median" in c]
+    assert set(medians) <= set(edges.columns)
+    assert {rename[c] for c in medians} == {
+        "tts_md",
+        "tts_md_pam",
+        "tts_md_ppm",
+        "tts_md_rod",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dataset names: stable from one download to the next
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("file_name", "expected"),
+    [
+        ("20261119_030028_GenValenciana_Interurbano.zip", "genvalenciana_interurbano"),
+        ("20260727_080002_BUS_Samar.zip", "bus_samar"),
+        ("EMT Valencia.zip", "emt_valencia"),  # no timestamp: kept
+        ("20261119_030028_.zip", "20261119_030028"),  # nothing else: kept
+    ],
+)
+def test_dataset_name_drops_the_nap_timestamp(file_name, expected):
+    assert _gtfs.dataset_name_from_file(file_name) == expected
+
+
+def test_dataset_names_that_clash_are_numbered():
+    taken: set[str] = set()
+    names = [
+        _gtfs.dataset_name_from_file(name, taken)
+        for name in (
+            "20261119_050013_RENFE_CERCA.zip",
+            "20261120_050013_RENFE_CERCA.zip",
+            "20261121_050013_RENFE_CERCA.zip",
+        )
+    ]
+    assert names == ["renfe_cerca", "renfe_cerca_2", "renfe_cerca_3"]
+
+
+def test_download_gtfs_uses_the_stable_names(tmp_path, monkeypatch):
+    import geopandas as gpd
+
+    trips = [("R1", "WD", "t1")]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    feed = _write_feed(
+        tmp_path / "20261119_030028_GenValenciana_Interurbano.zip",
+        [("R1", "1", 3)],
+        trips,
+        stop_times,
+    )
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", lambda *a, **k: [feed])
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    results = _gtfs.download_gtfs(
+        "Valencia", boundary, tmp_path / "zips", modes=[1], api_key="key"
+    )
+    assert list(results) == ["genvalenciana_interurbano"]
+    edges = results["genvalenciana_interurbano"]["edges"]
+    assert edges["edge_id"].tolist() == ["genvalenciana_interurbano_R1_A_B"]
+
+
+# ---------------------------------------------------------------------------
+# Report: what happened to each downloaded file
+# ---------------------------------------------------------------------------
+def test_download_gtfs_completes_the_report(tmp_path, monkeypatch):
+    import geopandas as gpd
+
+    trips = [("R1", "WD", "t1")]
+    inside = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    outside = [
+        ("t1", "07:00:00", "07:00:00", "X", 1),
+        ("t1", "07:05:00", "07:05:00", "Y", 2),
+    ]
+    bus = _write_feed(tmp_path / "bus.zip", [("R1", "1", 3)], trips, inside)
+    far = _write_feed(tmp_path / "far.zip", [("R1", "1", 3)], trips, outside)
+    train = _write_feed(tmp_path / "train.zip", [("R1", "", 2)], trips, inside)
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"not a zip")
+    files = [bus, far, train, broken]
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        # Like the NAP client: one row per downloaded file, with its path.
+        for i, path in enumerate(files):
+            report.append({"dataset_id": i, "status": "downloaded", "path": str(path)})
+        return files
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia", boundary, tmp_path / "zips", modes=[1], api_key="k", report=report
+    )
+    rows = {row["dataset"]: row for row in report}
+    assert rows["bus"]["status"] == "written"
+    assert (rows["bus"]["routes"], rows["bus"]["stops"], rows["bus"]["edges"]) == (
+        1,
+        2,
+        1,
+    )
+    assert rows["far"]["status"] == "nothing_in_area"
+    assert rows["train"]["status"] == "skipped_mode"
+    assert rows["train"]["mode"] == "train"
+    assert rows["broken"]["status"] == "failed_processing"
+    assert rows["broken"]["error"]
+    assert len(report) == 4  # completed in place, not appended
+    assert set(results) == {"bus", "far"}

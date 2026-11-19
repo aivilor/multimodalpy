@@ -409,7 +409,8 @@ def gtfs_network_matrix(
     ``edges`` must use the short column names of the GTFS edge layer
     (``tts_m``, ``tm_pam_wd``, ...). Weights: the travel-time columns of
     :func:`gtfs_weights` present in the layer, ``tts_m`` by default. Stops
-    reached by an edge but outside the stops layer are appended with
+    outside the study area keep the ``in_area`` of the stops layer; any
+    stop reached by an edge but missing from it is appended with
     ``in_area=False``. ``periods`` (period name -> start and end hour) is
     stored in the metadata as ``gtfs_periods``, since it gives the hours
     behind ``pam`` / ``ppm`` / ``rod``, with each period's code in
@@ -421,6 +422,8 @@ def gtfs_network_matrix(
     node_table = pd.DataFrame(
         {"node_id": stops["node_id"].astype(str).to_numpy(), "x": xs, "y": ys}
     )
+    if "in_area" in stops.columns:
+        node_table["in_area"] = stops["in_area"].fillna(True).astype(bool).to_numpy()
     edge_table = edges.copy()
     edge_table["from_node"] = edge_table["from_node"].astype(str)
     edge_table["to_node"] = edge_table["to_node"].astype(str)

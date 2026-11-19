@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-11-19
+
+### Added
+- `gtfs_report` in the manifest, also written as `gtfs_report.csv` in the output
+  folder: what happened to every NAP dataset of the area's provinces (written
+  with its routes, stops and edges in the area, nothing in the area, skipped for
+  its mode, not downloaded because of its declared transport type, failed to
+  download or to process, with the error). A dataset that could not be used at
+  all raises a `UserWarning`. Before, a feed that failed to process disappeared
+  without a trace, since the library's log is silent unless the application
+  configures logging, and the download report was inside `gtfs_zips/`, deleted
+  unless `keep_gtfs_zips=True` (#90).
+
+### Changed
+- GTFS dataset names no longer carry the timestamp the NAP puts in front of its
+  file names: `20261119_030028_GenValenciana_Interurbano.zip` gives
+  `genvalenciana_interurbano` instead of `20261119_030028_genvalenciana_interurbano`.
+  The output folders (`bus/<dataset>/`, `train/<dataset>/`), the manifest's
+  `gtfs_datasets` and the edge ids are now the same on every download, so two
+  downloads can be compared. Two files that end up with the same name get `_2`,
+  `_3`… (#90).
+
+### Fixed
+- The GTFS nodes did not match the edges (#90). The nodes were every stop of
+  `stops.txt` inside the area, whether or not a trip served it, while the edges
+  came from the trips: in the Valencia interurban feed, whose `stops.txt` is a
+  regional stop catalogue, 1,209 of 1,374 nodes had no edge, and 40 stops ending
+  edges that cross the boundary had no node. The nodes are now the stops the
+  edges use, and only those; a stop just outside the area that ends an edge is
+  kept with the new column `in_area = False` (as the matrix already did). The
+  NetworkX graph carries `in_area` too.
+- The GTFS schedule (`write_schedule=True`) was not clipped to the study area:
+  it held the whole timetable of each feed (86,503 rows for the Valencia
+  interurban feed, of which 1,415 belong to edges in the area). It is now
+  clipped like the edges, so every row has its edge (#90).
+- GTFS `edge_id` was not unique: edges are one per pair of stops and route, but
+  the id was built from the stops alone, so routes sharing a pair of stops (106
+  pairs in the Valencia interurban feed) repeated it, and joining the schedule
+  to the edges by `edge_id` matched the wrong rows. It is now
+  `<dataset>_<route_id>_<from_node>_<to_node>` (#90).
+- A GTFS segment with an impossible travel time between two consecutive stops,
+  an error in the feed (one Valencia interurban segment "took" 10.9 hours),
+  inflated the mean and maximum times of its edge and the matrix weights.
+  Segments over 3 hours (`MAX_SEGMENT_SECONDS`) now have no travel time: they
+  still count as trips, and a `UserWarning` says how many there were in the
+  area (#90).
+- The GTFS median travel times (`tts_md`, `tts_md_pam`, `tts_md_ppm`,
+  `tts_md_rod`, and the matrix weights of the same names) were documented but
+  never computed, so they were missing from every output. They are now
+  computed, for the whole day and per period (#90).
+
+[0.5.1]: https://github.com/aivilor/multimodalpy/compare/v0.5.0...v0.5.1
+
 ## [0.5.0] - 2026-11-18
 
 ### Added
@@ -373,7 +426,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
