@@ -255,3 +255,119 @@ def _overpass_dns():
     import osmnx._http
 
     return osmnx._http
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def osmnx_defaults(monkeypatch):
+    """osmnx's own defaults, whatever another test left behind."""
+    monkeypatch.setattr(ox.settings, "overpass_url", "https://overpass-api.de/api")
+    monkeypatch.setattr(ox.settings, "requests_timeout", 180)
+    monkeypatch.setattr(
+        ox.settings,
+        "http_user_agent",
+        "OSMnx Python package (https://github.com/gboeing/osmnx)",
+    )
+    monkeypatch.setattr(ox.settings, "cache_folder", "./cache")
+
+
+def current():
+    s = ox.settings
+    return (s.overpass_url, s.requests_timeout, s.http_user_agent, s.cache_folder)
+
+
+def test_settings_apply_while_downloading_and_are_restored(osmnx_defaults):
+    before = current()
+    with _overpass.overpass_settings("https://overpass.example/api/", 600):
+        url, timeout, agent, cache = current()
+    assert url == "https://overpass.example/api"
+    assert timeout == 600
+    assert agent.startswith("multimodalpy/")
+    assert "github.com/aivilor/multimodalpy" in agent
+    assert cache == str(_overpass.osm_cache_dir())
+    assert current() == before
+
+
+def test_settings_are_restored_after_an_error(osmnx_defaults):
+    before = current()
+    with pytest.raises(RuntimeError):
+        with _overpass.overpass_settings("https://overpass.example/api", 60):
+            raise RuntimeError
+    assert current() == before
+
+
+def test_users_own_osmnx_settings_are_kept(osmnx_defaults, monkeypatch):
+    monkeypatch.setattr(ox.settings, "overpass_url", "https://mine.example/api")
+    monkeypatch.setattr(ox.settings, "http_user_agent", "my-research-project")
+    monkeypatch.setattr(ox.settings, "cache_folder", "/data/osm_cache")
+    with _overpass.overpass_settings():
+        assert current() == (
+            "https://mine.example/api",
+            180,
+            "my-research-project",
+            "/data/osm_cache",
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://overpass.example/api",
+        "https://overpass.example/api/",
+        "https://overpass.example/api/interpreter",
+        "https://overpass.example/api/status",
+    ],
+)
+def test_overpass_url_may_be_pasted_with_its_endpoint(osmnx_defaults, url):
+    with _overpass.overpass_settings(url):
+        assert ox.settings.overpass_url == "https://overpass.example/api"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"overpass_url": "overpass.example/api"}, "http"),
+        ({"overpass_url": "ftp://overpass.example/api"}, "http"),
+        ({"timeout": 0}, "positive"),
+        ({"timeout": -5}, "positive"),
+    ],
+)
+def test_invalid_settings_are_rejected(osmnx_defaults, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        with _overpass.overpass_settings(**kwargs):
+            pass
+
+
+def test_error_names_the_server_in_use(osmnx_defaults):
+    with _overpass.overpass_settings("https://overpass.example/api"):
+        with pytest.raises(OSMDownloadError) as info:
+            _overpass.call_overpass(
+                failing(requests.exceptions.ConnectionError()), mode="bike", waits=[]
+            )
+    assert info.value.server == "overpass.example"
+    assert "overpass_url=" in str(info.value)
+
+
+def test_download_osm_uses_the_settings(osmnx_defaults, monkeypatch):
+    seen = {}
+
+    def graph_from_polygon(*args, **kwargs):
+        seen["url"] = ox.settings.overpass_url
+        seen["timeout"] = ox.settings.requests_timeout
+        raise InsufficientResponseError("Found no graph nodes")
+
+    monkeypatch.setattr(ox, "graph_from_polygon", graph_from_polygon)
+    import geopandas as gpd
+
+    boundary = gpd.GeoDataFrame(geometry=[box(-0.4, 39.4, -0.3, 39.5)], crs=4326)
+    with pytest.raises(OSMDownloadError):
+        _osm.download_osm(
+            boundary,
+            modes=["walking"],
+            overpass_url="https://overpass.example/api",
+            osm_timeout=300,
+        )
+    assert seen == {"url": "https://overpass.example/api", "timeout": 300}
+    assert ox.settings.overpass_url == "https://overpass-api.de/api"

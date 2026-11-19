@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     import networkx as nx
 
 from ._boundaries import study_area_geometry
-from ._overpass import call_overpass
+from ._overpass import call_overpass, overpass_settings
 from ._text import normalize_name
 
 # CRS of the graphs downloaded by osmnx. The output CRS is decided in the
@@ -254,7 +254,7 @@ def derive_topology_nodes_from_edges(
                 if key in endpoint_keys:
                     entry["endpoint_occurrences"] = (
                         cast(int, entry["endpoint_occurrences"]) + 1
-                        )
+                    )
             # part[1:] is always one shorter, by design
             for start, end in zip(part, part[1:], strict=False):
                 start_key = _coord_key(start[0], start[1], round_digits)
@@ -312,7 +312,6 @@ def derive_topology_nodes_from_edges(
         }
         records.append(record)
         geometries.append(Point(cast(float, entry["x"]), cast(float, entry["y"])))
-
 
     topology_nodes = gpd.GeoDataFrame(records, geometry=geometries, crs=edges.crs)
     if output_crs is not None and topology_nodes.crs != output_crs:
@@ -465,9 +464,7 @@ def split_edges_with_topology_nodes(
                 end_node = node_lookup.get(end_key, {})
 
                 record = dict(base_attrs)
-                record["from_node"] = start_node.get(
-                    "node_id", base_attrs.get("from")
-                )
+                record["from_node"] = start_node.get("node_id", base_attrs.get("from"))
                 record["to_node"] = end_node.get("node_id", base_attrs.get("to"))
                 record["length"] = sub_length_m
                 record["geometry"] = sub_geom
@@ -1136,6 +1133,8 @@ def download_osm(
     buffer_m: float = 0.0,
     truncate_by_edge: bool = True,
     connect_parts: bool = True,
+    overpass_url: str | None = None,
+    osm_timeout: float | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download OSM network layers for the given modes and standardizes them.
 
@@ -1175,10 +1174,15 @@ def download_osm(
     ``unconnected_parts`` and reported with a ``UserWarning``. A
     single-polygon area is downloaded exactly as before.
 
-    A request the Overpass server rejects or doesn't answer (server at
-    capacity, timeout, lost connection) raises
+    The networks come from an Overpass API server: ``overpass_url`` (by
+    default ``overpass-api.de``, or the one set in
+    ``osmnx.settings.overpass_url``), waiting up to ``osm_timeout`` seconds
+    for each answer (osmnx's 180 s by default). A temporary failure (server
+    busy, timeout, lost connection) is retried four times, waiting 10, 20,
+    40 and 80 s; what still fails raises
     :class:`~multimodalpy.network.OSMDownloadError`, naming the network and
-    the server.
+    the server. Answers are cached (see ``_overpass.osm_cache_dir``), so a
+    rerun only downloads what is missing.
     """
     try:
         import osmnx  # noqa: F401 - only checks it's installed
@@ -1189,46 +1193,71 @@ def download_osm(
 
     polygon = study_area_geometry(boundary, buffer_m=buffer_m)
     results: dict[str, dict[str, object]] = {}
-
-    for mode in modes:
-        input_key = normalize_name(mode)
-        network_type = OSM_NETWORK_TYPES.get(input_key)
-        if network_type is None:
-            valid = ", ".join(sorted(OSM_NETWORK_TYPES))
-            raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
-        layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
-
-        graph, unconnected = call_overpass(
-            partial(
-                _download_graph,
-                polygon,
-                network_type=network_type,
-                simplify=simplify,
-                retain_all=retain_all,
-                truncate_by_edge=truncate_by_edge,
-                connect_parts=connect_parts,
-            ),
-            mode=layer_key,
-        )
-        if unconnected:
-            warnings.warn(
-                f"No {layer_key} route was found to part(s) "
-                f"{', '.join(map(str, unconnected))} of the study area "
-                f"(numbered from 1, the largest); they stay disconnected.",
-                UserWarning,
-                stacklevel=2,
+    with overpass_settings(overpass_url, osm_timeout):
+        for mode in modes:
+            results.update(
+                _download_mode(
+                    polygon,
+                    mode,
+                    output_crs=output_crs,
+                    simplify=simplify,
+                    retain_all=retain_all,
+                    truncate_by_edge=truncate_by_edge,
+                    connect_parts=connect_parts,
+                )
             )
-        nodes, edges = build_final_osm_layers(
-            graph,
-            layer_id=layer_key,
-            mode=network_type,
-            output_crs=output_crs,
+    return results
+
+
+def _download_mode(
+    polygon,
+    mode: str,
+    *,
+    output_crs: str,
+    simplify: bool,
+    retain_all: bool,
+    truncate_by_edge: bool,
+    connect_parts: bool,
+) -> dict[str, dict[str, object]]:
+    """Download and standardize one OSM mode (see :func:`download_osm`)."""
+    input_key = normalize_name(mode)
+    network_type = OSM_NETWORK_TYPES.get(input_key)
+    if network_type is None:
+        valid = ", ".join(sorted(OSM_NETWORK_TYPES))
+        raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
+    layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+
+    graph, unconnected = call_overpass(
+        partial(
+            _download_graph,
+            polygon,
+            network_type=network_type,
+            simplify=simplify,
+            retain_all=retain_all,
+            truncate_by_edge=truncate_by_edge,
+            connect_parts=connect_parts,
+        ),
+        mode=layer_key,
+    )
+    if unconnected:
+        warnings.warn(
+            f"No {layer_key} route was found to part(s) "
+            f"{', '.join(map(str, unconnected))} of the study area "
+            f"(numbered from 1, the largest); they stay disconnected.",
+            UserWarning,
+            stacklevel=3,  # the caller of download_osm
         )
-        results[layer_key] = {
+    nodes, edges = build_final_osm_layers(
+        graph,
+        layer_id=layer_key,
+        mode=network_type,
+        output_crs=output_crs,
+    )
+    return {
+        layer_key: {
             "nodes": nodes,
             "edges": edges,
             "graph": graph,
             "unconnected_parts": unconnected,
         }
-
-    return results
+    }

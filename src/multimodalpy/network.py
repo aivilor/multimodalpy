@@ -118,6 +118,8 @@ def download_network(
     province: int | str | None = None,
     buffer_m: float = 0.0,
     connect_parts: bool = True,
+    overpass_url: str | None = None,
+    osm_timeout: float | None = None,
 ) -> dict:
     """Download a study area's transport networks and write them to disk.
 
@@ -204,6 +206,17 @@ def download_network(
         Parts that can't be reached are listed in the manifest's
         ``unconnected_parts``. Defaults to True; has no effect on
         single-polygon municipalities.
+    overpass_url : str, optional
+        Overpass API server for the OpenStreetMap networks, e.g.
+        ``"https://overpass.openstreetmap.fr/api"``. Defaults to
+        ``osmnx.settings.overpass_url`` (the public ``overpass-api.de``,
+        often at capacity). A temporary failure is retried four times
+        (10, 20, 40 and 80 s) before giving up; there's no automatic switch
+        to another server.
+    osm_timeout : float, optional
+        Seconds to wait for each Overpass answer, also the time limit the
+        server is asked to respect. Defaults to osmnx's 180 s; a large area
+        may need more.
 
     Returns
     -------
@@ -290,6 +303,8 @@ def download_network(
             output_crs=crs,
             buffer_m=buffer_m,
             connect_parts=connect_parts,
+            overpass_url=overpass_url,
+            osm_timeout=osm_timeout,
         )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]

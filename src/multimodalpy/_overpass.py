@@ -9,7 +9,9 @@ or a ``ResponseStatusCodeError`` carrying the whole page. Here:
   server cut short) is retried a few times, waiting longer each time
   (``RETRY_WAITS``), as the server itself asks;
 - what still fails becomes an :class:`OSMDownloadError` that says which
-  network, which server and what to do.
+  network, which server and what to do;
+- :func:`overpass_settings` chooses the server and timeout, identifies the
+  requests as multimodalpy's and keeps osmnx's cache in a fixed folder.
 
 osmnx handles some busy answers itself, but not well for this server: it
 retries 429 and 504 forever (55 s each time), waits a fixed 60 s whenever
@@ -28,6 +30,7 @@ import re
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
 
@@ -212,7 +215,8 @@ def _error(failure: _Failure, mode: str, attempts: int) -> OSMDownloadError:
     if failure.transient:
         message += (
             " The public Overpass server is often busy: try again in a few "
-            "minutes (the parts already downloaded are cached)."
+            "minutes (the parts already downloaded are cached), or use another "
+            "Overpass server with overpass_url=..."
         )
     message += failure.hint
     return OSMDownloadError(
@@ -265,3 +269,81 @@ def call_overpass(
                     len(waits),
                 )
                 _sleep(wait)
+
+
+# ---------------------------------------------------------------------------
+# Settings: server, timeout, User-Agent and cache
+# ---------------------------------------------------------------------------
+_OSMNX_USER_AGENT = "OSMnx Python package"
+_OSMNX_CACHE_FOLDERS = {"./cache", "cache"}
+_PROJECT_URL = "https://github.com/aivilor/multimodalpy"
+
+
+def user_agent() -> str:
+    """User-Agent of multimodalpy's requests, as Overpass asks clients to set."""
+    from . import __version__
+
+    return f"multimodalpy/{__version__} (+{_PROJECT_URL})"
+
+
+def osm_cache_dir() -> Path:
+    """Folder where osmnx keeps the Overpass answers (next to the boundaries)."""
+    import pooch
+
+    return Path(pooch.os_cache("multimodalpy")) / "osmnx"
+
+
+def _base_url(url: str) -> str:
+    """Return the ``.../api`` base osmnx expects, from what the user may paste."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(
+            f"overpass_url must be an http(s) address, e.g. "
+            f"'https://overpass-api.de/api'. Received: {url!r}"
+        )
+    base = url.rstrip("/")
+    for suffix in ("/interpreter", "/status"):
+        base = base.removesuffix(suffix)
+    return base
+
+
+@contextlib.contextmanager
+def overpass_settings(
+    overpass_url: str | None = None, timeout: float | None = None
+) -> Iterator[None]:
+    """Set osmnx up for multimodalpy's downloads, and restore it afterwards.
+
+    - ``overpass_url``: the Overpass server (its ``.../api`` address; a
+      ``.../api/interpreter`` address is accepted too). If not given, the
+      one in ``osmnx.settings.overpass_url`` is used (``overpass-api.de``
+      unless you changed it).
+    - ``timeout``: seconds to wait for each answer, also the time limit the
+      server is asked to respect. If not given, osmnx's (180 s).
+    - The requests carry multimodalpy's User-Agent, unless you set your own
+      in ``osmnx.settings.http_user_agent``.
+    - osmnx's cache goes to :func:`osm_cache_dir` instead of a ``cache``
+      folder in the current directory, unless you chose another folder; a
+      rerun from any folder reuses what was downloaded.
+    """
+    from osmnx import settings
+
+    if overpass_url is not None:
+        overpass_url = _base_url(overpass_url)
+    if timeout is not None and not timeout > 0:
+        raise ValueError(f"osm_timeout must be a positive number of seconds: {timeout}")
+
+    names = ("overpass_url", "requests_timeout", "http_user_agent", "cache_folder")
+    saved = {name: getattr(settings, name) for name in names}
+    try:
+        if overpass_url is not None:
+            settings.overpass_url = overpass_url
+        if timeout is not None:
+            settings.requests_timeout = int(timeout)
+        if str(settings.http_user_agent).startswith(_OSMNX_USER_AGENT):
+            settings.http_user_agent = user_agent()
+        if str(settings.cache_folder) in _OSMNX_CACHE_FOLDERS:
+            settings.cache_folder = str(osm_cache_dir())
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(settings, name, value)

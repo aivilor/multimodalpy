@@ -144,7 +144,12 @@ def backends(monkeypatch, boundary):
 
     def fake_download_osm(bnd, *, modes, output_crs, **kwargs):
         calls["osm"].append(
-            {"boundary": bnd, "modes": list(modes), "output_crs": output_crs}
+            {
+                "boundary": bnd,
+                "modes": list(modes),
+                "output_crs": output_crs,
+                **kwargs,
+            }
         )
         results = {}
         for mode in modes:
@@ -1218,6 +1223,38 @@ def test_cli_defaults(monkeypatch):
     assert captured["gtfs_hour_range"] is None
     assert captured["write_schedule"] is False
     assert captured["keep_gtfs_zips"] is False
+
+
+def test_download_network_passes_the_overpass_options(tmp_path, backends):
+    network.download_network(
+        "Valencia",
+        modes=["walking"],
+        output_dir=tmp_path,
+        overpass_url="https://overpass.example/api",
+        osm_timeout=600,
+    )
+    call = backends["osm"][0]
+    assert call["overpass_url"] == "https://overpass.example/api"
+    assert call["osm_timeout"] == 600
+
+
+def test_cli_forwards_the_overpass_options(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
+    _cli.main(
+        [
+            "--area",
+            "Valencia",
+            "--overpass-url",
+            "https://overpass.example/api",
+            "--osm-timeout",
+            "600",
+        ]
+    )
+    assert captured["overpass_url"] == "https://overpass.example/api"
+    assert captured["osm_timeout"] == 600.0
 
 
 def test_cli_accepts_a_boundaries_file_without_area(monkeypatch):
