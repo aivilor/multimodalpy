@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.1] - 2026-11-19
 
 ### Added
 - `gtfs_report` in the manifest, also written as `gtfs_report.csv` in the output
@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tts_md_rod`, and the matrix weights of the same names) were documented but
   never computed, so they were missing from every output. They are now
   computed, for the whole day and per period (#90).
+
+[0.5.1]: https://github.com/aivilor/multimodalpy/compare/v0.5.0...v0.5.1
 
 ## [0.5.0] - 2026-11-18
 
@@ -424,7 +426,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
