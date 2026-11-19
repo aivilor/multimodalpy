@@ -220,9 +220,14 @@ the node has no known tag but is an `intersection`, the generic penalty applies.
 |---|---|---|
 | `node_id` | text | `stop_id` in the GTFS feed |
 | `stop_name` | text | Stop name |
+| `in_area` | boolean | Whether the stop is inside the study area |
 | `geometry` | Point | Stop position |
 
-Only stops inside the study area are kept.
+The stops are the ones the [edges](#gtfs-edges) use: every stop that starts or
+ends an edge, and only those. A feed's `stops.txt` often lists stops no trip
+serves (a regional stop catalogue, stations, entrances), and those are left out.
+An edge that crosses the boundary ends at a stop outside the study area: that
+stop is kept with `in_area = false`, so every edge has both its nodes.
 
 ## GTFS edges
 
@@ -345,7 +350,7 @@ for GTFS, next to `study_area_boundary.geojson`. Each file is a NetworkX
 | | OSM graph | GTFS graph |
 |---|---|---|
 | Node `id` | `node_id` (integer) | `stop_id` (text) |
-| Node attributes | `x`, `y`, `node_role` | `x`, `y`, `stop_name` |
+| Node attributes | `x`, `y`, `node_role` | `x`, `y`, `stop_name`, `in_area` |
 | Edge attributes | the 14 [OSM edge](#osm-edges) columns | the [GTFS edge](#gtfs-edges) columns, with their long names |
 
 `from_node` / `to_node` repeat `source` / `target`. They are kept so every edge
@@ -447,10 +452,9 @@ A GTFS matrix only has the weights present in its edge layer.
 - **Direction.** OSM edges are already directed (a two-way street is one edge in
   each direction), so one-way streets are respected.
 - **Node order.** OSM rows follow the `nodes` layer, including isolated nodes,
-  which are rows with no edges. GTFS rows follow the stops layer first, then the
-  stops outside the study area that are reached by an edge crossing the
-  boundary, with `node_in_area = false` and their position taken from the edge
-  geometry, as in the [NetworkX graphs](#networkx-graphs-graphjson).
+  which are rows with no edges. GTFS rows follow the [stops layer](#gtfs-stops),
+  which already holds the stops outside the study area that end an edge crossing
+  the boundary, with `node_in_area = false` (its `in_area`).
 
 ### Metadata (`meta`)
 

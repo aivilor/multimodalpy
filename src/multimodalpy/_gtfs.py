@@ -345,21 +345,40 @@ def build_gtfs_stops_gdf(
     dataset_name: str,
     layer_id: str,
     filter_geometry=None,
+    stop_ids=None,
 ) -> gpd.GeoDataFrame:
-    """Build the stops (nodes) layer from ``stops.txt``."""
+    """Build the stops (nodes) layer from ``stops.txt``.
+
+    With ``stop_ids`` (the stops the edges use, as :func:`normalize_gtfs_feed`
+    passes them), the layer holds exactly those stops: a stop no trip
+    serves, a parent station or an entrance is left out, and a stop just
+    outside ``filter_geometry`` that ends an edge crossing it is kept.
+    ``in_area`` says whether each stop is inside ``filter_geometry``.
+    Without ``stop_ids``, every stop inside ``filter_geometry`` is kept.
+    """
     import geopandas as gpd
     import pandas as pd
 
     work = stops.copy()
     work["stop_lat"] = pd.to_numeric(work["stop_lat"], errors="coerce")
     work["stop_lon"] = pd.to_numeric(work["stop_lon"], errors="coerce")
-    work = work.dropna(subset=["stop_lat", "stop_lon"]).copy()
+    work = work.dropna(subset=["stop_lat", "stop_lon"]).drop_duplicates("stop_id")
+    if stop_ids is not None:
+        work = work[work["stop_id"].isin(set(stop_ids))]
     gdf = gpd.GeoDataFrame(
-        work,
+        work.copy(),
         geometry=gpd.points_from_xy(work["stop_lon"], work["stop_lat"]),
         crs=SOURCE_CRS,
     )
-    gdf = _filter_by_geometry(gdf, filter_geometry)
+    if stop_ids is None:
+        gdf = _filter_by_geometry(gdf, filter_geometry)
+        gdf["in_area"] = True
+    else:
+        gdf["in_area"] = (
+            True
+            if filter_geometry is None
+            else gdf.geometry.intersects(filter_geometry)
+        )
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["node_id"] = gdf["stop_id"]
@@ -1077,6 +1096,10 @@ def normalize_gtfs_feed(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
     """Normalize a GTFS feed into (stops, edges, schedule).
 
+    The stops (nodes) are the stops the edges use: every stop that starts
+    or ends an edge, with ``in_area`` telling whether it is inside
+    ``filter_geometry`` (see :func:`build_gtfs_stops_gdf`).
+
     The third returned element, ``schedule`` (option B), is a flat table
     (``pandas.DataFrame``, no geometry) with the trip-by-trip detail; it's
     ``None`` if ``include_schedule_table=False``.
@@ -1091,6 +1114,8 @@ def normalize_gtfs_feed(
     ``day_type`` columns in the schedule), derived from ``calendar.txt``
     (falling back to ``calendar_dates.txt`` if it doesn't exist).
     """
+    import pandas as pd
+
     stops = read_gtfs_table(feed_path, "stops.txt")
     stop_times = read_gtfs_table(feed_path, "stop_times.txt")
     trips = read_gtfs_table(feed_path, "trips.txt")
@@ -1099,12 +1124,6 @@ def normalize_gtfs_feed(
     calendar_dates = _read_optional_gtfs_table(feed_path, "calendar_dates.txt")
     frequencies = _read_optional_gtfs_table(feed_path, "frequencies.txt")
 
-    stops_gdf = build_gtfs_stops_gdf(
-        stops,
-        dataset_name=dataset_name,
-        layer_id=layer_id,
-        filter_geometry=filter_geometry,
-    )
     # The trip-segment records (times parsed, trips/routes/stops joined)
     # are the expensive part; build them once for both the edges layer and
     # the schedule table instead of once each.
@@ -1132,6 +1151,17 @@ def normalize_gtfs_feed(
         peak_periods=peak_periods,
         include_hourly_summary=include_hourly_summary,
         records=records,
+    )
+    # The nodes are the stops the edges use, and only those: stops.txt
+    # often lists stops no trip serves (a regional catalogue, stations,
+    # entrances), and an edge crossing the boundary ends at a stop outside
+    # the area, which is kept with in_area=False.
+    stops_gdf = build_gtfs_stops_gdf(
+        stops,
+        dataset_name=dataset_name,
+        layer_id=layer_id,
+        filter_geometry=filter_geometry,
+        stop_ids=pd.concat([stop_edges_gdf["from_node"], stop_edges_gdf["to_node"]]),
     )
 
     schedule_df = None

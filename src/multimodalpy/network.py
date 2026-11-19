@@ -379,7 +379,7 @@ def download_network(
         GTFS_EDGES_COLUMNS = _gtfs.gtfs_edge_columns(gtfs_peak_periods)
         gtfs_rename = _gtfs.gtfs_edge_rename(gtfs_peak_periods)
 
-        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
+        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "in_area", "geometry"]
 
         for dataset, gtfs_out in gtfs_results.items():
             nodes_gdf = gtfs_out["nodes"]

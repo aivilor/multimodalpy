@@ -375,3 +375,117 @@ def test_every_period_column_of_a_feed_is_kept(feed):
     rename = _gtfs.gtfs_edge_rename(periods)
     assert rename["travel_time_seconds_mean_morning"] == "tts_m_mor"
     assert rename["trip_count_evening_weekday"] == "trp_eve_wd"
+
+
+# ---------------------------------------------------------------------------
+# Nodes: the stops the edges use
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def catalogue_feed(tmp_path):
+    """A feed whose stops.txt lists more than its trips use.
+
+    A, B, Q inside the area; W outside, ending an edge that crosses the
+    boundary; U inside but served by no trip; ST a parent station
+    (location_type 1), which trips never use; N inside, served only at
+    23:00.
+    """
+    stops = {
+        "A": (39.45, -0.42, 0),
+        "B": (39.46, -0.41, 0),
+        "Q": (39.47, -0.40, 0),
+        "W": (39.47, -0.60, 0),
+        "U": (39.48, -0.39, 0),
+        "ST": (39.45, -0.42, 1),
+        "N": (39.49, -0.38, 0),
+    }
+    with zipfile.ZipFile(tmp_path / "catalogue.zip", "w") as zf:
+        zf.writestr(
+            "stops.txt",
+            "stop_id,stop_name,stop_lat,stop_lon,location_type\n"
+            + "\n".join(
+                f"{s},Stop {s},{la},{lo},{t}" for s, (la, lo, t) in stops.items()
+            )
+            + "\n",
+        )
+        zf.writestr("routes.txt", "route_id,route_short_name,route_type\nR1,1,3\n")
+        zf.writestr("trips.txt", "route_id,service_id,trip_id\nR1,WD,t1\nR1,WD,t2\n")
+        zf.writestr(
+            "calendar.txt",
+            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
+            "sunday,start_date,end_date\nWD,1,1,1,1,1,0,0,20260101,20261231\n",
+        )
+        zf.writestr(
+            "stop_times.txt",
+            "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+            "t1,07:00:00,07:00:00,A,1\nt1,07:05:00,07:05:00,B,2\n"
+            "t1,07:20:00,07:20:00,W,3\n"
+            "t2,23:00:00,23:00:00,Q,1\nt2,23:04:00,23:04:00,N,2\n",
+        )
+    return tmp_path / "catalogue.zip"
+
+
+def _layers(feed, **kwargs):
+    nodes, edges, _ = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=False,
+        **kwargs,
+    )
+    return nodes.set_index("node_id"), edges
+
+
+@pytest.mark.parametrize(
+    ("hour_range", "expected"),
+    [
+        (None, {"A": True, "B": True, "W": False, "Q": True, "N": True}),
+        # Q and N are only served at 23:00: no edge, so no node.
+        ((6, 22), {"A": True, "B": True, "W": False}),
+    ],
+)
+def test_nodes_are_the_stops_the_edges_use(catalogue_feed, hour_range, expected):
+    nodes, edges = _layers(catalogue_feed, hour_range=hour_range)
+    assert nodes["in_area"].to_dict() == expected
+    used = set(edges["from_node"]) | set(edges["to_node"])
+    assert set(nodes.index) == used  # every node has an edge, every edge its nodes
+    assert "U" not in nodes.index  # served by no trip
+    assert "ST" not in nodes.index  # parent station
+
+
+def test_nodes_without_an_area_are_all_inside(catalogue_feed):
+    nodes, _ = _gtfs.normalize_gtfs_feed(
+        catalogue_feed, dataset_name="ds", layer_id="ds", include_schedule_table=False
+    )[:2]
+    assert nodes["in_area"].all()
+    assert set(nodes["node_id"]) == {"A", "B", "W", "Q", "N"}
+
+
+def test_no_edges_no_nodes(tmp_path, catalogue_feed):
+    far = box(10, 10, 11, 11)
+    nodes, edges, _ = _gtfs.normalize_gtfs_feed(
+        catalogue_feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=far,
+        include_schedule_table=False,
+    )
+    assert edges.empty
+    assert nodes.empty
+    assert "in_area" in nodes.columns
+
+
+def test_stops_layer_without_stop_ids_keeps_the_stops_in_the_area():
+    stops = pd.DataFrame(
+        {
+            "stop_id": ["A", "W", "A"],
+            "stop_name": ["a", "w", "a again"],
+            "stop_lat": [39.45, 39.47, 39.45],
+            "stop_lon": [-0.42, -0.60, -0.42],
+        }
+    )
+    gdf = _gtfs.build_gtfs_stops_gdf(
+        stops, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+    )
+    assert gdf["node_id"].tolist() == ["A"]  # W outside, A only once
+    assert gdf["in_area"].tolist() == [True]

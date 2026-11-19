@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- The GTFS nodes did not match the edges (#90). The nodes were every stop of
+  `stops.txt` inside the area, whether or not a trip served it, while the edges
+  came from the trips: in the Valencia interurban feed, whose `stops.txt` is a
+  regional stop catalogue, 1,209 of 1,374 nodes had no edge, and 40 stops ending
+  edges that cross the boundary had no node. The nodes are now the stops the
+  edges use, and only those; a stop just outside the area that ends an edge is
+  kept with the new column `in_area = False` (as the matrix already did). The
+  NetworkX graph carries `in_area` too.
+
 ## [0.5.0] - 2026-11-18
 
 ### Added

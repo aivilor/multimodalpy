@@ -1244,6 +1244,25 @@ def test_cli_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 # Overpass failures
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("file_format", ["geojson", "networkx"])
+def test_gtfs_nodes_say_whether_they_are_in_the_area(tmp_path, backends, file_format):
+    result = make_gtfs_result("bus")
+    result["nodes"]["in_area"] = [True, False]
+    backends["gtfs_result"] = {"ds1": result}
+    network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, formats=file_format, api_key="k"
+    )
+    if file_format == "geojson":
+        nodes = gpd.read_file(tmp_path / "bus" / "ds1" / "nodes.geojson")
+        assert nodes.set_index("node_id")["in_area"].to_dict() == {
+            "s1": True,
+            "s2": False,
+        }
+    else:
+        graph = io.read_graph(tmp_path / "bus" / "ds1" / "graph.json")
+        assert graph.nodes["s2"]["in_area"] is False
+
+
 def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
     result = make_gtfs_result("bus")
     edges = result["edges"]
