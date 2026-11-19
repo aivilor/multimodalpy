@@ -40,6 +40,7 @@ from ._boundaries import boundary_for_export, find_area
 from ._gtfs import GTFS_EDGE_RENAME, download_gtfs
 from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
 from ._osm import OSM_NETWORK_TYPES, download_osm
+from ._overpass import OSMDownloadError
 from ._text import slugify
 from ._writers import (
     _gtfs_to_graph_json,
@@ -52,6 +53,7 @@ from ._writers import (
 __all__ = [
     "FORMATS",
     "NAPAuthenticationError",
+    "OSMDownloadError",
     "download_gtfs",
     "download_network",
     "download_osm",
@@ -208,6 +210,12 @@ def download_network(
     dict
         Manifest with the area (with its ``provinces`` and
         ``municipalities``), the modes, the folder and the files written.
+
+    Raises
+    ------
+    OSMDownloadError
+        If an OpenStreetMap network can't be downloaded from the Overpass
+        server (at capacity, timeout, lost connection).
     """
     if isinstance(modes, str):
         modes = [modes]

@@ -29,6 +29,7 @@ import re
 import warnings
 from collections import Counter
 from collections.abc import Iterable
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     import networkx as nx
 
 from ._boundaries import study_area_geometry
+from ._overpass import call_overpass
 from ._text import normalize_name
 
 # CRS of the graphs downloaded by osmnx. The output CRS is decided in the
@@ -1091,6 +1093,36 @@ def _download_connected_graph(
     return connected, unconnected
 
 
+def _download_graph(
+    polygon,
+    *,
+    network_type: str,
+    simplify: bool,
+    retain_all: bool,
+    truncate_by_edge: bool,
+    connect_parts: bool,
+) -> tuple[object, list[int]]:
+    """OSM graph of the study area and its unconnected parts (if several)."""
+    import osmnx as ox
+
+    if connect_parts and polygon.geom_type == "MultiPolygon":
+        return _download_connected_graph(
+            polygon,
+            network_type=network_type,
+            simplify=simplify,
+            retain_all=retain_all,
+            truncate_by_edge=truncate_by_edge,
+        )
+    graph = ox.graph_from_polygon(
+        polygon,
+        network_type=network_type,
+        simplify=simplify,
+        retain_all=retain_all,
+        truncate_by_edge=truncate_by_edge,
+    )
+    return graph, []
+
+
 # ---------------------------------------------------------------------------
 # Download and standardize the OSM layers
 # ---------------------------------------------------------------------------
@@ -1142,9 +1174,14 @@ def download_osm(
     largest; any part with streets that cannot be reached is listed in
     ``unconnected_parts`` and reported with a ``UserWarning``. A
     single-polygon area is downloaded exactly as before.
+
+    A request the Overpass server rejects or doesn't answer (server at
+    capacity, timeout, lost connection) raises
+    :class:`~multimodalpy.network.OSMDownloadError`, naming the network and
+    the server.
     """
     try:
-        import osmnx as ox
+        import osmnx  # noqa: F401 - only checks it's installed
     except ImportError as exc:
         raise ImportError(
             "Install osmnx to download OSM networks: pip install osmnx"
@@ -1161,30 +1198,25 @@ def download_osm(
             raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
         layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
 
-        unconnected: list[int] = []
-        if connect_parts and polygon.geom_type == "MultiPolygon":
-            graph, unconnected = _download_connected_graph(
+        graph, unconnected = call_overpass(
+            partial(
+                _download_graph,
                 polygon,
                 network_type=network_type,
                 simplify=simplify,
                 retain_all=retain_all,
                 truncate_by_edge=truncate_by_edge,
-            )
-            if unconnected:
-                warnings.warn(
-                    f"No {layer_key} route was found to part(s) "
-                    f"{', '.join(map(str, unconnected))} of the study area "
-                    f"(numbered from 1, the largest); they stay disconnected.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-        else:
-            graph = ox.graph_from_polygon(
-                polygon,
-                network_type=network_type,
-                simplify=simplify,
-                retain_all=retain_all,
-                truncate_by_edge=truncate_by_edge,
+                connect_parts=connect_parts,
+            ),
+            mode=layer_key,
+        )
+        if unconnected:
+            warnings.warn(
+                f"No {layer_key} route was found to part(s) "
+                f"{', '.join(map(str, unconnected))} of the study area "
+                f"(numbered from 1, the largest); they stay disconnected.",
+                UserWarning,
+                stacklevel=2,
             )
         nodes, edges = build_final_osm_layers(
             graph,
