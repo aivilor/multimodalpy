@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 from . import _gtfs
 from ._boundaries import boundary_for_export, find_area
-from ._gtfs import GTFS_EDGE_RENAME, download_gtfs
+from ._gtfs import download_gtfs
 from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
 from ._osm import OSM_NETWORK_TYPES, download_osm
 from ._overpass import OSMDownloadError
@@ -141,12 +141,13 @@ def download_network(
     output_dir : str | Path
         Folder to write to. Created if it does not exist.
     boundaries_path : str | Path, optional
-        Shapefile (.shp) or GeoJSON (.geojson) with your own study area: its
-        polygons (merged into one) are the area, whatever their columns, in
-        any CRS (the file must define one). The provinces holding at least
-        5% of it give the bus and train feeds; everything is clipped to the
-        polygon. It must overlap peninsular Spain, the Balearic Islands,
-        Ceuta or Melilla. Not combined with ``area_code`` or ``province``.
+        Shapefile (.shp), GeoJSON (.geojson) or GeoPackage (.gpkg) with
+        your own study area: its polygons (merged into one) are the area,
+        whatever their columns, in any CRS (the file must define one). The
+        provinces holding at least 5% of it give the bus and train feeds;
+        everything is clipped to the polygon. It must overlap peninsular
+        Spain, the Balearic Islands, Ceuta or Melilla. Not combined with
+        ``area_code`` or ``province``.
     crs : str
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.
@@ -172,7 +173,11 @@ def download_network(
     gtfs_peak_periods : dict, optional
         Peak periods for the per-column breakdown of the GTFS edges layer
         (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
-        for everything else.
+        for everything else. Periods with names of your own, e.g.
+        ``{"morning": (6, 9), "evening": (18, 21)}``, get a three-letter
+        code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
+        ``p1``, ``p2``... if the first three letters clash), listed in the
+        manifest's ``gtfs_period_codes``.
     write_schedule : bool
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
@@ -224,6 +229,10 @@ def download_network(
     dict
         Manifest with the area (with its ``provinces`` and
         ``municipalities``), the modes, the folder and the files written.
+
+        A GTFS feed whose routes are of a mode that wasn't requested
+        (the NAP declares some feeds as both bus and rail) is skipped and
+        listed in the manifest's ``skipped_datasets`` (``{dataset: mode}``).
 
         If an OpenStreetMap network can't be downloaded (see
         ``overpass_url``), the other networks are still downloaded and
@@ -331,6 +340,7 @@ def download_network(
     # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_zips_dir = output_dir / "gtfs_zips"
+    skipped_datasets: dict[str, str] = {}
     if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
@@ -348,6 +358,7 @@ def download_network(
                 peak_periods=gtfs_peak_periods,
                 include_schedule_table=write_schedule,
                 buffer_m=buffer_m,
+                skipped=skipped_datasets,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -363,47 +374,10 @@ def download_network(
         raise next(iter(osm_failures.values()))
 
     if gtfs_results:
-        GTFS_EDGES_COLUMNS = [
-            "edge_id",
-            "from_node",
-            "to_node",
-            "route_id",
-            "route_short_name",
-            "route_long_name",
-            "trip_count",
-            "travel_time_seconds_mean",
-            "travel_time_seconds_median",
-            "travel_time_seconds_min",
-            "travel_time_seconds_max",
-            "travel_time_seconds_mean_peak_am",
-            "travel_time_seconds_mean_peak_pm",
-            "travel_time_seconds_mean_rest_of_day",
-            "travel_time_seconds_median_peak_am",
-            "travel_time_seconds_median_peak_pm",
-            "travel_time_seconds_median_rest_of_day",
-            "trip_count_peak_am",
-            "trip_count_peak_pm",
-            "trip_count_rest_of_day",
-            "travel_time_seconds_mean_weekday",
-            "trip_count_weekday",
-            "travel_time_seconds_mean_weekend",
-            "trip_count_weekend",
-            "days_of_week_summary",
-            "hourly_travel_times",
-            "hourly_trip_counts",
-            "geometry",
-        ]
-        # Peak-period x weekday/weekend combination (e.g.
-        # "travel_time_seconds_mean_peak_am_weekday"). Only covers the
-        # default period names (peak_am/peak_pm/rest_of_day); if a custom
-        # ``gtfs_peak_periods`` is passed with other names, its combined
-        # columns aren't filtered here automatically.
-        for period_name in list(_gtfs.DEFAULT_PEAK_PERIODS.keys()) + ["rest_of_day"]:
-            for day_type_name in ("weekday", "weekend"):
-                GTFS_EDGES_COLUMNS.append(
-                    f"travel_time_seconds_mean_{period_name}_{day_type_name}"
-                )
-                GTFS_EDGES_COLUMNS.append(f"trip_count_{period_name}_{day_type_name}")
+        # Every column written, including the per-period ones of the
+        # periods actually used (``gtfs_peak_periods`` or the defaults).
+        GTFS_EDGES_COLUMNS = _gtfs.gtfs_edge_columns(gtfs_peak_periods)
+        gtfs_rename = _gtfs.gtfs_edge_rename(gtfs_peak_periods)
 
         GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
 
@@ -418,7 +392,7 @@ def download_network(
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
             gtfs_edge_columns[dataset] = keep_cols
-            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
+            edges_gdf = edges_gdf[keep_cols].rename(columns=gtfs_rename)
 
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
             layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
@@ -558,6 +532,13 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if gtfs_results:
+        # Code of each period in the short column names (tts_m_pam, tm_mor_wd).
+        manifest["gtfs_period_codes"] = _gtfs.period_codes(gtfs_peak_periods)
+    if skipped_datasets:
+        # Feeds the NAP returned for a requested mode whose routes turned
+        # out to be of another one (e.g. Cercanías when asking for bus).
+        manifest["skipped_datasets"] = skipped_datasets
     if osm_failures:
         manifest["failed_modes"] = {
             mode: str(exc) for mode, exc in osm_failures.items()

@@ -137,6 +137,7 @@ def backends(monkeypatch, boundary):
         "gtfs_result": {},
         "gtfs_error": None,
         "osm_failing": set(),
+        "gtfs_skipped": {},
     }
 
     def fake_find_area(area_name, boundaries_path=None, **kwargs):
@@ -170,10 +171,12 @@ def backends(monkeypatch, boundary):
             results[label] = make_osm_result()
         return results
 
-    def fake_download_gtfs(area_name, bnd, zip_dir, **kwargs):
+    def fake_download_gtfs(area_name, bnd, zip_dir, *, skipped=None, **kwargs):
         calls["gtfs"].append(
             {"area_name": area_name, "zip_dir": Path(zip_dir), **kwargs}
         )
+        if skipped is not None:
+            skipped.update(calls["gtfs_skipped"])
         # The real function leaves the downloaded ZIPs in zip_dir.
         Path(zip_dir).mkdir(parents=True, exist_ok=True)
         (Path(zip_dir) / "feed.zip").write_bytes(b"not a real zip")
@@ -633,7 +636,7 @@ def test_download_network_with_real_find_area(tmp_path, backends, monkeypatch):
 
     assert "walking/nodes.geojson" in manifest["files"]
     used = backends["osm"][0]["boundary"].iloc[0]
-    assert used["matched_value"] == "Segovia"
+    assert used["match_val"] == "Segovia"
     assert used["prov_codes"] == [40]
 
 
@@ -1241,6 +1244,52 @@ def test_cli_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 # Overpass failures
 # ---------------------------------------------------------------------------
+def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
+    result = make_gtfs_result("bus")
+    edges = result["edges"]
+    edges["travel_time_seconds_mean_morning"] = [80.0]
+    edges["trip_count_morning"] = [4]
+    edges["travel_time_seconds_mean_morning_weekday"] = [82.0]
+    edges["travel_time_seconds_mean_rest_of_day"] = [99.0]
+    backends["gtfs_result"] = {"ds1": result}
+
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        formats=["geojson", "matrix"],
+        api_key="key",
+        gtfs_peak_periods={"morning": (6, 9)},
+    )
+
+    assert manifest["gtfs_period_codes"] == {"morning": "mor", "rest_of_day": "rod"}
+    written = gpd.read_file(tmp_path / "bus" / "ds1" / "edges.geojson")
+    assert {"tts_m_mor", "trips_mor", "tm_mor_wd", "tts_m_rod"} <= set(written.columns)
+    matrix = io.read_matrix(tmp_path / "bus" / "ds1" / "matrix.npz", weight="tm_mor_wd")
+    assert matrix.weight == "tm_mor_wd"
+    assert matrix.matrix.data.tolist() == [82.0]
+    assert matrix.meta["gtfs_period_codes"]["morning"] == "mor"
+
+
+def test_skipped_gtfs_feeds_are_listed_in_the_manifest(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_skipped"] = {"ouigo": "train"}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert manifest["gtfs_datasets"] == ["emt"]
+    assert manifest["skipped_datasets"] == {"ouigo": "train"}
+    assert not (tmp_path / "train").exists()
+
+
+def test_no_skipped_feeds_no_manifest_entry(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert "skipped_datasets" not in manifest
+
+
 def test_failed_osm_mode_keeps_the_others(tmp_path, backends):
     backends["osm_failing"].add("bike")
     with pytest.warns(UserWarning, match=r"The bike network\(s\) could not"):

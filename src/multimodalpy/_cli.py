@@ -42,7 +42,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--boundaries",
         help=(
-            "Shapefile/GeoJSON with your own study area (any CRS); replaces "
+            "Shapefile/GeoJSON/GeoPackage with your own study area (any CRS); "
+            "replaces "
             "the search by name."
         ),
     )

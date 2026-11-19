@@ -24,7 +24,8 @@ No file is written here; that's done by ``_writers``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile, ZipFile
@@ -95,9 +96,31 @@ def read_gtfs_table(feed_path: str | Path, table_name: str) -> pd.DataFrame:
 
 # GTFS spec ``route_type``. Rail-based modes are tram (0), subway (1),
 # rail (2), cable tram (5), funicular (7) and monorail (12); everything
-# else (bus 3, trolleybus 11, bus rapid transit 700-799...) is treated as
-# bus.
+# else (bus 3, trolleybus 11, gondola 6...) is treated as bus.
 RAIL_ROUTE_TYPES: frozenset[int] = frozenset({0, 1, 2, 5, 7, 12})
+
+# Extended route types (the European HVT codes many feeds use instead):
+# railway 100-199 (e.g. 101 high-speed rail, used by OUIGO, 102 long
+# distance), suburban railway 300-399, urban railway 400-499, metro
+# 500-599, underground 600-699, tram 900-999 and funicular 1400-1499.
+# Coach (200-299), bus (700-799), trolleybus (800), water, air, aerial
+# lift and taxi are treated as bus.
+RAIL_EXTENDED_ROUTE_TYPES: tuple[range, ...] = (
+    range(100, 200),
+    range(300, 700),
+    range(900, 1000),
+    range(1400, 1500),
+)
+
+# NAP transport ids of the two GTFS modes (see network.GTFS_MODE_TO_NAP).
+_NAP_ID_OF_MODE = {"bus": 1, "train": 2}
+
+
+def is_rail_route_type(route_type: int) -> bool:
+    """Whether a GTFS ``route_type`` (basic or extended) is rail-based."""
+    return route_type in RAIL_ROUTE_TYPES or any(
+        route_type in codes for codes in RAIL_EXTENDED_ROUTE_TYPES
+    )
 
 
 def infer_transport_mode(feed_path: str | Path) -> str:
@@ -106,8 +129,9 @@ def infer_transport_mode(feed_path: str | Path) -> str:
     Used to decide which folder a GTFS dataset's layers are saved under.
     The feed itself is checked rather than the NAP metadata, because there
     the same dataset can be declared as both bus and rail at once (e.g.
-    Cercanias Renfe). If the feed mixes both, the majority type wins; if
-    it can't be read, ``"bus"`` is assumed.
+    Cercanias Renfe). Basic and extended route types are both understood
+    (see :func:`is_rail_route_type`). If the feed mixes both, the majority
+    type wins; if it can't be read, ``"bus"`` is assumed.
     """
     import pandas as pd
 
@@ -121,7 +145,7 @@ def infer_transport_mode(feed_path: str | Path) -> str:
     route_types = pd.to_numeric(routes["route_type"], errors="coerce").dropna()
     if route_types.empty:
         return "bus"
-    rail = int(route_types.isin(RAIL_ROUTE_TYPES).sum())
+    rail = sum(is_rail_route_type(int(code)) for code in route_types)
     return "train" if rail * 2 > len(route_types) else "bus"
 
 
@@ -1138,11 +1162,56 @@ def normalize_gtfs_feed(
 _GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
 
 
+def period_codes(
+    peak_periods: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Short code of each GTFS period, for the column names.
+
+    The default periods keep ``pam``, ``ppm`` and ``rod``. Other names
+    (``gtfs_peak_periods`` with names of your own) get their first three
+    letters (``"morning"`` -> ``mor``) if those are unique; otherwise they
+    are numbered ``p1``, ``p2``... in order. ``rest_of_day`` is always
+    ``rod``. A code has at most three characters, so every column fits the
+    Shapefile limit of ten (``tm_mor_wd``).
+    """
+    names = [*(peak_periods or DEFAULT_PEAK_PERIODS), "rest_of_day"]
+    codes = {
+        name: _GTFS_PERIOD_ABBR[name] for name in names if name in _GTFS_PERIOD_ABBR
+    }
+    custom = [name for name in names if name not in _GTFS_PERIOD_ABBR]
+    if not custom:
+        return {name: codes[name] for name in names}
+
+    def three_letters(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", slugify(name))[:3]
+
+    letters = [three_letters(name) for name in custom]
+    taken = set(_GTFS_PERIOD_ABBR.values())  # pam/ppm/rod always mean the defaults
+    usable = (
+        all(len(code) == 3 for code in letters)
+        and len(set(letters)) == len(letters)
+        and taken.isdisjoint(letters)
+        and not any(re.fullmatch(r"p\d+", code) for code in letters)
+    )
+    if usable:
+        codes.update(zip(custom, letters, strict=True))
+    else:
+        codes.update({name: f"p{i}" for i, name in enumerate(custom, start=1)})
+    return {name: codes[name] for name in names}
+
+
 _GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
 
 
-def _build_gtfs_edge_rename() -> dict[str, str]:
-    """Build the long-to-short name map for the GTFS edges layer."""
+def gtfs_edge_rename(
+    peak_periods: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Build the long-to-short name map for the GTFS edges layer.
+
+    The per-period columns use the codes of :func:`period_codes`, so
+    periods with names of your own are renamed (and kept) too.
+    """
+    abbreviations = period_codes(peak_periods)
     rename = {
         "route_short_name": "route_sh",
         "route_long_name": "route_ln",
@@ -1155,7 +1224,7 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
         "travel_time_seconds_min": "tts_mn",
         "travel_time_seconds_max": "tts_mx",
     }
-    for period, short_period in _GTFS_PERIOD_ABBR.items():
+    for period, short_period in abbreviations.items():
         rename[f"travel_time_seconds_mean_{period}"] = f"tts_m_{short_period}"
         rename[f"travel_time_seconds_median_{period}"] = f"tts_md_{short_period}"
         rename[f"trip_count_{period}"] = f"trips_{short_period}"
@@ -1164,7 +1233,7 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
         rename[f"trip_count_{day_type}"] = f"trips_{short_day}"
     # Period x day-type is abbreviated further (tm_/trp_) because fitting
     # all four parts doesn't work within ten characters any other way.
-    for period, short_period in _GTFS_PERIOD_ABBR.items():
+    for period, short_period in abbreviations.items():
         for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
             suffix = f"{short_period}_{short_day}"
             rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{suffix}"
@@ -1172,7 +1241,51 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
     return rename
 
 
-GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
+#: Long-to-short names with the default periods (see :func:`gtfs_edge_rename`).
+GTFS_EDGE_RENAME: dict[str, str] = gtfs_edge_rename()
+
+
+def gtfs_edge_columns(
+    peak_periods: Mapping[str, object] | None = None,
+) -> list[str]:
+    """Long names of the GTFS edge columns written, in order.
+
+    Includes the per-period columns of the periods actually used
+    (``gtfs_peak_periods``, or the defaults), so none is dropped.
+    """
+    periods = list(period_codes(peak_periods))
+    day_types = list(_GTFS_DAY_TYPE_ABBR)
+    return [
+        "edge_id",
+        "from_node",
+        "to_node",
+        "route_id",
+        "route_short_name",
+        "route_long_name",
+        "trip_count",
+        "travel_time_seconds_mean",
+        "travel_time_seconds_median",
+        "travel_time_seconds_min",
+        "travel_time_seconds_max",
+        *(f"travel_time_seconds_mean_{period}" for period in periods),
+        *(f"travel_time_seconds_median_{period}" for period in periods),
+        *(f"trip_count_{period}" for period in periods),
+        *(
+            f"{metric}_{day_type}"
+            for day_type in day_types
+            for metric in ("travel_time_seconds_mean", "trip_count")
+        ),
+        "days_of_week_summary",
+        "hourly_travel_times",
+        "hourly_trip_counts",
+        "geometry",
+        *(
+            f"{metric}_{period}_{day_type}"
+            for period in periods
+            for day_type in day_types
+            for metric in ("travel_time_seconds_mean", "trip_count")
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1306,7 @@ def download_gtfs(
     include_schedule_table: bool = True,
     province_codes: Iterable[int] | None = None,
     buffer_m: float = 0.0,
+    skipped: dict[str, str] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1213,6 +1327,12 @@ def download_gtfs(
     ``buffer_m`` widens the clipping area by that many metres (see
     :func:`study_area_geometry`), so stops just across the municipal
     boundary are kept.
+
+    Only feeds of the requested ``modes`` are kept, judging by the feed's
+    own route types (:func:`infer_transport_mode`): the NAP declares some
+    feeds as both bus and rail (e.g. Cercanías Renfe), so asking for bus
+    may also download a train feed. Such a feed is skipped and logged and,
+    if a ``skipped`` dict is given, added to it as ``{dataset: mode}``.
     """
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
@@ -1230,9 +1350,22 @@ def download_gtfs(
     if clip_to_boundary and not boundary.empty:
         filter_geometry = study_area_geometry(boundary, buffer_m=buffer_m)
 
+    wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     for zip_path in zips:
         dataset_name = slugify(Path(zip_path).stem)
+        # "bus" or "train", from the feed's route_type: decides the output
+        # folder, and whether the feed was asked for at all.
+        mode = infer_transport_mode(zip_path)
+        if _NAP_ID_OF_MODE[mode] not in wanted:
+            logger.info(
+                "Skipping feed %s: its routes are %s, which was not requested.",
+                zip_path.name,
+                mode,
+            )
+            if skipped is not None:
+                skipped[dataset_name] = mode
+            continue
         try:
             stops, stop_edges, schedule = normalize_gtfs_feed(
                 zip_path,
@@ -1252,8 +1385,6 @@ def download_gtfs(
             "nodes": stops,
             "edges": stop_edges,
             "schedule": schedule,
-            # "bus" or "train", inferred from the feed's route_type. Used
-            # by download_network to decide the dataset's output folder.
-            "mode": infer_transport_mode(zip_path),
+            "mode": mode,
         }
     return results

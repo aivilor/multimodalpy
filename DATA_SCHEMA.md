@@ -48,17 +48,27 @@ text joined with `"; "` (`"46; 12"`); `find_area()` returns them as lists.
 | `area_name` | Label of the area: the name given, or the boundaries file's name |
 | `prov_codes`, `prov_names` | INE codes and names of the provinces whose GTFS feeds are downloaded |
 | `mun_codes`, `mun_names` | 5-digit INE codes and names of the municipalities in the area |
-| `matched_column`, `matched_value`, `matched_rows`, `area_code` | How a municipality name was found; with your own polygon, only `matched_rows` (polygons merged) |
-| `source_path` | Boundaries file read |
+| `match_col`, `match_val`, `match_rows`, `area_code` | How a municipality name was found (the column and value matched, and the rows merged); with your own polygon, only `match_rows` (polygons merged) |
+| `source` | Boundaries file read |
+
+Every column name has at most ten characters, so none is cut short in a
+Shapefile.
 
 `<mode>` is `driving`, `walking` or `bike`. `<dataset>` is the name of the GTFS
 file downloaded from the NAP, normalised (e.g. `20260921_040013_renfe_cerca`).
 
 A GTFS dataset goes under `train/` when most of its routes have a rail
-`route_type` in `routes.txt` (tram 0, subway 1, rail 2, cable tram 5,
-funicular 7, monorail 12) and under `bus/` otherwise. The feed itself is read
-rather than the NAP metadata, because the NAP declares some datasets as bus and
-rail at once (Cercanías Renfe). An unreadable feed is treated as bus.
+`route_type` in `routes.txt` and under `bus/` otherwise. Rail types are the
+basic tram 0, subway 1, rail 2, cable tram 5, funicular 7 and monorail 12, and
+the extended (European HVT) railway 100–199 (e.g. 101 high-speed rail, used by
+OUIGO), suburban, urban and metro rail 300–699, tram 900–999 and funicular
+1400–1499. The feed itself is read rather than the NAP metadata, because the NAP
+declares some datasets as bus and rail at once (Cercanías Renfe). An unreadable
+feed is treated as bus.
+
+Only the feeds of the modes asked for are written: a feed the NAP returns for
+`bus` whose routes turn out to be rail (or the other way round) is skipped and
+listed in the manifest's `skipped_datasets`, e.g. `{"renfe_cerca": "train"}`.
 
 ## `download_network()` parameters that shape the output
 
@@ -245,7 +255,12 @@ long name.
 ### By period of the day
 
 Default periods: morning peak 07:00–09:00, evening peak 17:00–20:00, rest of the
-day everything else. They can be changed with `gtfs_peak_periods`.
+day everything else. They can be changed with `gtfs_peak_periods`. Periods with
+names of your own get a three-letter code instead of `pam` / `ppm`: their first
+three letters (`{"morning": (6, 9)}` gives `tts_m_mor`, `tm_mor_wd`…), or `p1`,
+`p2`… in order when those clash. `pam`, `ppm` and `rod` always mean the default
+periods. The manifest's `gtfs_period_codes` gives each period's code, e.g.
+`{"morning": "mor", "rest_of_day": "rod"}`.
 
 | Column | Former name | Meaning |
 |---|---|---|
@@ -448,6 +463,7 @@ A GTFS matrix only has the weights present in its edge layer.
 | `weights` | Weight names and units, e.g. `[{"name": "tts", "unit": "s"}, …]`. |
 | `default_weight` | Weight stored in `data`. |
 | `gtfs_periods` | GTFS only: start and end hour of each peak period behind `pam` / `ppm`, e.g. `{"peak_am": [7, 9], "peak_pm": [17, 20]}`. `rod` is every other hour. |
+| `gtfs_period_codes` | GTFS only: code of each period in the weight names, e.g. `{"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}`. |
 | `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `download_network()`, or `null`. |
 | `multimodalpy_version` | Version that wrote the file. |
 
@@ -574,7 +590,7 @@ downloaded once.
 | `tm` | mean travel time (four-part columns) |
 | `trips`, `trp` | number of trips |
 | `m`, `md`, `mn`, `mx` | mean, median, minimum, maximum |
-| `pam`, `ppm`, `rod` | morning peak, evening peak, rest of day |
+| `pam`, `ppm`, `rod` | morning peak, evening peak, rest of day (other periods: see `gtfs_period_codes`) |
 | `wd`, `we` | weekday, weekend |
 | `h_` | per hour band |
 | `sh`, `ln` | short name, long name |

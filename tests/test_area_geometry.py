@@ -76,7 +76,7 @@ def test_no_name_or_code_columns_are_needed(tmp_path):
 def test_area_name_defaults_to_the_file_name(tmp_path):
     row = find(write(tmp_path, [A], name="pateval.geojson"))
     assert row["area_name"] == "pateval"
-    assert row["source_path"].endswith("pateval.geojson")
+    assert row["source"].endswith("pateval.geojson")
 
 
 def test_area_name_is_kept_as_the_label(tmp_path):
@@ -89,7 +89,7 @@ def test_several_polygons_are_merged_into_one(tmp_path):
         boundaries_path=write(tmp_path, [A, B]), target_crs="EPSG:25830"
     )
     assert len(result) == 1
-    assert result.iloc[0]["matched_rows"] == 2
+    assert result.iloc[0]["match_rows"] == 2
     assert result.geometry.iloc[0].area == pytest.approx(A.union(B).area)
 
 
@@ -113,6 +113,38 @@ def test_any_crs_is_converted(tmp_path, crs):
 def test_shapefile_is_accepted(tmp_path):
     row = find(write(tmp_path, [B], name="area.shp"))
     assert row["mun_names"] == ["Beta"]
+
+
+def test_geopackage_is_accepted(tmp_path):
+    row = find(write(tmp_path, [B], name="area.gpkg"))
+    assert row["mun_names"] == ["Beta"]
+    assert row["area_name"] == "area"
+
+
+def write_layers(path, layers):
+    for layer, geometries in layers.items():
+        gpd.GeoDataFrame(geometry=geometries, crs="EPSG:25830").to_file(
+            path, layer=layer
+        )
+    return path
+
+
+def test_geopackage_uses_its_only_polygon_layer(tmp_path):
+    path = write_layers(
+        tmp_path / "plan.gpkg",
+        {
+            "stations": [Point(725 * KM, 4375 * KM)],
+            "area": [A],
+            "axes": [LineString([(720 * KM, 4370 * KM), (730 * KM, 4380 * KM)])],
+        },
+    )
+    assert find(path)["mun_names"] == ["Alfa"]
+
+
+def test_geopackage_with_several_polygon_layers_is_ambiguous(tmp_path):
+    path = write_layers(tmp_path / "plan.gpkg", {"north": [C], "south": [A]})
+    with pytest.raises(ValueError, match=r"several layers \(north, south\)"):
+        find(path)
 
 
 def test_invalid_polygon_is_repaired(tmp_path):
@@ -245,9 +277,9 @@ def test_boundary_for_export_joins_the_lists(tmp_path):
     assert boundary.iloc[0]["prov_codes"] == [12, 46]  # the input is untouched
 
 
-# matched_column, matched_value... are truncated in a Shapefile (as before);
-# the new list columns are not.
-@pytest.mark.filterwarnings("ignore:Column names longer than 10")
+# No column is longer than the Shapefile's ten characters: nothing is cut short
+# (GDAL would warn, and the warning is an error here).
+@pytest.mark.filterwarnings("error:Column names longer than 10")
 @pytest.mark.parametrize("name", ["boundary.gpkg", "boundary.shp", "boundary.geojson"])
 def test_exported_boundary_can_be_written(tmp_path, name):
     boundary = area.find_area(boundaries_path=write(tmp_path, [A]))

@@ -57,8 +57,8 @@ def packaged(tmp_path, monkeypatch):
 def test_find_area_exact_name(packaged, name, natcode, province):
     result = area.find_area(name)
     row = result.iloc[0]
-    assert row["matched_value"] == name
-    assert row["matched_column"] == "nombre"
+    assert row["match_val"] == name
+    assert row["match_col"] == "nombre"
     assert row["prov_codes"] == [province]
     assert row["mun_codes"] == [natcode[-5:]]
     assert len(result) == 1
@@ -68,7 +68,7 @@ def test_find_area_exact_name(packaged, name, natcode, province):
 @pytest.mark.parametrize(("name", "natcode", "province"), CITIES)
 def test_find_area_is_case_insensitive(packaged, name, natcode, province):
     result = area.find_area(name.upper())
-    assert result.iloc[0]["matched_value"] == name
+    assert result.iloc[0]["match_val"] == name
 
 
 @pytest.mark.parametrize(
@@ -82,7 +82,7 @@ def test_find_area_is_case_insensitive(packaged, name, natcode, province):
 )
 def test_find_area_ignores_accents_case_and_whitespace(packaged, query, expected_name):
     result = area.find_area(query)
-    assert result.iloc[0]["matched_value"] == expected_name
+    assert result.iloc[0]["match_val"] == expected_name
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ def test_find_area_ignores_accents_case_and_whitespace(packaged, query, expected
 )
 def test_find_area_tolerates_small_typos(packaged, typo, expected_name):
     result = area.find_area(typo)
-    assert result.iloc[0]["matched_value"] == expected_name
+    assert result.iloc[0]["match_val"] == expected_name
 
 
 def test_find_area_rejects_name_too_different_from_any_city(packaged):
@@ -115,8 +115,8 @@ def test_find_area_by_area_code(packaged, name, natcode, province):
     # No area_name needed: the label is the municipality's name.
     result = area.find_area(area_code=natcode)
     row = result.iloc[0]
-    assert row["matched_column"] == "NATCODE"
-    assert row["matched_value"] == natcode
+    assert row["match_col"] == "NATCODE"
+    assert row["match_val"] == natcode
     assert row["area_name"] == name
     assert row["prov_codes"] == [province]
     assert row["mun_codes"] == [natcode[-5:]]
@@ -182,9 +182,9 @@ def test_find_area_raises_when_no_name_column_present(tmp_path):
 # File-level validation
 # ---------------------------------------------------------------------------
 def test_find_area_rejects_unsupported_suffix(tmp_path):
-    bad_path = tmp_path / "boundaries.gpkg"
+    bad_path = tmp_path / "boundaries.kml"
     bad_path.write_bytes(b"")
-    with pytest.raises(ValueError, match="only accepts shapefile"):
+    with pytest.raises(ValueError, match="only accepts Shapefile"):
         area.find_area(boundaries_path=bad_path)
 
 

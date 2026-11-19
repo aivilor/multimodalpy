@@ -203,9 +203,7 @@ def test_osm_export_has_single_tags_numeric_maxspeed_and_raw_values():
         **common,
     )
 
-    _, edges = _osm.build_final_osm_layers(
-        graph, layer_id="walking", mode="walk"
-    )
+    _, edges = _osm.build_final_osm_layers(graph, layer_id="walking", mode="walk")
     edges = edges.set_index("edge_id")
 
     assert edges.loc[10, "highway"] == "footway"
@@ -236,6 +234,18 @@ def _feed(tmp_path, route_types):
         ([3], "bus"),
         ([3, 3, 2], "bus"),
         ([2, 2, 3], "train"),
+        # Extended route types (European HVT codes).
+        ([101], "train"),  # high-speed rail, e.g. OUIGO
+        ([102, 103], "train"),  # long distance, inter-regional
+        ([109], "train"),  # suburban railway
+        ([400, 401], "train"),  # urban railway, metro
+        ([900], "train"),  # tram
+        ([1400], "train"),  # funicular
+        ([700, 702], "bus"),  # bus service, express bus
+        ([200], "bus"),  # coach
+        ([800], "bus"),  # trolleybus
+        ([1300], "bus"),  # aerial lift, like basic type 6
+        ([101, 101, 700], "train"),
     ],
 )
 def test_transport_mode_follows_the_majority_route_type(
@@ -259,9 +269,21 @@ def test_unreadable_feed_is_treated_as_bus(tmp_path):
 # Standard OSM edge schema, identical in every output format
 # ---------------------------------------------------------------------------
 STANDARD_EDGE_COLUMNS = [
-    "edge_id", "from_node", "to_node", "highway", "hwy_raw", "lanes",
-    "maxspeed", "spd_raw", "name", "oneway", "reversed", "length", "tts",
-    "connector", "geometry",
+    "edge_id",
+    "from_node",
+    "to_node",
+    "highway",
+    "hwy_raw",
+    "lanes",
+    "maxspeed",
+    "spd_raw",
+    "name",
+    "oneway",
+    "reversed",
+    "length",
+    "tts",
+    "connector",
+    "geometry",
 ]
 
 
@@ -271,8 +293,14 @@ def _walk_graph_without_optional_tags() -> nx.MultiDiGraph:
     graph.add_node(1, x=0.0, y=0.0)
     graph.add_node(2, x=0.001, y=0.0)
     graph.add_edge(
-        1, 2, osmid=10, highway="footway", length=111.0,
-        oneway=False, reversed=False, geometry=LineString([(0, 0), (0.001, 0)]),
+        1,
+        2,
+        osmid=10,
+        highway="footway",
+        length=111.0,
+        oneway=False,
+        reversed=False,
+        geometry=LineString([(0, 0), (0.001, 0)]),
     )
     return graph
 

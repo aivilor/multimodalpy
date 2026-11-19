@@ -77,15 +77,15 @@ def test_bilingual_part_wins_over_longer_names(packaged, query, expected, provin
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # an official name needs no warning
         row = find(packaged, query)
-    assert row["matched_value"] == expected
-    assert row["matched_rows"] == 1
+    assert row["match_val"] == expected
+    assert row["match_rows"] == 1
     assert row["prov_codes"] == [province]
 
 
 def test_whole_word_match_skips_longer_words(packaged):
     with pytest.warns(UserWarning, match="whole words"):
         row = find(packaged, "Castellón")
-    assert row["matched_value"] == "Castelló de la Plana/Castellón de la Plana"
+    assert row["match_val"] == "Castelló de la Plana/Castellón de la Plana"
     assert row["prov_codes"] == [12]
 
 
@@ -147,13 +147,13 @@ def test_typo_tied_between_two_towns_is_ambiguous(packaged):
 def test_typo_resolved_with_province_warns(packaged):
     with pytest.warns(UserWarning, match="typo"):
         row = find(packaged, "Gerona", province="Girona")
-    assert row["matched_value"] == "Girona"
+    assert row["match_val"] == "Girona"
 
 
 def test_transposition_counts_as_one_edit(packaged):
     with pytest.warns(UserWarning, match="Valencai"):
         row = find(packaged, "Valencai")
-    assert row["matched_value"] == "València"
+    assert row["match_val"] == "València"
 
 
 def test_unrelated_name_is_not_forced_onto_a_town(packaged):
@@ -173,7 +173,7 @@ def test_typo_distance_handles_transpositions():
 # ---------------------------------------------------------------------------
 def test_area_code_accepts_five_digit_ine_code(packaged):
     row = find(packaged, "ignored", area_code="46250")
-    assert row["matched_value"] == "34104646250"
+    assert row["match_val"] == "34104646250"
     assert row["prov_codes"] == [46]
 
 
