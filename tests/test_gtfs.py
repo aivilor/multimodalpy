@@ -228,12 +228,37 @@ def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
         calendar=t["calendar"],
     )
     standalone_schedule = _gtfs.build_gtfs_schedule_table(
-        *args, dataset_name="ds", calendar=t["calendar"]
+        *args, dataset_name="ds", calendar=t["calendar"], filter_geometry=AREA
     )
     pd.testing.assert_frame_equal(
         edges.reset_index(drop=True), standalone_edges.reset_index(drop=True)
     )
     pd.testing.assert_frame_equal(schedule, standalone_schedule)
+
+
+# ---------------------------------------------------------------------------
+# Schedule: clipped like the edges
+# ---------------------------------------------------------------------------
+def test_schedule_is_clipped_to_the_edges(feed):
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=True,
+    )
+    assert set(schedule["edge_id"]) == set(edges["edge_id"])
+    assert "t5" not in set(schedule["trip_id"])  # X -> Y never touches the area
+    assert "t4" in set(schedule["trip_id"])  # W -> E crosses it, as its edge does
+    # t1: A-B, B-C; t2: A-B; t3: B-C; t4: W-E.
+    assert len(schedule) == 5
+
+
+def test_schedule_without_an_area_keeps_every_trip(feed):
+    *_, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", include_schedule_table=True
+    )
+    assert set(schedule["trip_id"]) == {"t1", "t2", "t3", "t4", "t5"}
 
 
 # ---------------------------------------------------------------------------

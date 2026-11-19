@@ -319,8 +319,8 @@ any other way. `tm_` is mean travel time and `trp_` is number of trips.
 ## GTFS schedule
 
 Written only with `write_schedule=True`: one row per trip and edge, with no geometry.
-It is **not** clipped to the study area, so it holds the full timetable of every
-downloaded feed, including operators with no stop inside the area.
+It is clipped like the [edges](#gtfs-edges): it holds the segments of the trips
+that touch the study area, so every row has its edge.
 
 ## NetworkX graphs (`graph.json`)
 
@@ -578,7 +578,6 @@ downloaded once.
 - In the **networkx** export, GTFS graphs keep the long attribute names
   (`trip_count`, `travel_time_seconds_mean`, …), since JSON has no name length
   limit. OSM graphs follow the edge schema above.
-- The **GTFS schedule** is not clipped to the study area (see above).
 - `lanes` is still exported as text and can hold `;`-joined values.
 - In the **networkx** export, OSM node ids are integers and GTFS node ids are
   text, so the graphs cannot be joined on node id as they are.

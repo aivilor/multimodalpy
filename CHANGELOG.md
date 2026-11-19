@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edges use, and only those; a stop just outside the area that ends an edge is
   kept with the new column `in_area = False` (as the matrix already did). The
   NetworkX graph carries `in_area` too.
+- The GTFS schedule (`write_schedule=True`) was not clipped to the study area:
+  it held the whole timetable of each feed (86,503 rows for the Valencia
+  interurban feed, of which 1,415 belong to edges in the area). It is now
+  clipped like the edges, so every row has its edge (#90).
 
 ## [0.5.0] - 2026-11-18
 

@@ -744,12 +744,15 @@ def build_gtfs_schedule_table(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     records: pd.DataFrame | None = None,
+    filter_geometry=None,
 ) -> pd.DataFrame:
     """Option B: a flat table (no geometry), one record per trip and segment.
 
     Meant to be joined with the ``edges`` layer by ``edge_id`` when the
     full schedule detail is needed (every step of every trip), without
-    losing that granularity in the aggregated spatial layer.
+    losing that granularity in the aggregated spatial layer. With
+    ``filter_geometry``, only the segments that touch it are kept: the
+    same test as the edges layer, so every row has its edge.
 
     ``records`` takes the output of ``_build_stop_to_stop_trip_records``
     if it was already built with the same arguments (as
@@ -769,6 +772,7 @@ def build_gtfs_schedule_table(
             hour_range=hour_range,
             peak_periods=peak_periods,
         )
+    records = _filter_records_by_geometry(records, filter_geometry)
     columns = _existing_columns(
         records,
         [
@@ -1166,6 +1170,8 @@ def normalize_gtfs_feed(
 
     schedule_df = None
     if include_schedule_table:
+        # Clipped like the edges: the trips of the rest of the feed's
+        # region (a whole province or more) are not in the area.
         schedule_df = build_gtfs_schedule_table(
             stop_times,
             stops,
@@ -1173,6 +1179,7 @@ def normalize_gtfs_feed(
             routes,
             dataset_name=dataset_name,
             records=records,
+            filter_geometry=filter_geometry,
         )
 
     if target_crs:
