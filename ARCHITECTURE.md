@@ -32,6 +32,7 @@ multimodalpy/
 │       ├── _boundaries.py     # boundaries file (pooch), study area by name or geometry
 │       ├── _nap.py            # NAP client: API key, .env, GTFS feed downloads
 │       ├── _osm.py            # OSM download and standardization per mode
+│       ├── _overpass.py       # Overpass access: OSMDownloadError, retries, settings
 │       ├── _gtfs.py           # GTFS download and standardization
 │       ├── _matrix.py         # CSR matrix (matrix.npz) and network loading
 │       ├── _writers.py        # writing every output format
@@ -44,6 +45,7 @@ multimodalpy/
 │   ├── test_area_cities.py
 │   ├── test_area_geometry.py
 │   ├── test_multipart_area.py
+│   ├── test_overpass.py
 │   ├── test_gtfs.py
 │   ├── test_matrix.py
 │   ├── test_network_loading.py

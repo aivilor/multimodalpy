@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `download_network()` and `download_osm()` take `overpass_url`, to download the
+  OpenStreetMap networks from another Overpass server, and `osm_timeout`, the
+  seconds to wait for each answer (`--overpass-url` and `--osm-timeout` on the
+  command line) (#85). There is no automatic switch to another server.
+- `OSMDownloadError` (in `multimodalpy.network`): an OpenStreetMap network could
+  not be downloaded. It names the network, the server and the HTTP status, and
+  says whether the failure is usually temporary (#85).
+- The manifest's `failed_modes` lists the OpenStreetMap networks that could not
+  be downloaded, with the reason (#85).
+
 ### Changed
+- `osmnx>=2.0` is required: the code already used the osmnx 2 API, so osmnx 1
+  failed with an `AttributeError` (#85).
+- While downloading, the requests to Overpass carry a multimodalpy User-Agent,
+  and osmnx's cache is kept next to the municipal boundaries
+  (`pooch.os_cache("multimodalpy")`) instead of a `cache` folder in the working
+  directory, so a rerun from any folder reuses what was downloaded. osmnx
+  settings you chose yourself are kept (#85).
 - **Breaking:** `boundaries_path` is now the study area itself, not a file to
   look a municipality name up in (#83). Before, `download_network()` and
   `find_area()` searched `area_name` in the file's name columns, so a file
@@ -63,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   province of the area are now downloaded, and a feed published for several of
   them (e.g. Renfe) only once. The NAP download report
   (`nap_download_report.csv`) has a `province_code` column.
+- When the public Overpass server was at capacity, the OpenStreetMap download
+  failed at once with a `JSONDecodeError` or a `ResponseStatusCodeError`
+  carrying the server's whole HTML page, and every network already downloaded
+  was lost (#85). Now:
+  - temporary failures (server busy, timeout, lost connection) are retried four
+    times, waiting 10, 20, 40 and 80 seconds;
+  - osmnx no longer retries 429 and 504 answers forever, no longer waits a
+    fixed 60 seconds when the server's status page can't be read, and no longer
+    returns the partial data of a query the server cut short as if it were
+    complete: those are retried too;
+  - a network that still fails is reported in `failed_modes`, and the others
+    are written; `OSMDownloadError` is raised only if nothing could be
+    downloaded.
 
 ## [0.4.0] - 2026-11-03
 

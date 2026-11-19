@@ -207,8 +207,9 @@ def download_network(
         ``unconnected_parts``. Defaults to True; has no effect on
         single-polygon municipalities.
     overpass_url : str, optional
-        Overpass API server for the OpenStreetMap networks, e.g.
-        ``"https://overpass.openstreetmap.fr/api"``. Defaults to
+        Overpass API server for the OpenStreetMap networks: its ``.../api``
+        address (e.g. ``"https://overpass.private.coffee/api"``; see the
+        list of public instances in the OpenStreetMap wiki). Defaults to
         ``osmnx.settings.overpass_url`` (the public ``overpass-api.de``,
         often at capacity). A temporary failure is retried four times
         (10, 20, 40 and 80 s) before giving up; there's no automatic switch
