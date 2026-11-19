@@ -808,10 +808,10 @@ def find_area(
           provinces, whose GTFS feeds are downloaded;
         - ``mun_codes`` / ``mun_names``: INE codes and names of the
           municipalities in the area;
-        - ``matched_column``, ``matched_value``, ``matched_rows`` and
+        - ``match_col``, ``match_val``, ``match_rows`` and
           ``area_code``: how the name was found (empty by geometry, except
-          ``matched_rows``, the number of polygons merged);
-        - ``source_path``: the boundaries file read.
+          ``match_rows``, the number of polygons merged);
+        - ``source``: the boundaries file read.
 
     Raises
     ------
@@ -853,11 +853,11 @@ def find_area(
                     "prov_names": _province_labels(prov_codes),
                     "mun_codes": mun_codes,
                     "mun_names": mun_names,
-                    "matched_column": None,
-                    "matched_value": None,
-                    "matched_rows": len(gdf),
+                    "match_col": None,
+                    "match_val": None,
+                    "match_rows": len(gdf),
                     "area_code": None,
-                    "source_path": str(boundaries_path),
+                    "source": str(boundaries_path),
                 }
             ],
             geometry=[geometry],
@@ -924,11 +924,11 @@ def find_area(
                 "prov_names": _province_labels(prov_codes),
                 "mun_codes": mun_codes,
                 "mun_names": mun_names,
-                "matched_column": matched_column,
-                "matched_value": matched_value,
-                "matched_rows": len(rows),
+                "match_col": matched_column,
+                "match_val": matched_value,
+                "match_rows": len(rows),
                 "area_code": area_code,
-                "source_path": str(default_path),
+                "source": str(default_path),
             }
         ],
         geometry=[geometry],

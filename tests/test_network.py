@@ -636,7 +636,7 @@ def test_download_network_with_real_find_area(tmp_path, backends, monkeypatch):
 
     assert "walking/nodes.geojson" in manifest["files"]
     used = backends["osm"][0]["boundary"].iloc[0]
-    assert used["matched_value"] == "Segovia"
+    assert used["match_val"] == "Segovia"
     assert used["prov_codes"] == [40]
 
 

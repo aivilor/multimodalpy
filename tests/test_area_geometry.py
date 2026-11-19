@@ -76,7 +76,7 @@ def test_no_name_or_code_columns_are_needed(tmp_path):
 def test_area_name_defaults_to_the_file_name(tmp_path):
     row = find(write(tmp_path, [A], name="pateval.geojson"))
     assert row["area_name"] == "pateval"
-    assert row["source_path"].endswith("pateval.geojson")
+    assert row["source"].endswith("pateval.geojson")
 
 
 def test_area_name_is_kept_as_the_label(tmp_path):
@@ -89,7 +89,7 @@ def test_several_polygons_are_merged_into_one(tmp_path):
         boundaries_path=write(tmp_path, [A, B]), target_crs="EPSG:25830"
     )
     assert len(result) == 1
-    assert result.iloc[0]["matched_rows"] == 2
+    assert result.iloc[0]["match_rows"] == 2
     assert result.geometry.iloc[0].area == pytest.approx(A.union(B).area)
 
 
@@ -277,9 +277,9 @@ def test_boundary_for_export_joins_the_lists(tmp_path):
     assert boundary.iloc[0]["prov_codes"] == [12, 46]  # the input is untouched
 
 
-# matched_column, matched_value... are truncated in a Shapefile (as before);
-# the new list columns are not.
-@pytest.mark.filterwarnings("ignore:Column names longer than 10")
+# No column is longer than the Shapefile's ten characters: nothing is cut short
+# (GDAL would warn, and the warning is an error here).
+@pytest.mark.filterwarnings("error:Column names longer than 10")
 @pytest.mark.parametrize("name", ["boundary.gpkg", "boundary.shp", "boundary.geojson"])
 def test_exported_boundary_can_be_written(tmp_path, name):
     boundary = area.find_area(boundaries_path=write(tmp_path, [A]))

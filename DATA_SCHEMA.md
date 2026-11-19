@@ -48,8 +48,11 @@ text joined with `"; "` (`"46; 12"`); `find_area()` returns them as lists.
 | `area_name` | Label of the area: the name given, or the boundaries file's name |
 | `prov_codes`, `prov_names` | INE codes and names of the provinces whose GTFS feeds are downloaded |
 | `mun_codes`, `mun_names` | 5-digit INE codes and names of the municipalities in the area |
-| `matched_column`, `matched_value`, `matched_rows`, `area_code` | How a municipality name was found; with your own polygon, only `matched_rows` (polygons merged) |
-| `source_path` | Boundaries file read |
+| `match_col`, `match_val`, `match_rows`, `area_code` | How a municipality name was found (the column and value matched, and the rows merged); with your own polygon, only `match_rows` (polygons merged) |
+| `source` | Boundaries file read |
+
+Every column name has at most ten characters, so none is cut short in a
+Shapefile.
 
 `<mode>` is `driving`, `walking` or `bike`. `<dataset>` is the name of the GTFS
 file downloaded from the NAP, normalised (e.g. `20260921_040013_renfe_cerca`).
