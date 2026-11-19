@@ -280,3 +280,99 @@ def test_feeds_of_unrequested_modes_are_skipped(
     )
     assert {name: out["mode"] for name, out in results.items()} == kept
     assert found == skipped
+
+
+# ---------------------------------------------------------------------------
+# Custom peak periods: codes and columns
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("periods", "expected"),
+    [
+        (None, {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}),
+        (
+            {"morning": (6, 9), "evening": (18, 21)},
+            {"morning": "mor", "evening": "eve", "rest_of_day": "rod"},
+        ),
+        (
+            {"peak_am": (7, 9), "night": (22, 24)},
+            {"peak_am": "pam", "night": "nig", "rest_of_day": "rod"},
+        ),
+        ({"Mañana": (7, 10)}, {"Mañana": "man", "rest_of_day": "rod"}),
+        # Clashing first letters: all custom periods are numbered.
+        (
+            {"morning": (6, 8), "mornings2": (8, 10)},
+            {"morning": "p1", "mornings2": "p2", "rest_of_day": "rod"},
+        ),
+        # Too short, or the same as a default code.
+        ({"am": (7, 9)}, {"am": "p1", "rest_of_day": "rod"}),
+        ({"pamplona": (7, 9)}, {"pamplona": "p1", "rest_of_day": "rod"}),
+    ],
+)
+def test_period_codes(periods, expected):
+    assert _gtfs.period_codes(periods) == expected
+
+
+@pytest.mark.parametrize(
+    "periods",
+    [
+        None,
+        {"morning": (6, 9), "evening": (18, 21)},
+        {f"period_{i}": (i, i + 1) for i in range(12)},  # p1 ... p12
+    ],
+)
+def test_short_names_fit_the_shapefile_and_are_unique(periods):
+    rename = _gtfs.gtfs_edge_rename(periods)
+    targets = list(rename.values())
+    assert max(len(name) for name in targets) <= 10
+    assert len(targets) == len(set(targets))
+
+
+def test_default_columns_are_unchanged():
+    """The columns kept with the default periods, as before custom periods."""
+    expected = [
+        "edge_id", "from_node", "to_node", "route_id", "route_short_name",
+        "route_long_name", "trip_count", "travel_time_seconds_mean",
+        "travel_time_seconds_median", "travel_time_seconds_min",
+        "travel_time_seconds_max",
+        "travel_time_seconds_mean_peak_am", "travel_time_seconds_mean_peak_pm",
+        "travel_time_seconds_mean_rest_of_day",
+        "travel_time_seconds_median_peak_am",
+        "travel_time_seconds_median_peak_pm",
+        "travel_time_seconds_median_rest_of_day",
+        "trip_count_peak_am", "trip_count_peak_pm", "trip_count_rest_of_day",
+        "travel_time_seconds_mean_weekday", "trip_count_weekday",
+        "travel_time_seconds_mean_weekend", "trip_count_weekend",
+        "days_of_week_summary", "hourly_travel_times", "hourly_trip_counts",
+        "geometry",
+    ]  # fmt: skip
+    for period in ("peak_am", "peak_pm", "rest_of_day"):
+        for day_type in ("weekday", "weekend"):
+            expected.append(f"travel_time_seconds_mean_{period}_{day_type}")
+            expected.append(f"trip_count_{period}_{day_type}")
+    assert _gtfs.gtfs_edge_columns() == expected
+    assert _gtfs.gtfs_edge_rename() == _gtfs.GTFS_EDGE_RENAME
+
+
+def test_every_period_column_of_a_feed_is_kept(feed):
+    """What normalize_gtfs_feed computes for custom periods is all kept."""
+    periods = {"morning": (6, 9), "evening": (17, 20)}
+    _, edges, _ = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        peak_periods=periods,
+        include_schedule_table=False,
+    )
+    per_period = [
+        column
+        for column in edges.columns
+        if any(name in column for name in ("morning", "evening", "rest_of_day"))
+    ]
+    assert "travel_time_seconds_mean_morning" in per_period
+    assert "trip_count_evening_weekday" in per_period
+    kept = _gtfs.gtfs_edge_columns(periods)
+    assert set(per_period) <= set(kept)
+    rename = _gtfs.gtfs_edge_rename(periods)
+    assert rename["travel_time_seconds_mean_morning"] == "tts_m_mor"
+    assert rename["trip_count_evening_weekday"] == "trp_eve_wd"

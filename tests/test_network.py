@@ -1244,6 +1244,33 @@ def test_cli_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 # Overpass failures
 # ---------------------------------------------------------------------------
+def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
+    result = make_gtfs_result("bus")
+    edges = result["edges"]
+    edges["travel_time_seconds_mean_morning"] = [80.0]
+    edges["trip_count_morning"] = [4]
+    edges["travel_time_seconds_mean_morning_weekday"] = [82.0]
+    edges["travel_time_seconds_mean_rest_of_day"] = [99.0]
+    backends["gtfs_result"] = {"ds1": result}
+
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        formats=["geojson", "matrix"],
+        api_key="key",
+        gtfs_peak_periods={"morning": (6, 9)},
+    )
+
+    assert manifest["gtfs_period_codes"] == {"morning": "mor", "rest_of_day": "rod"}
+    written = gpd.read_file(tmp_path / "bus" / "ds1" / "edges.geojson")
+    assert {"tts_m_mor", "trips_mor", "tm_mor_wd", "tts_m_rod"} <= set(written.columns)
+    matrix = io.read_matrix(tmp_path / "bus" / "ds1" / "matrix.npz", weight="tm_mor_wd")
+    assert matrix.weight == "tm_mor_wd"
+    assert matrix.matrix.data.tolist() == [82.0]
+    assert matrix.meta["gtfs_period_codes"]["morning"] == "mor"
+
+
 def test_skipped_gtfs_feeds_are_listed_in_the_manifest(tmp_path, backends):
     backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
     backends["gtfs_skipped"] = {"ouigo": "train"}

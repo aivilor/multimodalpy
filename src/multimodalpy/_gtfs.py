@@ -24,7 +24,8 @@ No file is written here; that's done by ``_writers``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile, ZipFile
@@ -1161,11 +1162,56 @@ def normalize_gtfs_feed(
 _GTFS_PERIOD_ABBR = {"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}
 
 
+def period_codes(
+    peak_periods: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Short code of each GTFS period, for the column names.
+
+    The default periods keep ``pam``, ``ppm`` and ``rod``. Other names
+    (``gtfs_peak_periods`` with names of your own) get their first three
+    letters (``"morning"`` -> ``mor``) if those are unique; otherwise they
+    are numbered ``p1``, ``p2``... in order. ``rest_of_day`` is always
+    ``rod``. A code has at most three characters, so every column fits the
+    Shapefile limit of ten (``tm_mor_wd``).
+    """
+    names = [*(peak_periods or DEFAULT_PEAK_PERIODS), "rest_of_day"]
+    codes = {
+        name: _GTFS_PERIOD_ABBR[name] for name in names if name in _GTFS_PERIOD_ABBR
+    }
+    custom = [name for name in names if name not in _GTFS_PERIOD_ABBR]
+    if not custom:
+        return {name: codes[name] for name in names}
+
+    def three_letters(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", slugify(name))[:3]
+
+    letters = [three_letters(name) for name in custom]
+    taken = set(_GTFS_PERIOD_ABBR.values())  # pam/ppm/rod always mean the defaults
+    usable = (
+        all(len(code) == 3 for code in letters)
+        and len(set(letters)) == len(letters)
+        and taken.isdisjoint(letters)
+        and not any(re.fullmatch(r"p\d+", code) for code in letters)
+    )
+    if usable:
+        codes.update(zip(custom, letters, strict=True))
+    else:
+        codes.update({name: f"p{i}" for i, name in enumerate(custom, start=1)})
+    return {name: codes[name] for name in names}
+
+
 _GTFS_DAY_TYPE_ABBR = {"weekday": "wd", "weekend": "we"}
 
 
-def _build_gtfs_edge_rename() -> dict[str, str]:
-    """Build the long-to-short name map for the GTFS edges layer."""
+def gtfs_edge_rename(
+    peak_periods: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Build the long-to-short name map for the GTFS edges layer.
+
+    The per-period columns use the codes of :func:`period_codes`, so
+    periods with names of your own are renamed (and kept) too.
+    """
+    abbreviations = period_codes(peak_periods)
     rename = {
         "route_short_name": "route_sh",
         "route_long_name": "route_ln",
@@ -1178,7 +1224,7 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
         "travel_time_seconds_min": "tts_mn",
         "travel_time_seconds_max": "tts_mx",
     }
-    for period, short_period in _GTFS_PERIOD_ABBR.items():
+    for period, short_period in abbreviations.items():
         rename[f"travel_time_seconds_mean_{period}"] = f"tts_m_{short_period}"
         rename[f"travel_time_seconds_median_{period}"] = f"tts_md_{short_period}"
         rename[f"trip_count_{period}"] = f"trips_{short_period}"
@@ -1187,7 +1233,7 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
         rename[f"trip_count_{day_type}"] = f"trips_{short_day}"
     # Period x day-type is abbreviated further (tm_/trp_) because fitting
     # all four parts doesn't work within ten characters any other way.
-    for period, short_period in _GTFS_PERIOD_ABBR.items():
+    for period, short_period in abbreviations.items():
         for day_type, short_day in _GTFS_DAY_TYPE_ABBR.items():
             suffix = f"{short_period}_{short_day}"
             rename[f"travel_time_seconds_mean_{period}_{day_type}"] = f"tm_{suffix}"
@@ -1195,7 +1241,51 @@ def _build_gtfs_edge_rename() -> dict[str, str]:
     return rename
 
 
-GTFS_EDGE_RENAME: dict[str, str] = _build_gtfs_edge_rename()
+#: Long-to-short names with the default periods (see :func:`gtfs_edge_rename`).
+GTFS_EDGE_RENAME: dict[str, str] = gtfs_edge_rename()
+
+
+def gtfs_edge_columns(
+    peak_periods: Mapping[str, object] | None = None,
+) -> list[str]:
+    """Long names of the GTFS edge columns written, in order.
+
+    Includes the per-period columns of the periods actually used
+    (``gtfs_peak_periods``, or the defaults), so none is dropped.
+    """
+    periods = list(period_codes(peak_periods))
+    day_types = list(_GTFS_DAY_TYPE_ABBR)
+    return [
+        "edge_id",
+        "from_node",
+        "to_node",
+        "route_id",
+        "route_short_name",
+        "route_long_name",
+        "trip_count",
+        "travel_time_seconds_mean",
+        "travel_time_seconds_median",
+        "travel_time_seconds_min",
+        "travel_time_seconds_max",
+        *(f"travel_time_seconds_mean_{period}" for period in periods),
+        *(f"travel_time_seconds_median_{period}" for period in periods),
+        *(f"trip_count_{period}" for period in periods),
+        *(
+            f"{metric}_{day_type}"
+            for day_type in day_types
+            for metric in ("travel_time_seconds_mean", "trip_count")
+        ),
+        "days_of_week_summary",
+        "hourly_travel_times",
+        "hourly_trip_counts",
+        "geometry",
+        *(
+            f"{metric}_{period}_{day_type}"
+            for period in periods
+            for day_type in day_types
+            for metric in ("travel_time_seconds_mean", "trip_count")
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
