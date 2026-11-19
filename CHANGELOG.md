@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it held the whole timetable of each feed (86,503 rows for the Valencia
   interurban feed, of which 1,415 belong to edges in the area). It is now
   clipped like the edges, so every row has its edge (#90).
+- GTFS `edge_id` was not unique: edges are one per pair of stops and route, but
+  the id was built from the stops alone, so routes sharing a pair of stops (106
+  pairs in the Valencia interurban feed) repeated it, and joining the schedule
+  to the edges by `edge_id` matched the wrong rows. It is now
+  `<dataset>_<route_id>_<from_node>_<to_node>` (#90).
 
 ## [0.5.0] - 2026-11-18
 

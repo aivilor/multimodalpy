@@ -239,7 +239,7 @@ long name.
 
 | Column | Former name | Meaning |
 |---|---|---|
-| `edge_id` | — | Edge identifier |
+| `edge_id` | — | Edge identifier: `<dataset>_<route_id>_<from_node>_<to_node>`, unique in the layer |
 | `from_node` | — | Origin stop |
 | `to_node` | — | Destination stop |
 | `route_id` | — | Route identifier |
@@ -320,7 +320,8 @@ any other way. `tm_` is mean travel time and `trp_` is number of trips.
 
 Written only with `write_schedule=True`: one row per trip and edge, with no geometry.
 It is clipped like the [edges](#gtfs-edges): it holds the segments of the trips
-that touch the study area, so every row has its edge.
+that touch the study area, so every row has its edge. Join it to the edges by
+`edge_id`: each row matches exactly one edge, the one of its route.
 
 ## NetworkX graphs (`graph.json`)
 

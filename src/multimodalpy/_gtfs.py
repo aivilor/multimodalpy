@@ -576,6 +576,29 @@ def _attach_service_days(
     return trips
 
 
+def _edge_ids(dataset_name: str, frame: pd.DataFrame) -> pd.Series:
+    """``<dataset>_<route_id>_<from_node>_<to_node>`` for each row.
+
+    The edges are one per pair of stops *and* route, so the route is part
+    of the id: several routes often share a pair of stops, and an id made
+    of the stops alone repeated, mixing their schedule rows up.
+    """
+    route = (
+        frame["route_id"].where(frame["route_id"].notna(), "").astype(str)
+        if "route_id" in frame.columns
+        else ""
+    )
+    return (
+        dataset_name
+        + "_"
+        + route
+        + "_"
+        + frame["from_node"].astype(str)
+        + "_"
+        + frame["to_node"].astype(str)
+    )
+
+
 def _build_stop_to_stop_trip_records(
     stop_times: pd.DataFrame,
     stops: pd.DataFrame,
@@ -720,13 +743,7 @@ def _build_stop_to_stop_trip_records(
     edges = edges.dropna(
         subset=["from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat"]
     ).copy()
-    edges["edge_id"] = (
-        dataset_name
-        + "_"
-        + edges["from_node"].astype(str)
-        + "_"
-        + edges["to_node"].astype(str)
-    )
+    edges["edge_id"] = _edge_ids(dataset_name, edges)
     return edges
 
 
@@ -1075,13 +1092,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf = _filter_by_geometry(gdf, filter_geometry)
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
-    gdf["edge_id"] = (
-        dataset_name
-        + "_"
-        + gdf["from_node"].astype(str)
-        + "_"
-        + gdf["to_node"].astype(str)
-    )
+    gdf["edge_id"] = _edge_ids(dataset_name, gdf)
     return gdf
 
 

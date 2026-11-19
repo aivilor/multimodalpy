@@ -514,3 +514,31 @@ def test_stops_layer_without_stop_ids_keeps_the_stops_in_the_area():
     )
     assert gdf["node_id"].tolist() == ["A"]  # W outside, A only once
     assert gdf["in_area"].tolist() == [True]
+
+
+# ---------------------------------------------------------------------------
+# Edge ids: one per pair of stops and route
+# ---------------------------------------------------------------------------
+def test_edge_ids_are_unique_when_routes_share_a_pair_of_stops(feed):
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=True,
+    )
+    assert edges["edge_id"].is_unique
+    # B -> C is served by R1 (t1) and R2 (t3): two edges, two ids.
+    b_to_c = edges[(edges["from_node"] == "B") & (edges["to_node"] == "C")]
+    assert sorted(b_to_c["edge_id"]) == ["ds_R1_B_C", "ds_R2_B_C"]
+    # Each schedule row joins exactly one edge, of its own route.
+    joined = schedule.merge(edges[["edge_id", "route_id"]], on="edge_id", how="left")
+    assert len(joined) == len(schedule)
+    assert (joined["route_id_x"] == joined["route_id_y"]).all()
+
+
+def test_edge_id_without_a_route_id():
+    frame = pd.DataFrame(
+        {"route_id": ["R1", None], "from_node": ["A", "A"], "to_node": ["B", "B"]}
+    )
+    assert _gtfs._edge_ids("ds", frame).tolist() == ["ds_R1_A_B", "ds__A_B"]
