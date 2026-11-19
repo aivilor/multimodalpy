@@ -1379,6 +1379,32 @@ def gtfs_edge_columns(
 # ---------------------------------------------------------------------------
 # Download (NAP) and standardize the GTFS layers
 # ---------------------------------------------------------------------------
+# The NAP names its files after the moment they were generated
+# (``20261119_030028_GenValenciana_Interurbano.zip``).
+_DOWNLOAD_STAMP = re.compile(r"^\d{8}_\d{6}_")
+
+
+def dataset_name_from_file(zip_path: str | Path, taken: set[str] | None = None) -> str:
+    """Stable dataset name of a GTFS file: its name without the NAP timestamp.
+
+    ``20261119_030028_GenValenciana_Interurbano.zip`` gives
+    ``genvalenciana_interurbano``, the same on every download, so folders
+    and edge ids don't change from one download to the next. If ``taken``
+    already holds the name (two files of the same dataset), ``_2``,
+    ``_3``... is added; the name returned is added to ``taken``.
+    """
+    stem = Path(zip_path).stem
+    rest = _DOWNLOAD_STAMP.sub("", stem)
+    name = slugify(rest if rest.strip("_ ") else stem)
+    if taken is None:
+        return name
+    unique, number = name, 2
+    while unique in taken:
+        unique, number = f"{name}_{number}", number + 1
+    taken.add(unique)
+    return unique
+
+
 def download_gtfs(
     area_name: str,
     boundary: gpd.GeoDataFrame,
@@ -1440,8 +1466,9 @@ def download_gtfs(
 
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
+    taken: set[str] = set()
     for zip_path in zips:
-        dataset_name = slugify(Path(zip_path).stem)
+        dataset_name = dataset_name_from_file(zip_path, taken)
         # "bus" or "train", from the feed's route_type: decides the output
         # folder, and whether the feed was asked for at all.
         mode = infer_transport_mode(zip_path)

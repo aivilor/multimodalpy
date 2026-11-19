@@ -55,7 +55,10 @@ Every column name has at most ten characters, so none is cut short in a
 Shapefile.
 
 `<mode>` is `driving`, `walking` or `bike`. `<dataset>` is the name of the GTFS
-file downloaded from the NAP, normalised (e.g. `20260921_040013_renfe_cerca`).
+file downloaded from the NAP, normalised and without the timestamp the NAP puts
+in front of it (`20261119_050013_RENFE_CERCA.zip` gives `renfe_cerca`), so it is
+the same on every download. Two files that end up with the same name get `_2`,
+`_3`… in the order they were downloaded.
 
 A GTFS dataset goes under `train/` when most of its routes have a rail
 `route_type` in `routes.txt` and under `bus/` otherwise. Rail types are the

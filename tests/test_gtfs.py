@@ -637,3 +637,56 @@ def test_median_travel_times_are_computed(feed_with_a_slow_trip):
         "tts_md_ppm",
         "tts_md_rod",
     }
+
+
+# ---------------------------------------------------------------------------
+# Dataset names: stable from one download to the next
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("file_name", "expected"),
+    [
+        ("20261119_030028_GenValenciana_Interurbano.zip", "genvalenciana_interurbano"),
+        ("20260727_080002_BUS_Samar.zip", "bus_samar"),
+        ("EMT Valencia.zip", "emt_valencia"),  # no timestamp: kept
+        ("20261119_030028_.zip", "20261119_030028"),  # nothing else: kept
+    ],
+)
+def test_dataset_name_drops_the_nap_timestamp(file_name, expected):
+    assert _gtfs.dataset_name_from_file(file_name) == expected
+
+
+def test_dataset_names_that_clash_are_numbered():
+    taken: set[str] = set()
+    names = [
+        _gtfs.dataset_name_from_file(name, taken)
+        for name in (
+            "20261119_050013_RENFE_CERCA.zip",
+            "20261120_050013_RENFE_CERCA.zip",
+            "20261121_050013_RENFE_CERCA.zip",
+        )
+    ]
+    assert names == ["renfe_cerca", "renfe_cerca_2", "renfe_cerca_3"]
+
+
+def test_download_gtfs_uses_the_stable_names(tmp_path, monkeypatch):
+    import geopandas as gpd
+
+    trips = [("R1", "WD", "t1")]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    feed = _write_feed(
+        tmp_path / "20261119_030028_GenValenciana_Interurbano.zip",
+        [("R1", "1", 3)],
+        trips,
+        stop_times,
+    )
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", lambda *a, **k: [feed])
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    results = _gtfs.download_gtfs(
+        "Valencia", boundary, tmp_path / "zips", modes=[1], api_key="key"
+    )
+    assert list(results) == ["genvalenciana_interurbano"]
+    edges = results["genvalenciana_interurbano"]["edges"]
+    assert edges["edge_id"].tolist() == ["genvalenciana_interurbano_R1_A_B"]

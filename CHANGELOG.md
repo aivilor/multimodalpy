@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- GTFS dataset names no longer carry the timestamp the NAP puts in front of its
+  file names: `20261119_030028_GenValenciana_Interurbano.zip` gives
+  `genvalenciana_interurbano` instead of `20261119_030028_genvalenciana_interurbano`.
+  The output folders (`bus/<dataset>/`, `train/<dataset>/`), the manifest's
+  `gtfs_datasets` and the edge ids are now the same on every download, so two
+  downloads can be compared. Two files that end up with the same name get `_2`,
+  `_3`… (#90).
+
 ### Fixed
 - The GTFS nodes did not match the edges (#90). The nodes were every stop of
   `stops.txt` inside the area, whether or not a trip served it, while the edges
