@@ -1,22 +1,51 @@
-"""Overpass API access through osmnx: clear errors when a download fails.
+"""Overpass API access through osmnx: clear errors and retries.
 
 osmnx downloads the OSM networks from an Overpass API server (by default
 the public ``overpass-api.de``). When that server is at capacity it answers
 with an HTML page instead of JSON, and osmnx fails with a ``JSONDecodeError``
-or a ``ResponseStatusCodeError`` carrying the whole page. Here those
-failures become an :class:`OSMDownloadError` that says which network, which
-server and what to do.
+or a ``ResponseStatusCodeError`` carrying the whole page. Here:
+
+- a temporary failure (server busy, timeout, lost connection, a query the
+  server cut short) is retried a few times, waiting longer each time
+  (``RETRY_WAITS``), as the server itself asks;
+- what still fails becomes an :class:`OSMDownloadError` that says which
+  network, which server and what to do.
+
+osmnx handles some busy answers itself, but not well for this server: it
+retries 429 and 504 forever (55 s each time), waits a fixed 60 s whenever
+its ``/status`` check gets a page it can't read, and returns the partial
+data of a query the server cut short, only logging the server's remark. A
+requests *response hook* (added to ``osmnx.settings.requests_kwargs`` while
+downloading, see :func:`_response_check`) stops osmnx at those answers so
+the retries here handle them all the same way.
 """
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import re
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
+
+#: Seconds to wait before each new attempt after a temporary failure: four
+#: retries, doubling the wait (2.5 minutes in all, at worst).
+RETRY_WAITS: tuple[float, ...] = (10, 20, 40, 80)
+
+# The waits go through this name so the tests can replace them without
+# also replacing osmnx's own (short) pauses.
+_sleep = time.sleep
+
+# Answers that mean "busy, come back later" (429 too many requests, 502/503
+# at capacity or down, 504 gateway timeout).
+_BUSY_STATUSES = frozenset({429, 502, 503, 504})
 
 
 class OSMDownloadError(RuntimeError):
@@ -58,6 +87,62 @@ class _Failure:
     reason: str
     transient: bool
     status_code: int | None = None
+    hint: str = ""
+
+
+class _ServerBusy(Exception):
+    """The server answered with a busy status (raised by the response hook)."""
+
+    def __init__(self, status_code: int, text: str) -> None:
+        super().__init__(f"Overpass answered HTTP {status_code}")
+        self.status_code = status_code
+        self.text = text
+
+
+class _QueryCut(Exception):
+    """The server stopped the query and sent partial data (response hook)."""
+
+    def __init__(self, remark: str) -> None:
+        super().__init__(remark)
+        self.remark = remark
+
+
+def _check_response(response: Any, *args: Any, **kwargs: Any) -> Any:
+    """Response hook: stop osmnx at a busy answer or a query cut short.
+
+    Overpass writes its ``remark`` at the end of the JSON, so only the last
+    bytes are searched; the JSON is parsed only when there is one.
+    """
+    if response.status_code in _BUSY_STATUSES:
+        raise _ServerBusy(response.status_code, response.text[:2000])
+    tail = response.content[-2048:]
+    if b'"remark"' in tail and b"runtime error" in tail:
+        try:
+            remark = str(response.json().get("remark", "")).strip()
+        except ValueError:
+            remark = "runtime error"
+        raise _QueryCut(remark)
+    return response
+
+
+@contextlib.contextmanager
+def _response_check() -> Iterator[None]:
+    """Add :func:`_check_response` to osmnx's requests while downloading."""
+    from osmnx import settings
+
+    original = settings.requests_kwargs
+    kwargs = dict(original)
+    hooks = dict(kwargs.get("hooks") or {})
+    existing = hooks.get("response") or []
+    if callable(existing):
+        existing = [existing]
+    hooks["response"] = [*existing, _check_response]
+    kwargs["hooks"] = hooks
+    settings.requests_kwargs = kwargs
+    try:
+        yield
+    finally:
+        settings.requests_kwargs = original
 
 
 # osmnx keeps its exceptions in a private module (osmnx._errors), so they
@@ -80,6 +165,17 @@ def _classify(exc: BaseException) -> _Failure | None:
     """Describe a failed Overpass request, or ``None`` if it isn't one."""
     import requests
 
+    if isinstance(exc, _ServerBusy):
+        return _http_failure(exc.status_code, exc.text)
+    if isinstance(exc, _QueryCut):
+        return _Failure(
+            f"the server stopped the query before the end ({exc.remark})",
+            transient=True,
+            hint=(
+                " If it keeps happening, the area may be too large for one "
+                "query: try a smaller area or a longer timeout."
+            ),
+        )
     name = type(exc).__name__
     text = str(exc)
     if name == "ResponseStatusCodeError":
@@ -118,6 +214,7 @@ def _error(failure: _Failure, mode: str, attempts: int) -> OSMDownloadError:
             " The public Overpass server is often busy: try again in a few "
             "minutes (the parts already downloaded are cached)."
         )
+    message += failure.hint
     return OSMDownloadError(
         message,
         mode=mode,
@@ -127,17 +224,44 @@ def _error(failure: _Failure, mode: str, attempts: int) -> OSMDownloadError:
     )
 
 
-def call_overpass(download: Callable[[], T], *, mode: str) -> T:
-    """Run ``download`` (an osmnx call), turning its failures into errors.
+def call_overpass(
+    download: Callable[[], T],
+    *,
+    mode: str,
+    waits: Sequence[float] | None = None,
+) -> T:
+    """Run ``download`` (an osmnx call), retrying temporary failures.
 
-    Request failures (HTTP errors, a page that isn't JSON, timeouts, lost
-    connections) raise :class:`OSMDownloadError`, with the original
-    exception as its cause. Any other exception propagates unchanged.
+    A temporary failure (server busy, timeout, lost connection, query cut
+    short) is retried after each of ``waits`` seconds (``RETRY_WAITS`` by
+    default); every retry is logged. What still fails, and any request
+    failure that isn't temporary, raises :class:`OSMDownloadError`, with the
+    original exception as its cause. Any other exception propagates
+    unchanged. osmnx caches each answer it gets in full, so a retry only
+    asks again for what was missing.
     """
-    try:
-        return download()
-    except Exception as exc:
-        failure = _classify(exc)
-        if failure is None:
-            raise
-        raise _error(failure, mode, attempts=1) from exc
+    waits = RETRY_WAITS if waits is None else tuple(waits)
+    attempt = 0
+    with _response_check():
+        while True:
+            attempt += 1
+            try:
+                return download()
+            except Exception as exc:
+                failure = _classify(exc)
+                if failure is None:
+                    raise
+                if not failure.transient or attempt > len(waits):
+                    raise _error(failure, mode, attempts=attempt) from exc
+                wait = waits[attempt - 1]
+                logger.warning(
+                    "OpenStreetMap %s network: %s (Overpass server %s); "
+                    "trying again in %g s (retry %d of %d).",
+                    mode,
+                    failure.reason,
+                    overpass_server(),
+                    wait,
+                    attempt,
+                    len(waits),
+                )
+                _sleep(wait)

@@ -26,11 +26,40 @@ AT_CAPACITY = (
 )
 
 
+@pytest.fixture(autouse=True)
+def sleeps(monkeypatch):
+    """Record the waits between retries instead of sleeping."""
+    waited: list[float] = []
+    monkeypatch.setattr(_overpass, "_sleep", waited.append)
+    return waited
+
+
 def failing(exc):
     def download():
         raise exc
 
     return download
+
+
+def failing_then(results):
+    """A download that raises or returns each of ``results`` in turn."""
+    calls = iter(results)
+
+    def download():
+        result = next(calls)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    return download
+
+
+def response(status=200, body=b'{"elements": []}'):
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = body
+    resp.encoding = "utf-8"
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -94,3 +123,135 @@ def test_download_osm_raises_the_clear_error(monkeypatch):
     boundary = gpd.GeoDataFrame(geometry=[box(-0.4, 39.4, -0.3, 39.5)], crs=4326)
     with pytest.raises(OSMDownloadError, match="bike network"):
         _osm.download_osm(boundary, modes=["bicicleta"])
+
+
+# ---------------------------------------------------------------------------
+# Retries
+# ---------------------------------------------------------------------------
+def test_busy_server_is_retried_four_times_doubling_the_wait(sleeps, caplog):
+    with pytest.raises(OSMDownloadError, match="after 5 attempts") as info:
+        _overpass.call_overpass(
+            failing(ResponseStatusCodeError(AT_CAPACITY)), mode="walking"
+        )
+    assert sleeps == [10, 20, 40, 80]
+    assert info.value.status_code == 502
+    retries = [r for r in caplog.records if "trying again" in r.getMessage()]
+    assert len(retries) == 4
+    assert "retry 4 of 4" in retries[-1].getMessage()
+
+
+def test_success_after_a_retry_returns_the_result(sleeps):
+    download = failing_then([requests.exceptions.ConnectionError("reset"), "graph"])
+    assert _overpass.call_overpass(download, mode="bike") == "graph"
+    assert sleeps == [10]
+
+
+def test_permanent_failure_is_not_retried(sleeps):
+    with pytest.raises(OSMDownloadError, match="Found no graph nodes"):
+        _overpass.call_overpass(
+            failing(InsufficientResponseError("Found no graph nodes")), mode="bike"
+        )
+    assert sleeps == []
+
+
+def test_waits_can_be_given(sleeps):
+    with pytest.raises(OSMDownloadError, match="after 2 attempts"):
+        _overpass.call_overpass(
+            failing(requests.exceptions.ReadTimeout()), mode="bike", waits=[1]
+        )
+    assert sleeps == [1]
+
+
+# ---------------------------------------------------------------------------
+# Response hook
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_hook_stops_at_a_busy_answer(status):
+    with pytest.raises(_overpass._ServerBusy) as info:
+        _overpass._check_response(response(status, AT_CAPACITY.encode()))
+    assert info.value.status_code == status
+
+
+def test_hook_stops_at_a_query_cut_short():
+    body = (
+        b'{"version": 0.6, "elements": [{"type": "node", "id": 1}], '
+        b'"remark": "runtime error: Query timed out in query at line 1"}'
+    )
+    with pytest.raises(_overpass._QueryCut, match="Query timed out"):
+        _overpass._check_response(response(200, body))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"elements": []}',
+        b'{"elements": [], "remark": "runtime remark: nothing to report"}',
+    ],
+)
+def test_hook_lets_good_answers_through(body):
+    resp = response(200, body)
+    assert _overpass._check_response(resp) is resp
+
+
+def test_query_cut_short_is_retried_and_explained(sleeps):
+    with pytest.raises(OSMDownloadError, match="stopped the query") as info:
+        _overpass.call_overpass(
+            failing(_overpass._QueryCut("runtime error: Query run out of memory")),
+            mode="driving",
+        )
+    assert sleeps == [10, 20, 40, 80]
+    assert "too large for one query" in str(info.value)
+
+
+def test_hook_is_added_only_while_downloading(monkeypatch):
+    user_hook = lambda response, *args, **kwargs: response  # noqa: E731
+    monkeypatch.setattr(
+        ox.settings,
+        "requests_kwargs",
+        {"verify": True, "hooks": {"response": user_hook}},
+    )
+    seen = {}
+
+    def download():
+        seen.update(ox.settings.requests_kwargs)
+        return None
+
+    _overpass.call_overpass(download, mode="bike")
+    assert seen["verify"] is True
+    assert seen["hooks"]["response"] == [user_hook, _overpass._check_response]
+    assert ox.settings.requests_kwargs == {
+        "verify": True,
+        "hooks": {"response": user_hook},
+    }
+
+
+def test_osmnx_requests_are_stopped_by_the_hook(monkeypatch, sleeps):
+    """Through osmnx and requests: a 502 never reaches osmnx's own handling."""
+    posts = []
+
+    def send(self, request, **kwargs):
+        posts.append(request.url)
+        resp = response(502, AT_CAPACITY.encode())
+        resp.url = request.url
+        resp.request = request
+        return resp
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    monkeypatch.setattr(ox.settings, "use_cache", False)
+    monkeypatch.setattr(ox.settings, "overpass_rate_limit", False)
+    monkeypatch.setattr(_overpass_dns(), "_config_dns", lambda url: None)
+    polygon = box(-0.38, 39.46, -0.37, 39.47)
+
+    with pytest.raises(OSMDownloadError, match="HTTP 502"):
+        _overpass.call_overpass(
+            lambda: ox.graph_from_polygon(polygon, network_type="walk"),
+            mode="walking",
+        )
+    assert len(posts) == 5  # one per attempt: osmnx did not loop on its own
+    assert sleeps == [10, 20, 40, 80]
+
+
+def _overpass_dns():
+    import osmnx._http
+
+    return osmnx._http
