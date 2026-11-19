@@ -95,9 +95,31 @@ def read_gtfs_table(feed_path: str | Path, table_name: str) -> pd.DataFrame:
 
 # GTFS spec ``route_type``. Rail-based modes are tram (0), subway (1),
 # rail (2), cable tram (5), funicular (7) and monorail (12); everything
-# else (bus 3, trolleybus 11, bus rapid transit 700-799...) is treated as
-# bus.
+# else (bus 3, trolleybus 11, gondola 6...) is treated as bus.
 RAIL_ROUTE_TYPES: frozenset[int] = frozenset({0, 1, 2, 5, 7, 12})
+
+# Extended route types (the European HVT codes many feeds use instead):
+# railway 100-199 (e.g. 101 high-speed rail, used by OUIGO, 102 long
+# distance), suburban railway 300-399, urban railway 400-499, metro
+# 500-599, underground 600-699, tram 900-999 and funicular 1400-1499.
+# Coach (200-299), bus (700-799), trolleybus (800), water, air, aerial
+# lift and taxi are treated as bus.
+RAIL_EXTENDED_ROUTE_TYPES: tuple[range, ...] = (
+    range(100, 200),
+    range(300, 700),
+    range(900, 1000),
+    range(1400, 1500),
+)
+
+# NAP transport ids of the two GTFS modes (see network.GTFS_MODE_TO_NAP).
+_NAP_ID_OF_MODE = {"bus": 1, "train": 2}
+
+
+def is_rail_route_type(route_type: int) -> bool:
+    """Whether a GTFS ``route_type`` (basic or extended) is rail-based."""
+    return route_type in RAIL_ROUTE_TYPES or any(
+        route_type in codes for codes in RAIL_EXTENDED_ROUTE_TYPES
+    )
 
 
 def infer_transport_mode(feed_path: str | Path) -> str:
@@ -106,8 +128,9 @@ def infer_transport_mode(feed_path: str | Path) -> str:
     Used to decide which folder a GTFS dataset's layers are saved under.
     The feed itself is checked rather than the NAP metadata, because there
     the same dataset can be declared as both bus and rail at once (e.g.
-    Cercanias Renfe). If the feed mixes both, the majority type wins; if
-    it can't be read, ``"bus"`` is assumed.
+    Cercanias Renfe). Basic and extended route types are both understood
+    (see :func:`is_rail_route_type`). If the feed mixes both, the majority
+    type wins; if it can't be read, ``"bus"`` is assumed.
     """
     import pandas as pd
 
@@ -121,7 +144,7 @@ def infer_transport_mode(feed_path: str | Path) -> str:
     route_types = pd.to_numeric(routes["route_type"], errors="coerce").dropna()
     if route_types.empty:
         return "bus"
-    rail = int(route_types.isin(RAIL_ROUTE_TYPES).sum())
+    rail = sum(is_rail_route_type(int(code)) for code in route_types)
     return "train" if rail * 2 > len(route_types) else "bus"
 
 
@@ -1193,6 +1216,7 @@ def download_gtfs(
     include_schedule_table: bool = True,
     province_codes: Iterable[int] | None = None,
     buffer_m: float = 0.0,
+    skipped: dict[str, str] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1213,6 +1237,12 @@ def download_gtfs(
     ``buffer_m`` widens the clipping area by that many metres (see
     :func:`study_area_geometry`), so stops just across the municipal
     boundary are kept.
+
+    Only feeds of the requested ``modes`` are kept, judging by the feed's
+    own route types (:func:`infer_transport_mode`): the NAP declares some
+    feeds as both bus and rail (e.g. Cercanías Renfe), so asking for bus
+    may also download a train feed. Such a feed is skipped and logged and,
+    if a ``skipped`` dict is given, added to it as ``{dataset: mode}``.
     """
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
@@ -1230,9 +1260,22 @@ def download_gtfs(
     if clip_to_boundary and not boundary.empty:
         filter_geometry = study_area_geometry(boundary, buffer_m=buffer_m)
 
+    wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     for zip_path in zips:
         dataset_name = slugify(Path(zip_path).stem)
+        # "bus" or "train", from the feed's route_type: decides the output
+        # folder, and whether the feed was asked for at all.
+        mode = infer_transport_mode(zip_path)
+        if _NAP_ID_OF_MODE[mode] not in wanted:
+            logger.info(
+                "Skipping feed %s: its routes are %s, which was not requested.",
+                zip_path.name,
+                mode,
+            )
+            if skipped is not None:
+                skipped[dataset_name] = mode
+            continue
         try:
             stops, stop_edges, schedule = normalize_gtfs_feed(
                 zip_path,
@@ -1252,8 +1295,6 @@ def download_gtfs(
             "nodes": stops,
             "edges": stop_edges,
             "schedule": schedule,
-            # "bus" or "train", inferred from the feed's route_type. Used
-            # by download_network to decide the dataset's output folder.
-            "mode": infer_transport_mode(zip_path),
+            "mode": mode,
         }
     return results

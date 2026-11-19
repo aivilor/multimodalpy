@@ -137,6 +137,7 @@ def backends(monkeypatch, boundary):
         "gtfs_result": {},
         "gtfs_error": None,
         "osm_failing": set(),
+        "gtfs_skipped": {},
     }
 
     def fake_find_area(area_name, boundaries_path=None, **kwargs):
@@ -170,10 +171,12 @@ def backends(monkeypatch, boundary):
             results[label] = make_osm_result()
         return results
 
-    def fake_download_gtfs(area_name, bnd, zip_dir, **kwargs):
+    def fake_download_gtfs(area_name, bnd, zip_dir, *, skipped=None, **kwargs):
         calls["gtfs"].append(
             {"area_name": area_name, "zip_dir": Path(zip_dir), **kwargs}
         )
+        if skipped is not None:
+            skipped.update(calls["gtfs_skipped"])
         # The real function leaves the downloaded ZIPs in zip_dir.
         Path(zip_dir).mkdir(parents=True, exist_ok=True)
         (Path(zip_dir) / "feed.zip").write_bytes(b"not a real zip")
@@ -1241,6 +1244,25 @@ def test_cli_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 # Overpass failures
 # ---------------------------------------------------------------------------
+def test_skipped_gtfs_feeds_are_listed_in_the_manifest(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_skipped"] = {"ouigo": "train"}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert manifest["gtfs_datasets"] == ["emt"]
+    assert manifest["skipped_datasets"] == {"ouigo": "train"}
+    assert not (tmp_path / "train").exists()
+
+
+def test_no_skipped_feeds_no_manifest_entry(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert "skipped_datasets" not in manifest
+
+
 def test_failed_osm_mode_keeps_the_others(tmp_path, backends):
     backends["osm_failing"].add("bike")
     with pytest.warns(UserWarning, match=r"The bike network\(s\) could not"):

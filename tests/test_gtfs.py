@@ -235,3 +235,48 @@ def test_shared_records_give_the_same_tables_as_the_standalone_builders(feed):
         edges.reset_index(drop=True), standalone_edges.reset_index(drop=True)
     )
     pd.testing.assert_frame_equal(schedule, standalone_schedule)
+
+
+# ---------------------------------------------------------------------------
+# Feeds of a mode that wasn't requested
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def bus_and_train_feeds(tmp_path, monkeypatch):
+    """The NAP returns a bus feed and a high-speed rail feed (route_type 101)."""
+    import geopandas as gpd
+
+    trips = [("R1", "WD", "t1")]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    bus = _write_feed(tmp_path / "emt.zip", [("R1", "1", 3)], trips, stop_times)
+    train = _write_feed(tmp_path / "ouigo.zip", [("R1", "", 101)], trips, stop_times)
+    monkeypatch.setattr(
+        _gtfs, "download_gtfs_nap_zips", lambda *args, **kwargs: [bus, train]
+    )
+    return gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+
+
+@pytest.mark.parametrize(
+    ("modes", "kept", "skipped"),
+    [
+        ([1], {"emt": "bus"}, {"ouigo": "train"}),
+        ([2], {"ouigo": "train"}, {"emt": "bus"}),
+        ([1, 2], {"emt": "bus", "ouigo": "train"}, {}),
+    ],
+)
+def test_feeds_of_unrequested_modes_are_skipped(
+    tmp_path, bus_and_train_feeds, modes, kept, skipped
+):
+    found: dict[str, str] = {}
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        bus_and_train_feeds,
+        tmp_path / "zips",
+        modes=modes,
+        api_key="key",
+        skipped=found,
+    )
+    assert {name: out["mode"] for name, out in results.items()} == kept
+    assert found == skipped

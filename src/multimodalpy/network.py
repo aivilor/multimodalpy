@@ -225,6 +225,10 @@ def download_network(
         Manifest with the area (with its ``provinces`` and
         ``municipalities``), the modes, the folder and the files written.
 
+        A GTFS feed whose routes are of a mode that wasn't requested
+        (the NAP declares some feeds as both bus and rail) is skipped and
+        listed in the manifest's ``skipped_datasets`` (``{dataset: mode}``).
+
         If an OpenStreetMap network can't be downloaded (see
         ``overpass_url``), the other networks are still downloaded and
         written: the failure is listed in the manifest's ``failed_modes``
@@ -331,6 +335,7 @@ def download_network(
     # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_zips_dir = output_dir / "gtfs_zips"
+    skipped_datasets: dict[str, str] = {}
     if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
@@ -348,6 +353,7 @@ def download_network(
                 peak_periods=gtfs_peak_periods,
                 include_schedule_table=write_schedule,
                 buffer_m=buffer_m,
+                skipped=skipped_datasets,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -558,6 +564,10 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if skipped_datasets:
+        # Feeds the NAP returned for a requested mode whose routes turned
+        # out to be of another one (e.g. Cercanías when asking for bus).
+        manifest["skipped_datasets"] = skipped_datasets
     if osm_failures:
         manifest["failed_modes"] = {
             mode: str(exc) for mode, exc in osm_failures.items()

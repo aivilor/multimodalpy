@@ -236,6 +236,18 @@ def _feed(tmp_path, route_types):
         ([3], "bus"),
         ([3, 3, 2], "bus"),
         ([2, 2, 3], "train"),
+        # Extended route types (European HVT codes).
+        ([101], "train"),  # high-speed rail, e.g. OUIGO
+        ([102, 103], "train"),  # long distance, inter-regional
+        ([109], "train"),  # suburban railway
+        ([400, 401], "train"),  # urban railway, metro
+        ([900], "train"),  # tram
+        ([1400], "train"),  # funicular
+        ([700, 702], "bus"),  # bus service, express bus
+        ([200], "bus"),  # coach
+        ([800], "bus"),  # trolleybus
+        ([1300], "bus"),  # aerial lift, like basic type 6
+        ([101, 101, 700], "train"),
     ],
 )
 def test_transport_mode_follows_the_majority_route_type(
