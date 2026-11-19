@@ -594,3 +594,46 @@ def test_no_warning_without_impossible_times(feed):
         _gtfs.normalize_gtfs_feed(
             feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
         )
+
+
+# ---------------------------------------------------------------------------
+# Medians (documented, but not computed before 0.5.1)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def feed_with_a_slow_trip(tmp_path):
+    """A -> B: 5, 6 and 20 minutes, all in the morning peak."""
+    trips = [("R1", "WD", f"t{i}") for i in (1, 2, 3)]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+        ("t2", "07:30:00", "07:30:00", "A", 1),
+        ("t2", "07:36:00", "07:36:00", "B", 2),
+        ("t3", "08:00:00", "08:00:00", "A", 1),
+        ("t3", "08:20:00", "08:20:00", "B", 2),
+    ]
+    return _write_feed(tmp_path / "slow.zip", [("R1", "1", 3)], trips, stop_times)
+
+
+def test_median_travel_times_are_computed(feed_with_a_slow_trip):
+    _, edges, _ = _gtfs.normalize_gtfs_feed(
+        feed_with_a_slow_trip,
+        dataset_name="ds",
+        layer_id="ds",
+        filter_geometry=AREA,
+        include_schedule_table=False,
+    )
+    edge = edges.iloc[0]
+    assert edge["travel_time_seconds_mean"] == pytest.approx((300 + 360 + 1200) / 3)
+    assert edge["travel_time_seconds_median"] == 360  # not pulled by the slow trip
+    assert edge["travel_time_seconds_median_peak_am"] == 360
+    assert pd.isna(edge["travel_time_seconds_median_rest_of_day"])
+    # Every median column the layer documents is there, under its short name too.
+    rename = _gtfs.gtfs_edge_rename()
+    medians = [c for c in _gtfs.gtfs_edge_columns() if "median" in c]
+    assert set(medians) <= set(edges.columns)
+    assert {rename[c] for c in medians} == {
+        "tts_md",
+        "tts_md_pam",
+        "tts_md_ppm",
+        "tts_md_rod",
+    }

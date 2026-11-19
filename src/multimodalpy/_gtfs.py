@@ -833,11 +833,13 @@ def _period_pivot_columns(
     peak_periods: dict[str, tuple[int, int]] | None,
     *,
     suffix: str = "",
+    median: bool = False,
 ) -> pd.DataFrame:
     """Aggregate ``travel_time_seconds_mean`` / ``trip_count`` by period.
 
     Periods are peak_am / peak_pm / rest_of_day, pivoting ``period`` into
-    columns like ``travel_time_seconds_mean_peak_am``. ``suffix`` is added
+    columns like ``travel_time_seconds_mean_peak_am``; with ``median``,
+    also ``travel_time_seconds_median_peak_am``. ``suffix`` is added
     to the end of each column name so this period breakdown can be
     combined with another breakdown (weekday/weekend). Always returns all
     period columns, even if empty, so the later merge stays consistent.
@@ -847,20 +849,25 @@ def _period_pivot_columns(
     all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
         "rest_of_day"
     ]
+    metrics = ["travel_time_seconds_mean", "trip_count"]
+    aggregations = {
+        "travel_time_seconds_mean": ("travel_time_seconds", "mean"),
+        "trip_count": ("trip_id", "nunique"),
+    }
+    if median:
+        metrics.insert(1, "travel_time_seconds_median")
+        aggregations["travel_time_seconds_median"] = ("travel_time_seconds", "median")
     period_rows = rows.dropna(subset=["period"])
     if not period_rows.empty:
         period_grouped = (
             period_rows.groupby(group_cols + ["period"], dropna=False)
-            .agg(
-                travel_time_seconds_mean=("travel_time_seconds", "mean"),
-                trip_count=("trip_id", "nunique"),
-            )
+            .agg(**aggregations)
             .reset_index()
         )
         pivoted = period_grouped.pivot_table(
             index=group_cols,
             columns="period",
-            values=["travel_time_seconds_mean", "trip_count"],
+            values=metrics,
         )
         pivoted.columns = [
             f"{metric}_{period}{suffix}" for metric, period in pivoted.columns
@@ -870,7 +877,7 @@ def _period_pivot_columns(
         pivoted = pd.DataFrame(columns=group_cols)
 
     for period_name in all_period_names:
-        for metric in ("travel_time_seconds_mean", "trip_count"):
+        for metric in metrics:
             col = f"{metric}_{period_name}{suffix}"
             if col not in pivoted.columns:
                 pivoted[col] = None
@@ -980,6 +987,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     aggregations = {
         "trip_count": ("trip_id", "nunique"),
         "travel_time_seconds_mean": ("travel_time_seconds", "mean"),
+        "travel_time_seconds_median": ("travel_time_seconds", "median"),
         "travel_time_seconds_min": ("travel_time_seconds", "min"),
         "travel_time_seconds_max": ("travel_time_seconds", "max"),
     }
@@ -987,7 +995,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
 
     # --- Option A: per-period columns
     # (peak_am / peak_pm / rest_of_day) ---
-    period_pivot = _period_pivot_columns(edges, group_cols, peak_periods)
+    period_pivot = _period_pivot_columns(edges, group_cols, peak_periods, median=True)
     grouped = grouped.merge(period_pivot, on=group_cols, how="left")
 
     # --- Weekday vs. weekend: same overall aggregates, split by

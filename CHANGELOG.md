@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Segments over 3 hours (`MAX_SEGMENT_SECONDS`) now have no travel time: they
   still count as trips, and a `UserWarning` says how many there were in the
   area (#90).
+- The GTFS median travel times (`tts_md`, `tts_md_pam`, `tts_md_ppm`,
+  `tts_md_rod`, and the matrix weights of the same names) were documented but
+  never computed, so they were missing from every output. They are now
+  computed, for the whole day and per period (#90).
 
 ## [0.5.0] - 2026-11-18
 
