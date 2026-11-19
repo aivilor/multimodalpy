@@ -109,9 +109,10 @@ also written and a warning explains why there is no bus or train data
 ### Your own study area
 
 To work on an area that is not one municipality (a metropolitan area, a
-district, a planning area), pass a Shapefile or GeoJSON with its polygon as
-`boundaries_path`. No name or code columns are needed, and any CRS works as
-long as the file defines one:
+district, a planning area), pass a Shapefile, GeoJSON or GeoPackage with its
+polygon as `boundaries_path`. No name or code columns are needed, and any CRS
+works as long as the file defines one. A GeoPackage with several layers is read
+from its only polygon layer:
 
 ```python
 manifest = mmp.download_network(
@@ -286,7 +287,7 @@ paths and is much faster.
 | `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`, instead of its name. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
 | `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
-| `boundaries_path` | `None` | A Shapefile or GeoJSON with your own study area, instead of a municipality (see "Your own study area"). |
+| `boundaries_path` | `None` | A Shapefile, GeoJSON or GeoPackage with your own study area, instead of a municipality (see "Your own study area"). |
 | `overpass_url` | `None` | Overpass server for the OpenStreetMap networks; by default the public `overpass-api.de` (see "Streets: the Overpass server"). |
 | `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |

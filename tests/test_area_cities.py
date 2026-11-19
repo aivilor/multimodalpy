@@ -182,9 +182,9 @@ def test_find_area_raises_when_no_name_column_present(tmp_path):
 # File-level validation
 # ---------------------------------------------------------------------------
 def test_find_area_rejects_unsupported_suffix(tmp_path):
-    bad_path = tmp_path / "boundaries.gpkg"
+    bad_path = tmp_path / "boundaries.kml"
     bad_path.write_bytes(b"")
-    with pytest.raises(ValueError, match="only accepts shapefile"):
+    with pytest.raises(ValueError, match="only accepts Shapefile"):
         area.find_area(boundaries_path=bad_path)
 
 

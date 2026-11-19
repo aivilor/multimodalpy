@@ -115,6 +115,38 @@ def test_shapefile_is_accepted(tmp_path):
     assert row["mun_names"] == ["Beta"]
 
 
+def test_geopackage_is_accepted(tmp_path):
+    row = find(write(tmp_path, [B], name="area.gpkg"))
+    assert row["mun_names"] == ["Beta"]
+    assert row["area_name"] == "area"
+
+
+def write_layers(path, layers):
+    for layer, geometries in layers.items():
+        gpd.GeoDataFrame(geometry=geometries, crs="EPSG:25830").to_file(
+            path, layer=layer
+        )
+    return path
+
+
+def test_geopackage_uses_its_only_polygon_layer(tmp_path):
+    path = write_layers(
+        tmp_path / "plan.gpkg",
+        {
+            "stations": [Point(725 * KM, 4375 * KM)],
+            "area": [A],
+            "axes": [LineString([(720 * KM, 4370 * KM), (730 * KM, 4380 * KM)])],
+        },
+    )
+    assert find(path)["mun_names"] == ["Alfa"]
+
+
+def test_geopackage_with_several_polygon_layers_is_ambiguous(tmp_path):
+    path = write_layers(tmp_path / "plan.gpkg", {"north": [C], "south": [A]})
+    with pytest.raises(ValueError, match=r"several layers \(north, south\)"):
+        find(path)
+
+
 def test_invalid_polygon_is_repaired(tmp_path):
     # A bow-tie: self-intersecting, so its plain area would be 0.
     bowtie = Polygon(

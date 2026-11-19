@@ -141,12 +141,13 @@ def download_network(
     output_dir : str | Path
         Folder to write to. Created if it does not exist.
     boundaries_path : str | Path, optional
-        Shapefile (.shp) or GeoJSON (.geojson) with your own study area: its
-        polygons (merged into one) are the area, whatever their columns, in
-        any CRS (the file must define one). The provinces holding at least
-        5% of it give the bus and train feeds; everything is clipped to the
-        polygon. It must overlap peninsular Spain, the Balearic Islands,
-        Ceuta or Melilla. Not combined with ``area_code`` or ``province``.
+        Shapefile (.shp), GeoJSON (.geojson) or GeoPackage (.gpkg) with
+        your own study area: its polygons (merged into one) are the area,
+        whatever their columns, in any CRS (the file must define one). The
+        provinces holding at least 5% of it give the bus and train feeds;
+        everything is clipped to the polygon. It must overlap peninsular
+        Spain, the Balearic Islands, Ceuta or Melilla. Not combined with
+        ``area_code`` or ``province``.
     crs : str
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.

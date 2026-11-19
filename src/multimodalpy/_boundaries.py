@@ -61,9 +61,9 @@ def _default_boundaries_path() -> Path:
     return shp_file
 
 
-# Only shapefile or geojson are accepted as the boundaries file (per the
-# meeting notes: no geopackage for ``boundaries_path``).
-ALLOWED_BOUNDARY_SUFFIXES = {".shp", ".geojson", ".json"}
+# Formats accepted as the boundaries file: Shapefile, GeoJSON and, since
+# 0.5.0, GeoPackage (see ``_boundaries_layer`` for files with several layers).
+ALLOWED_BOUNDARY_SUFFIXES = {".shp", ".geojson", ".json", ".gpkg"}
 
 
 DEFAULT_NAME_COLUMNS = (
@@ -557,20 +557,46 @@ _COVERAGE_NOTE = (
 )
 
 
+def _boundaries_layer(path: Path) -> str | None:
+    """Layer of a GeoPackage to read as the study area.
+
+    A GeoPackage with a single layer is read as it is; with several, the
+    only one with polygons. Several polygon layers are ambiguous: the error
+    lists them, so the one wanted can be saved on its own.
+    """
+    import geopandas as gpd
+
+    layers = gpd.list_layers(path)
+    if len(layers) <= 1:
+        return None
+    polygons = layers.loc[
+        layers["geometry_type"].astype(str).str.contains("Polygon"), "name"
+    ].tolist()
+    if len(polygons) == 1:
+        return str(polygons[0])
+    found = ", ".join(map(str, polygons or layers["name"]))
+    raise ValueError(
+        f"The GeoPackage {path.name} has several layers ({found}) and it isn't "
+        "clear which one is the study area. Save the layer you want on its own "
+        "(e.g. as a GeoPackage with only that layer) and pass that file."
+    )
+
+
 def _read_boundaries_file(path: str | Path) -> gpd.GeoDataFrame:
     """Read a boundaries file, checking its format, contents and CRS."""
     path = Path(path)
     if path.suffix.lower() not in ALLOWED_BOUNDARY_SUFFIXES:
         raise ValueError(
-            "boundaries_path only accepts shapefile (.shp) or geojson "
-            f"(.geojson/.json). Received: {path.suffix}"
+            "boundaries_path only accepts Shapefile (.shp), GeoJSON "
+            f"(.geojson/.json) or GeoPackage (.gpkg). Received: {path.suffix}"
         )
     if not path.exists():
         raise FileNotFoundError(f"Boundaries file does not exist: {path}")
 
     import geopandas as gpd
 
-    gdf = gpd.read_file(path)
+    layer = _boundaries_layer(path) if path.suffix.lower() == ".gpkg" else None
+    gdf = gpd.read_file(path, layer=layer)
     if gdf.empty:
         raise ValueError(f"Boundaries file is empty: {path}")
     if gdf.crs is None:
@@ -756,8 +782,10 @@ def find_area(
         label, and defaults to the file name (``"pateval"`` for
         ``pateval.geojson``).
     boundaries_path : str | Path, optional
-        Shapefile (``.shp``) or GeoJSON (``.geojson`` / ``.json``) with the
-        study area. It must have a CRS (any one: it's converted); the area
+        Shapefile (``.shp``), GeoJSON (``.geojson`` / ``.json``) or
+        GeoPackage (``.gpkg``; with several layers, the only one with
+        polygons) with the study area. It must have a CRS (any one: it's
+        converted); the area
         must overlap the covered territory: peninsular Spain, the Balearic
         Islands, Ceuta and Melilla (not the Canary Islands).
     area_code : str, optional
@@ -792,7 +820,7 @@ def find_area(
         lists them, so ``area_code`` or ``province`` can choose one.
     ValueError
         If no municipality matches; if ``boundaries_path`` is not a
-        Shapefile or GeoJSON, has no CRS or lies outside the covered
+        Shapefile, GeoJSON or GeoPackage, has no CRS or lies outside the covered
         territory; or if ``area_code`` or ``province`` are given with
         ``boundaries_path``.
 
