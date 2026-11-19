@@ -15,3 +15,16 @@ def nap_api_key(monkeypatch):
     a missing key remove it with ``monkeypatch.delenv("NAP_API_KEY")``.
     """
     monkeypatch.setenv("NAP_API_KEY", "test-key")
+
+
+@pytest.fixture(autouse=True)
+def no_overpass_probe(monkeypatch):
+    """Never reach a real Overpass server from the tests.
+
+    Before each download attempt ``_overpass`` asks the server's ``/status``
+    (see ``_probe_server``); the downloads in the tests are fakes, so that
+    request is skipped. The probe's own tests put it back.
+    """
+    from multimodalpy import _overpass
+
+    monkeypatch.setattr(_overpass, "_probe_server", lambda: None)

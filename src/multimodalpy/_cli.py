@@ -84,6 +84,18 @@ def main(argv: list[str] | None = None) -> None:
         help="Don't add the roads joining the parts of a multi-part municipality.",
     )
     parser.add_argument(
+        "--overpass-url",
+        help=(
+            "Overpass API server for the OpenStreetMap networks "
+            "(default: osmnx's, https://overpass-api.de/api)."
+        ),
+    )
+    parser.add_argument(
+        "--osm-timeout",
+        type=float,
+        help="Seconds to wait for each Overpass answer (default: 180).",
+    )
+    parser.add_argument(
         "--gtfs-hour-band-size",
         type=int,
         default=1,
@@ -124,6 +136,8 @@ def main(argv: list[str] | None = None) -> None:
         province=args.province,
         buffer_m=args.buffer_m,
         connect_parts=args.connect_parts,
+        overpass_url=args.overpass_url,
+        osm_timeout=args.osm_timeout,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         write_schedule=args.write_schedule,

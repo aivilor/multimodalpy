@@ -35,7 +35,7 @@ dependencies = [
   "numpy>=1.26",
   "networkx>=3.4",
   "geopandas>=1.0",
-  "osmnx",
+  "osmnx>=2.0",
   "pandas",
   "requests",
   "shapely>=2.0",

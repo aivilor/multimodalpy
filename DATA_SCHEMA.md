@@ -76,7 +76,11 @@ rail at once (Cercanías Renfe). An unreadable feed is treated as bus.
 (`files`, and `files_by_format` when several formats were asked for) and, when a
 public transport mode was requested but produced no data, a `gtfs_status` field
 saying why. When parts of a multi-part municipality could not be connected, an
-`unconnected_parts` field lists them per mode, e.g. `{"driving": [3]}`. Diagnostic messages go through `logging` and are silent unless the
+`unconnected_parts` field lists them per mode, e.g. `{"driving": [3]}`. When an
+OpenStreetMap network could not be downloaded from the Overpass server, a
+`failed_modes` field gives the reason per mode, e.g.
+`{"bike": "Could not download the bike network ... HTTP 502 ..."}`; the other
+networks are written as usual. Diagnostic messages go through `logging` and are silent unless the
 application enables them, e.g. `logging.basicConfig(level=logging.INFO)`.
 
 ## Column names

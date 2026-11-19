@@ -143,6 +143,40 @@ multimodalpy --boundaries pateval.geojson --modes walking bus
 Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
 same way.
 
+### Streets: the Overpass server
+
+The walking, bike and driving networks are downloaded from OpenStreetMap
+through an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
+server, by default the public `overpass-api.de`. It is run by volunteers and is
+often at capacity: it then answers with an error page instead of data.
+
+- A temporary failure (server busy, timeout, lost connection) is **retried four
+  times**, waiting 10, 20, 40 and 80 seconds, and each retry is logged.
+- If a network still can't be downloaded, the others are downloaded and written
+  anyway; the failed one is listed in the manifest's `failed_modes` and reported
+  with a warning. Only if nothing at all could be downloaded does
+  `download_network()` raise `OSMDownloadError`, which says which network and
+  which server failed.
+- Every answer is cached, so **running the same call again later** only
+  downloads what is missing. The cache is kept in the same folder as the
+  municipal boundaries (`pooch.os_cache("multimodalpy")`), not in your
+  working directory.
+- To use **another Overpass server**, pass its `.../api` address (the OSM wiki
+  keeps a [list of public instances](https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances);
+  some cover only one country, and their availability changes). There is no
+  automatic switch to another server:
+
+  ```python
+  mmp.download_network("Valencia", modes=["walking"],
+                       overpass_url="https://overpass.private.coffee/api")
+  ```
+
+  A large area may also need a longer `osm_timeout` (in seconds).
+
+Please be gentle with these public servers: their usage policies, listed with
+the instances, ask for moderate use. For many areas or frequent downloads, run your own
+Overpass instance and point `overpass_url` to it.
+
 ## What you get
 
 ```
@@ -253,6 +287,8 @@ paths and is much faster.
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
 | `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
 | `boundaries_path` | `None` | A Shapefile or GeoJSON with your own study area, instead of a municipality (see "Your own study area"). |
+| `overpass_url` | `None` | Overpass server for the OpenStreetMap networks; by default the public `overpass-api.de` (see "Streets: the Overpass server"). |
+| `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
@@ -283,7 +319,7 @@ listing them).
    (`boundaries_path`) is crossed with the municipal boundaries instead, to get
    the provinces and municipalities it overlaps.
 2. **Streets.** `osmnx` downloads the OSM network inside the polygon (widened
-   by `buffer_m` if set). If the municipality is made of separate parts, the
+   by `buffer_m` if set) from an Overpass server, retrying when it is busy. If the municipality is made of separate parts, the
    shortest roads joining them are added, so the network is not split into
    islands.
    `multimodalpy` adds a node at every real intersection, splits the edges
