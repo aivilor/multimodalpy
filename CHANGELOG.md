@@ -88,9 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - temporary failures (server busy, timeout, lost connection) are retried four
     times, waiting 10, 20, 40 and 80 seconds;
   - osmnx no longer retries 429 and 504 answers forever, no longer waits a
-    fixed 60 seconds when the server's status page can't be read, and no longer
-    returns the partial data of a query the server cut short as if it were
-    complete: those are retried too;
+    fixed 60 seconds when the server's status page can't be read or the server
+    can't be reached at all (each attempt first checks that it answers), and no
+    longer returns the partial data of a query the server cut short as if it
+    were complete: those are retried too;
   - a network that still fails is reported in `failed_modes`, and the others
     are written; `OSMDownloadError` is raised only if nothing could be
     downloaded.

@@ -15,11 +15,14 @@ or a ``ResponseStatusCodeError`` carrying the whole page. Here:
 
 osmnx handles some busy answers itself, but not well for this server: it
 retries 429 and 504 forever (55 s each time), waits a fixed 60 s whenever
-its ``/status`` check gets a page it can't read, and returns the partial
-data of a query the server cut short, only logging the server's remark. A
-requests *response hook* (added to ``osmnx.settings.requests_kwargs`` while
-downloading, see :func:`_response_check`) stops osmnx at those answers so
-the retries here handle them all the same way.
+its ``/status`` check gets a page it can't read or no answer at all, and
+returns the partial data of a query the server cut short, only logging the
+server's remark. A requests *response hook* (added to
+``osmnx.settings.requests_kwargs`` while downloading, see
+:func:`_response_check`) stops osmnx at those answers, and a quick look at
+the server's ``/status`` before each attempt (:func:`_probe_server`) catches
+a server that can't be reached, so the retries here handle them all the same
+way.
 """
 
 from __future__ import annotations
@@ -126,6 +129,30 @@ def _check_response(response: Any, *args: Any, **kwargs: Any) -> Any:
             remark = "runtime error"
         raise _QueryCut(remark)
     return response
+
+
+#: Seconds to wait for the ``/status`` answer before each attempt.
+_PROBE_TIMEOUT = 30
+
+
+def _probe_server() -> None:
+    """Check the Overpass server answers before letting osmnx query it.
+
+    osmnx asks the server's ``/status`` first, and when it gets no answer
+    (connection refused, DNS failure, timeout) it waits a fixed 60 s and
+    tries anyway. Asking here first turns that into a failure the retries
+    handle. A busy answer is stopped by :func:`_check_response`; any other
+    answer (e.g. a server without ``/status``) lets osmnx go ahead.
+    """
+    import requests
+    from osmnx import settings
+
+    requests.get(
+        settings.overpass_url.rstrip("/") + "/status",
+        headers={"User-Agent": settings.http_user_agent},
+        timeout=min(_PROBE_TIMEOUT, settings.requests_timeout),
+        **settings.requests_kwargs,
+    )
 
 
 @contextlib.contextmanager
@@ -250,6 +277,7 @@ def call_overpass(
         while True:
             attempt += 1
             try:
+                _probe_server()
                 return download()
             except Exception as exc:
                 failure = _classify(exc)
