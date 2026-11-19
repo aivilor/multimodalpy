@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,6 +50,12 @@ DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
     "peak_am": (7, 9),  # morning peak, 07:00-09:00
     "peak_pm": (17, 20),  # evening peak, 17:00-20:00
 }
+
+#: Longest believable travel time between two consecutive stops of a trip.
+#: Longer ones are errors in the feed (a time typed on the wrong day or
+#: hour: one Valencia interurban segment "took" 10.9 h); their travel time
+#: is left empty so it doesn't distort the edge statistics and the matrix.
+MAX_SEGMENT_SECONDS = 3 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -345,21 +352,40 @@ def build_gtfs_stops_gdf(
     dataset_name: str,
     layer_id: str,
     filter_geometry=None,
+    stop_ids=None,
 ) -> gpd.GeoDataFrame:
-    """Build the stops (nodes) layer from ``stops.txt``."""
+    """Build the stops (nodes) layer from ``stops.txt``.
+
+    With ``stop_ids`` (the stops the edges use, as :func:`normalize_gtfs_feed`
+    passes them), the layer holds exactly those stops: a stop no trip
+    serves, a parent station or an entrance is left out, and a stop just
+    outside ``filter_geometry`` that ends an edge crossing it is kept.
+    ``in_area`` says whether each stop is inside ``filter_geometry``.
+    Without ``stop_ids``, every stop inside ``filter_geometry`` is kept.
+    """
     import geopandas as gpd
     import pandas as pd
 
     work = stops.copy()
     work["stop_lat"] = pd.to_numeric(work["stop_lat"], errors="coerce")
     work["stop_lon"] = pd.to_numeric(work["stop_lon"], errors="coerce")
-    work = work.dropna(subset=["stop_lat", "stop_lon"]).copy()
+    work = work.dropna(subset=["stop_lat", "stop_lon"]).drop_duplicates("stop_id")
+    if stop_ids is not None:
+        work = work[work["stop_id"].isin(set(stop_ids))]
     gdf = gpd.GeoDataFrame(
-        work,
+        work.copy(),
         geometry=gpd.points_from_xy(work["stop_lon"], work["stop_lat"]),
         crs=SOURCE_CRS,
     )
-    gdf = _filter_by_geometry(gdf, filter_geometry)
+    if stop_ids is None:
+        gdf = _filter_by_geometry(gdf, filter_geometry)
+        gdf["in_area"] = True
+    else:
+        gdf["in_area"] = (
+            True
+            if filter_geometry is None
+            else gdf.geometry.intersects(filter_geometry)
+        )
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["node_id"] = gdf["stop_id"]
@@ -557,6 +583,29 @@ def _attach_service_days(
     return trips
 
 
+def _edge_ids(dataset_name: str, frame: pd.DataFrame) -> pd.Series:
+    """``<dataset>_<route_id>_<from_node>_<to_node>`` for each row.
+
+    The edges are one per pair of stops *and* route, so the route is part
+    of the id: several routes often share a pair of stops, and an id made
+    of the stops alone repeated, mixing their schedule rows up.
+    """
+    route = (
+        frame["route_id"].where(frame["route_id"].notna(), "").astype(str)
+        if "route_id" in frame.columns
+        else ""
+    )
+    return (
+        dataset_name
+        + "_"
+        + route
+        + "_"
+        + frame["from_node"].astype(str)
+        + "_"
+        + frame["to_node"].astype(str)
+    )
+
+
 def _build_stop_to_stop_trip_records(
     stop_times: pd.DataFrame,
     stops: pd.DataFrame,
@@ -608,6 +657,10 @@ def _build_stop_to_stop_trip_records(
         work["next_arrival_seconds"] - work["departure_seconds"]
     )
     work.loc[work["travel_time_seconds"] < 0, "travel_time_seconds"] = float("nan")
+    # Impossible times (see MAX_SEGMENT_SECONDS): left empty and marked, so
+    # normalize_gtfs_feed can say how many there were in the study area.
+    work["implausible_time"] = work["travel_time_seconds"] > MAX_SEGMENT_SECONDS
+    work.loc[work["implausible_time"], "travel_time_seconds"] = float("nan")
 
     work["hour_band"] = work["departure_seconds"].apply(
         lambda s: seconds_to_hour_band(s, band_size_hours=hour_band_size)
@@ -701,13 +754,7 @@ def _build_stop_to_stop_trip_records(
     edges = edges.dropna(
         subset=["from_stop_lon", "from_stop_lat", "to_stop_lon", "to_stop_lat"]
     ).copy()
-    edges["edge_id"] = (
-        dataset_name
-        + "_"
-        + edges["from_node"].astype(str)
-        + "_"
-        + edges["to_node"].astype(str)
-    )
+    edges["edge_id"] = _edge_ids(dataset_name, edges)
     return edges
 
 
@@ -725,12 +772,15 @@ def build_gtfs_schedule_table(
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
     records: pd.DataFrame | None = None,
+    filter_geometry=None,
 ) -> pd.DataFrame:
     """Option B: a flat table (no geometry), one record per trip and segment.
 
     Meant to be joined with the ``edges`` layer by ``edge_id`` when the
     full schedule detail is needed (every step of every trip), without
-    losing that granularity in the aggregated spatial layer.
+    losing that granularity in the aggregated spatial layer. With
+    ``filter_geometry``, only the segments that touch it are kept: the
+    same test as the edges layer, so every row has its edge.
 
     ``records`` takes the output of ``_build_stop_to_stop_trip_records``
     if it was already built with the same arguments (as
@@ -750,6 +800,7 @@ def build_gtfs_schedule_table(
             hour_range=hour_range,
             peak_periods=peak_periods,
         )
+    records = _filter_records_by_geometry(records, filter_geometry)
     columns = _existing_columns(
         records,
         [
@@ -782,11 +833,13 @@ def _period_pivot_columns(
     peak_periods: dict[str, tuple[int, int]] | None,
     *,
     suffix: str = "",
+    median: bool = False,
 ) -> pd.DataFrame:
     """Aggregate ``travel_time_seconds_mean`` / ``trip_count`` by period.
 
     Periods are peak_am / peak_pm / rest_of_day, pivoting ``period`` into
-    columns like ``travel_time_seconds_mean_peak_am``. ``suffix`` is added
+    columns like ``travel_time_seconds_mean_peak_am``; with ``median``,
+    also ``travel_time_seconds_median_peak_am``. ``suffix`` is added
     to the end of each column name so this period breakdown can be
     combined with another breakdown (weekday/weekend). Always returns all
     period columns, even if empty, so the later merge stays consistent.
@@ -796,20 +849,25 @@ def _period_pivot_columns(
     all_period_names = list((peak_periods or DEFAULT_PEAK_PERIODS).keys()) + [
         "rest_of_day"
     ]
+    metrics = ["travel_time_seconds_mean", "trip_count"]
+    aggregations = {
+        "travel_time_seconds_mean": ("travel_time_seconds", "mean"),
+        "trip_count": ("trip_id", "nunique"),
+    }
+    if median:
+        metrics.insert(1, "travel_time_seconds_median")
+        aggregations["travel_time_seconds_median"] = ("travel_time_seconds", "median")
     period_rows = rows.dropna(subset=["period"])
     if not period_rows.empty:
         period_grouped = (
             period_rows.groupby(group_cols + ["period"], dropna=False)
-            .agg(
-                travel_time_seconds_mean=("travel_time_seconds", "mean"),
-                trip_count=("trip_id", "nunique"),
-            )
+            .agg(**aggregations)
             .reset_index()
         )
         pivoted = period_grouped.pivot_table(
             index=group_cols,
             columns="period",
-            values=["travel_time_seconds_mean", "trip_count"],
+            values=metrics,
         )
         pivoted.columns = [
             f"{metric}_{period}{suffix}" for metric, period in pivoted.columns
@@ -819,7 +877,7 @@ def _period_pivot_columns(
         pivoted = pd.DataFrame(columns=group_cols)
 
     for period_name in all_period_names:
-        for metric in ("travel_time_seconds_mean", "trip_count"):
+        for metric in metrics:
             col = f"{metric}_{period_name}{suffix}"
             if col not in pivoted.columns:
                 pivoted[col] = None
@@ -929,6 +987,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     aggregations = {
         "trip_count": ("trip_id", "nunique"),
         "travel_time_seconds_mean": ("travel_time_seconds", "mean"),
+        "travel_time_seconds_median": ("travel_time_seconds", "median"),
         "travel_time_seconds_min": ("travel_time_seconds", "min"),
         "travel_time_seconds_max": ("travel_time_seconds", "max"),
     }
@@ -936,7 +995,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
 
     # --- Option A: per-period columns
     # (peak_am / peak_pm / rest_of_day) ---
-    period_pivot = _period_pivot_columns(edges, group_cols, peak_periods)
+    period_pivot = _period_pivot_columns(edges, group_cols, peak_periods, median=True)
     grouped = grouped.merge(period_pivot, on=group_cols, how="left")
 
     # --- Weekday vs. weekend: same overall aggregates, split by
@@ -1052,14 +1111,28 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf = _filter_by_geometry(gdf, filter_geometry)
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
-    gdf["edge_id"] = (
-        dataset_name
-        + "_"
-        + gdf["from_node"].astype(str)
-        + "_"
-        + gdf["to_node"].astype(str)
-    )
+    gdf["edge_id"] = _edge_ids(dataset_name, gdf)
     return gdf
+
+
+def _warn_implausible_times(records: pd.DataFrame, filter_geometry, dataset_name):
+    """Warn about the impossible segment times left empty in the area."""
+    if (
+        "implausible_time" not in records.columns
+        or not records["implausible_time"].any()
+    ):
+        return
+    count = int(
+        _filter_records_by_geometry(records, filter_geometry)["implausible_time"].sum()
+    )
+    if count:
+        warnings.warn(
+            f"GTFS feed {dataset_name}: {count} segment(s) between consecutive "
+            f"stops take more than {MAX_SEGMENT_SECONDS // 3600} h, probably "
+            "errors in the feed; their travel time is left empty.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def normalize_gtfs_feed(
@@ -1077,6 +1150,10 @@ def normalize_gtfs_feed(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
     """Normalize a GTFS feed into (stops, edges, schedule).
 
+    The stops (nodes) are the stops the edges use: every stop that starts
+    or ends an edge, with ``in_area`` telling whether it is inside
+    ``filter_geometry`` (see :func:`build_gtfs_stops_gdf`).
+
     The third returned element, ``schedule`` (option B), is a flat table
     (``pandas.DataFrame``, no geometry) with the trip-by-trip detail; it's
     ``None`` if ``include_schedule_table=False``.
@@ -1091,6 +1168,8 @@ def normalize_gtfs_feed(
     ``day_type`` columns in the schedule), derived from ``calendar.txt``
     (falling back to ``calendar_dates.txt`` if it doesn't exist).
     """
+    import pandas as pd
+
     stops = read_gtfs_table(feed_path, "stops.txt")
     stop_times = read_gtfs_table(feed_path, "stop_times.txt")
     trips = read_gtfs_table(feed_path, "trips.txt")
@@ -1099,12 +1178,6 @@ def normalize_gtfs_feed(
     calendar_dates = _read_optional_gtfs_table(feed_path, "calendar_dates.txt")
     frequencies = _read_optional_gtfs_table(feed_path, "frequencies.txt")
 
-    stops_gdf = build_gtfs_stops_gdf(
-        stops,
-        dataset_name=dataset_name,
-        layer_id=layer_id,
-        filter_geometry=filter_geometry,
-    )
     # The trip-segment records (times parsed, trips/routes/stops joined)
     # are the expensive part; build them once for both the edges layer and
     # the schedule table instead of once each.
@@ -1133,9 +1206,23 @@ def normalize_gtfs_feed(
         include_hourly_summary=include_hourly_summary,
         records=records,
     )
+    _warn_implausible_times(records, filter_geometry, dataset_name)
+    # The nodes are the stops the edges use, and only those: stops.txt
+    # often lists stops no trip serves (a regional catalogue, stations,
+    # entrances), and an edge crossing the boundary ends at a stop outside
+    # the area, which is kept with in_area=False.
+    stops_gdf = build_gtfs_stops_gdf(
+        stops,
+        dataset_name=dataset_name,
+        layer_id=layer_id,
+        filter_geometry=filter_geometry,
+        stop_ids=pd.concat([stop_edges_gdf["from_node"], stop_edges_gdf["to_node"]]),
+    )
 
     schedule_df = None
     if include_schedule_table:
+        # Clipped like the edges: the trips of the rest of the feed's
+        # region (a whole province or more) are not in the area.
         schedule_df = build_gtfs_schedule_table(
             stop_times,
             stops,
@@ -1143,6 +1230,7 @@ def normalize_gtfs_feed(
             routes,
             dataset_name=dataset_name,
             records=records,
+            filter_geometry=filter_geometry,
         )
 
     if target_crs:
@@ -1291,6 +1379,32 @@ def gtfs_edge_columns(
 # ---------------------------------------------------------------------------
 # Download (NAP) and standardize the GTFS layers
 # ---------------------------------------------------------------------------
+# The NAP names its files after the moment they were generated
+# (``20261119_030028_GenValenciana_Interurbano.zip``).
+_DOWNLOAD_STAMP = re.compile(r"^\d{8}_\d{6}_")
+
+
+def dataset_name_from_file(zip_path: str | Path, taken: set[str] | None = None) -> str:
+    """Stable dataset name of a GTFS file: its name without the NAP timestamp.
+
+    ``20261119_030028_GenValenciana_Interurbano.zip`` gives
+    ``genvalenciana_interurbano``, the same on every download, so folders
+    and edge ids don't change from one download to the next. If ``taken``
+    already holds the name (two files of the same dataset), ``_2``,
+    ``_3``... is added; the name returned is added to ``taken``.
+    """
+    stem = Path(zip_path).stem
+    rest = _DOWNLOAD_STAMP.sub("", stem)
+    name = slugify(rest if rest.strip("_ ") else stem)
+    if taken is None:
+        return name
+    unique, number = name, 2
+    while unique in taken:
+        unique, number = f"{name}_{number}", number + 1
+    taken.add(unique)
+    return unique
+
+
 def download_gtfs(
     area_name: str,
     boundary: gpd.GeoDataFrame,
@@ -1307,6 +1421,7 @@ def download_gtfs(
     province_codes: Iterable[int] | None = None,
     buffer_m: float = 0.0,
     skipped: dict[str, str] | None = None,
+    report: list[dict[str, object]] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1333,18 +1448,36 @@ def download_gtfs(
     feeds as both bus and rail (e.g. Cercanías Renfe), so asking for bus
     may also download a train feed. Such a feed is skipped and logged and,
     if a ``skipped`` dict is given, added to it as ``{dataset: mode}``.
+
+    If a ``report`` list is given, it gets one row per NAP dataset or file
+    (see ``_nap.download_gtfs_nap_zips``), completed with what happened to
+    each downloaded file: ``status`` ``written``, ``nothing_in_area``,
+    ``skipped_mode`` or ``failed_processing`` (with ``error``), its
+    ``dataset`` name and ``mode``, and how many ``routes``, ``stops`` and
+    ``edges`` it has in the area.
     """
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    report_rows: list[dict[str, object]] = [] if report is None else report
     zips = download_gtfs_nap_zips(
         area_name,
         zip_dir,
         modes=modes,
         api_key=api_key,
         province_codes=province_codes,
+        report=report_rows,
     )
+    by_path = {str(row["path"]): row for row in report_rows if row.get("path")}
+
+    def outcome(zip_path: Path, **fields: object) -> None:
+        """Complete the report row of a downloaded file."""
+        row = by_path.get(str(zip_path))
+        if row is None:
+            row = {"file_name": Path(zip_path).name, "path": str(zip_path)}
+            report_rows.append(row)
+        row.update(fields)
 
     filter_geometry = None
     if clip_to_boundary and not boundary.empty:
@@ -1352,8 +1485,9 @@ def download_gtfs(
 
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
+    taken: set[str] = set()
     for zip_path in zips:
-        dataset_name = slugify(Path(zip_path).stem)
+        dataset_name = dataset_name_from_file(zip_path, taken)
         # "bus" or "train", from the feed's route_type: decides the output
         # folder, and whether the feed was asked for at all.
         mode = infer_transport_mode(zip_path)
@@ -1365,6 +1499,7 @@ def download_gtfs(
             )
             if skipped is not None:
                 skipped[dataset_name] = mode
+            outcome(zip_path, dataset=dataset_name, mode=mode, status="skipped_mode")
             continue
         try:
             stops, stop_edges, schedule = normalize_gtfs_feed(
@@ -1380,7 +1515,27 @@ def download_gtfs(
             )
         except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
             logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
+            outcome(
+                zip_path,
+                dataset=dataset_name,
+                mode=mode,
+                status="failed_processing",
+                error=f"{type(exc).__name__}: {exc}",
+            )
             continue
+        outcome(
+            zip_path,
+            dataset=dataset_name,
+            mode=mode,
+            status="written" if not stop_edges.empty else "nothing_in_area",
+            routes=(
+                int(stop_edges["route_id"].nunique())
+                if "route_id" in stop_edges.columns
+                else None
+            ),
+            stops=int(len(stops)),
+            edges=int(len(stop_edges)),
+        )
         results[dataset_name] = {
             "nodes": stops,
             "edges": stop_edges,

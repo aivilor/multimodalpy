@@ -312,3 +312,20 @@ def test_gtfs_matrix_uses_the_present_weights_and_records_the_periods():
     assert matrix.weights["tts_m_pam"].tolist() == [110.0, np.inf]
     assert matrix.meta["gtfs_periods"] == {"peak_am": [7, 9], "peak_pm": [17, 20]}
     assert matrix.meta["dataset"] == "emt"
+
+
+def test_gtfs_matrix_keeps_the_in_area_of_the_stops_layer():
+    """Stops outside the area are in the GTFS nodes layer, with in_area=False."""
+    stops = gpd.GeoDataFrame(
+        {"node_id": ["s1", "s2"], "in_area": [True, False]},
+        geometry=[Point(0, 0), Point(1, 0)],
+        crs="EPSG:4326",
+    )
+    edges = gpd.GeoDataFrame(
+        {"from_node": ["s1"], "to_node": ["s2"], "tts_m": [60.0]},
+        geometry=[LineString([(0, 0), (1, 0)])],
+        crs="EPSG:4326",
+    )
+    matrix = _matrix.gtfs_network_matrix(stops, edges, mode="bus", dataset="ds")
+    assert matrix.nodes["node_id"].tolist() == ["s1", "s2"]
+    assert matrix.nodes["in_area"].tolist() == [True, False]

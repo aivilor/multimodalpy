@@ -11,8 +11,8 @@ authors:
     email: "aivilor@upv.es"
     affiliation: "Universitat Politècnica de València"
     orcid: "https://orcid.org/0009-0003-7173-452X"
-version: 0.5.0
-date-released: 2026-11-18
+version: 0.5.1
+date-released: 2026-11-19
 url: "https://github.com/aivilor/multimodalpy"
 repository-code: "https://github.com/aivilor/multimodalpy"
 license: MIT

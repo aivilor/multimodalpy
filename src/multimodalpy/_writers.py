@@ -276,12 +276,14 @@ def _gtfs_to_graph_json(
         for _, row in stops.iterrows():
             node_id = row.get("stop_id") or row.get("node_id")
             geom = row.geometry
-            graph.add_node(
-                str(node_id),
-                x=float(geom.x) if geom is not None else None,
-                y=float(geom.y) if geom is not None else None,
-                stop_name=_json_safe(row.get("stop_name")),
-            )
+            attrs = {
+                "x": float(geom.x) if geom is not None else None,
+                "y": float(geom.y) if geom is not None else None,
+                "stop_name": _json_safe(row.get("stop_name")),
+            }
+            if "in_area" in stops.columns:
+                attrs["in_area"] = bool(row.get("in_area"))
+            graph.add_node(str(node_id), **attrs)
     if edges is not None and not edges.empty:
         columns = list(edges.columns if edge_columns is None else edge_columns)
         for _, row in edges.iterrows():

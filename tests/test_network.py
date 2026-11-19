@@ -138,6 +138,7 @@ def backends(monkeypatch, boundary):
         "gtfs_error": None,
         "osm_failing": set(),
         "gtfs_skipped": {},
+        "gtfs_report": [],
     }
 
     def fake_find_area(area_name, boundaries_path=None, **kwargs):
@@ -171,12 +172,16 @@ def backends(monkeypatch, boundary):
             results[label] = make_osm_result()
         return results
 
-    def fake_download_gtfs(area_name, bnd, zip_dir, *, skipped=None, **kwargs):
+    def fake_download_gtfs(
+        area_name, bnd, zip_dir, *, skipped=None, report=None, **kwargs
+    ):
         calls["gtfs"].append(
             {"area_name": area_name, "zip_dir": Path(zip_dir), **kwargs}
         )
         if skipped is not None:
             skipped.update(calls["gtfs_skipped"])
+        if report is not None:
+            report.extend(dict(row) for row in calls["gtfs_report"])
         # The real function leaves the downloaded ZIPs in zip_dir.
         Path(zip_dir).mkdir(parents=True, exist_ok=True)
         (Path(zip_dir) / "feed.zip").write_bytes(b"not a real zip")
@@ -1244,6 +1249,25 @@ def test_cli_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 # Overpass failures
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("file_format", ["geojson", "networkx"])
+def test_gtfs_nodes_say_whether_they_are_in_the_area(tmp_path, backends, file_format):
+    result = make_gtfs_result("bus")
+    result["nodes"]["in_area"] = [True, False]
+    backends["gtfs_result"] = {"ds1": result}
+    network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, formats=file_format, api_key="k"
+    )
+    if file_format == "geojson":
+        nodes = gpd.read_file(tmp_path / "bus" / "ds1" / "nodes.geojson")
+        assert nodes.set_index("node_id")["in_area"].to_dict() == {
+            "s1": True,
+            "s2": False,
+        }
+    else:
+        graph = io.read_graph(tmp_path / "bus" / "ds1" / "graph.json")
+        assert graph.nodes["s2"]["in_area"] is False
+
+
 def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
     result = make_gtfs_result("bus")
     edges = result["edges"]
@@ -1269,6 +1293,83 @@ def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
     assert matrix.weight == "tm_mor_wd"
     assert matrix.matrix.data.tolist() == [82.0]
     assert matrix.meta["gtfs_period_codes"]["morning"] == "mor"
+
+
+def _row(dataset_id, status, **fields):
+    row = {
+        "province_code": 46,
+        "dataset_id": dataset_id,
+        "dataset_name": f"NAP {dataset_id}",
+        "transport_types": "Autobús",
+        "file_id": fields.pop("file_id", dataset_id * 10),
+        "status": status,
+        "path": "/tmp/zips/x.zip",
+    }
+    row.update(fields)
+    return row
+
+
+def test_gtfs_report_is_in_the_manifest_and_the_output_folder(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt", mode="bus", routes=1, stops=2, edges=1),
+        _row(967, "not_requested_type", transport_types="Ferroviario", file_id=None),
+        # Cercanías: one file downloaded, others the NAP no longer serves.
+        _row(929, "skipped_mode", file_id=1130, dataset="renfe_cerca", mode="train"),
+        _row(929, "failed", file_id=2400, error="404 Client Error"),
+    ]
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # nothing unusable: no warning
+        manifest = network.download_network(
+            "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+        )
+
+    report = manifest["gtfs_report"]
+    assert [row["status"] for row in report] == [
+        "written",
+        "not_requested_type",
+        "skipped_mode",
+        "failed",
+    ]
+    assert report[0]["routes"] == 1 and report[0]["dataset"] == "emt"
+    assert report[1]["transport_types"] == "Ferroviario"
+    assert "path" not in report[0]  # local paths stay out of the manifest
+    written = pd.read_csv(tmp_path / "gtfs_report.csv")
+    assert written["status"].tolist() == [row["status"] for row in report]
+    assert list(written.columns)[:4] == [
+        "province_code",
+        "dataset_id",
+        "dataset_name",
+        "transport_types",
+    ]
+
+
+def test_unusable_gtfs_datasets_raise_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt"),
+        _row(964, "failed", error="404 Client Error: Not Found"),
+        _row(932, "failed_processing", dataset="alsa", error="KeyError: 'stop_id'"),
+    ]
+    with pytest.warns(UserWarning, match="2 GTFS dataset") as record:
+        manifest = network.download_network(
+            "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+        )
+    message = str(record[0].message)
+    assert "NAP 964 (404 Client Error" in message
+    assert "NAP 932 (KeyError" in message
+    assert "NAP 965" not in message
+    assert len(manifest["gtfs_report"]) == 3
+
+
+def test_no_gtfs_report_without_bus_or_train(tmp_path, backends):
+    manifest = network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path
+    )
+    assert "gtfs_report" not in manifest
+    assert not (tmp_path / "gtfs_report.csv").exists()
 
 
 def test_skipped_gtfs_feeds_are_listed_in_the_manifest(tmp_path, backends):
@@ -1541,6 +1642,65 @@ def test_nap_province_without_datasets_is_skipped(tmp_path, nap_two_provinces):
     assert [path.name for path in zips] == ["feed_10.zip"]
     regions = [url for url in nap_two_provinces if "/conjunto-dato/" in url]
     assert len(regions) == 2  # province 1 (empty) and 46, asked only once
+
+
+def test_nap_reports_datasets_of_other_transport_types(tmp_path, monkeypatch):
+    import requests
+
+    datasets = [
+        {
+            "id": 1,
+            "nombre": "EMT",
+            "tiposTransporte": [{"id": 1, "nombre": "Autobús"}],
+            "ficheros": [{"id": 10}],
+        },
+        {
+            "id": 2,
+            "nombre": "Metro",
+            "tiposTransporte": [{"id": 2, "nombre": "Ferroviario"}],
+            "ficheros": [{"id": 20}],
+        },
+        {
+            "id": 3,
+            "nombre": "Sin tipo",
+            "tiposTransporte": [],
+            "ficheros": [{"id": 30}],
+        },
+    ]
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/conjunto-dato/region/" in url:
+            return _Response(payload={"data": datasets})
+        if "/fichero/" in url:
+            return _Response(
+                payload={
+                    "data": {
+                        "enlaceDescarga": "https://files.example/10.zip",
+                        "nombreFichero": "emt.zip",
+                    }
+                }
+            )
+        return _Response()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    report: list[dict] = []
+    zips = _nap.download_gtfs_nap_zips(
+        "Valencia", tmp_path, modes=[1], province_codes=[46], report=report
+    )
+    assert [path.name for path in zips] == ["emt.zip"]
+    by_name = {row["dataset_name"]: row for row in report}
+    assert by_name["EMT"]["status"] == "downloaded"
+    assert by_name["EMT"]["transport_types"] == "Autobús"
+    assert by_name["Metro"]["status"] == "not_requested_type"
+    assert by_name["Metro"]["transport_types"] == "Ferroviario"
+    assert by_name["Sin tipo"]["status"] == "not_requested_type"
+    assert by_name["Sin tipo"]["transport_types"] is None
+    csv = pd.read_csv(tmp_path / "nap_download_report.csv")
+    assert sorted(csv["status"]) == [
+        "downloaded",
+        "not_requested_type",
+        "not_requested_type",
+    ]
 
 
 def test_nap_rejects_invalid_province_codes(tmp_path, nap_two_provinces):

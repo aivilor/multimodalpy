@@ -225,6 +225,7 @@ def download_gtfs_nap_zips(
     base_url: str = NAP_BASE_URL,
     fail_fast: bool = False,
     province_codes: Iterable[int] | None = None,
+    report: list[dict[str, object]] | None = None,
 ) -> list[Path]:
     """Download the NAP GTFS zip files for the study area's provinces.
 
@@ -245,6 +246,13 @@ def download_gtfs_nap_zips(
 
     A province with no published dataset is skipped (the API responds with
     404); if none has any, an empty list is returned instead of raising.
+
+    What happened to each dataset is written to ``nap_download_report.csv``
+    in ``output_dir`` and, if a ``report`` list is given, added to it: one
+    row per file (``downloaded`` or ``failed``, with the error), and one per
+    dataset whose declared transport types are not among ``modes``
+    (``not_requested_type``, e.g. the metro when only bus was asked for),
+    with ``transport_types``.
     """
     import pandas as pd
     import requests
@@ -279,13 +287,32 @@ def download_gtfs_nap_zips(
         pd.DataFrame(report_rows).to_csv(
             output_dir / "nap_download_report.csv", index=False
         )
+        if report is not None:
+            report.extend(report_rows)
 
     for region_id in region_ids:
         for dataset in _province_datasets(region_id, base_url, headers):
-            dataset_modes = {
-                int(item["id"]) for item in dataset.get("tiposTransporte", [])
-            }
+            declared = dataset.get("tiposTransporte", [])
+            dataset_modes = {int(item["id"]) for item in declared}
+            transport_types = " / ".join(
+                str(item.get("nombre") or item.get("id")) for item in declared
+            )
             if mode_set and dataset_modes.isdisjoint(mode_set):
+                # Not silently: a dataset declared under another type (or
+                # none) is listed, so a missing operator can be traced.
+                report_rows.append(
+                    {
+                        "province_code": region_id,
+                        "dataset_id": dataset.get("id"),
+                        "dataset_name": dataset.get("nombre"),
+                        "transport_types": transport_types or None,
+                        "file_id": None,
+                        "status": "not_requested_type",
+                        "file_name": None,
+                        "path": None,
+                        "error": None,
+                    }
+                )
                 continue
 
             for file_info in dataset.get("ficheros", []):
@@ -299,6 +326,7 @@ def download_gtfs_nap_zips(
                     "province_code": region_id,
                     "dataset_id": dataset.get("id"),
                     "dataset_name": dataset.get("nombre"),
+                    "transport_types": transport_types or None,
                     "file_id": file_id,
                     "status": "pending",
                     "file_name": None,

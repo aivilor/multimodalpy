@@ -99,6 +99,61 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+#: Columns of ``gtfs_report`` (manifest and ``gtfs_report.csv``), in order.
+_GTFS_REPORT_COLUMNS = (
+    "province_code",
+    "dataset_id",
+    "dataset_name",
+    "transport_types",
+    "file_id",
+    "file_name",
+    "status",
+    "dataset",
+    "mode",
+    "routes",
+    "stops",
+    "edges",
+    "error",
+)
+
+
+def _gtfs_report_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Return the report rows with the public columns, in order, JSON-ready."""
+    clean = []
+    for row in rows:
+        out = {}
+        for column in _GTFS_REPORT_COLUMNS:
+            value = row.get(column)
+            if value is not None and value != value:  # NaN
+                value = None
+            out[column] = value
+        clean.append(out)
+    return clean
+
+
+def _unusable_gtfs_datasets(rows: list[dict[str, object]]) -> list[str]:
+    """List the NAP datasets that gave nothing: every file or processing failed.
+
+    A dataset that got at least one file is fine even if others failed (the
+    NAP lists files it no longer serves, e.g. some of Cercanías Renfe's).
+    """
+    by_dataset: dict[object, list[dict[str, object]]] = {}
+    for row in rows:
+        by_dataset.setdefault(row.get("dataset_id") or row.get("file_name"), []).append(
+            row
+        )
+    unusable = []
+    for dataset_rows in by_dataset.values():
+        statuses = {row["status"] for row in dataset_rows}
+        failed = statuses & {"failed", "failed_processing"}
+        if failed and not statuses & {"written", "nothing_in_area", "skipped_mode"}:
+            row = next(r for r in dataset_rows if r["status"] in failed)
+            name = row.get("dataset_name") or row.get("dataset") or row.get("file_name")
+            error = str(row.get("error") or row["status"])
+            unusable.append(f"{name} ({error[:120]})")
+    return unusable
+
+
 def download_network(
     area_name: str | None = None,
     modes: Sequence[str] = ("walking",),
@@ -230,6 +285,14 @@ def download_network(
         Manifest with the area (with its ``provinces`` and
         ``municipalities``), the modes, the folder and the files written.
 
+        ``gtfs_report`` (also written as ``gtfs_report.csv``) says what
+        happened to every NAP dataset of the area's provinces: ``written``
+        (with its ``routes``, ``stops`` and ``edges`` in the area),
+        ``nothing_in_area``, ``skipped_mode``, ``not_requested_type`` (its
+        declared ``transport_types`` are not among the modes asked for),
+        ``failed`` (download) or ``failed_processing``, with the ``error``.
+        A dataset that could not be used at all raises a ``UserWarning``.
+
         A GTFS feed whose routes are of a mode that wasn't requested
         (the NAP declares some feeds as both bus and rail) is skipped and
         listed in the manifest's ``skipped_datasets`` (``{dataset: mode}``).
@@ -341,6 +404,7 @@ def download_network(
     schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_zips_dir = output_dir / "gtfs_zips"
     skipped_datasets: dict[str, str] = {}
+    gtfs_report: list[dict[str, object]] = []
     if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
@@ -359,6 +423,7 @@ def download_network(
                 include_schedule_table=write_schedule,
                 buffer_m=buffer_m,
                 skipped=skipped_datasets,
+                report=gtfs_report,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -379,7 +444,7 @@ def download_network(
         GTFS_EDGES_COLUMNS = _gtfs.gtfs_edge_columns(gtfs_peak_periods)
         gtfs_rename = _gtfs.gtfs_edge_rename(gtfs_peak_periods)
 
-        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
+        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "in_area", "geometry"]
 
         for dataset, gtfs_out in gtfs_results.items():
             nodes_gdf = gtfs_out["nodes"]
@@ -405,6 +470,16 @@ def download_network(
 
     if nap_modes and not keep_gtfs_zips:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
+
+    # What happened to every NAP dataset, next to the layers: the copy the
+    # NAP client writes in gtfs_zips/ is gone unless keep_gtfs_zips=True.
+    gtfs_report_rows = _gtfs_report_rows(gtfs_report)
+    if gtfs_report_rows:
+        import pandas as pd
+
+        pd.DataFrame(gtfs_report_rows, columns=list(_GTFS_REPORT_COLUMNS)).to_csv(
+            output_dir / "gtfs_report.csv", index=False
+        )
 
     # 4) Local write, once per requested format. The download and
     #    normalization (steps 1-3) already happened only once, so
@@ -535,6 +610,17 @@ def download_network(
     if gtfs_results:
         # Code of each period in the short column names (tts_m_pam, tm_mor_wd).
         manifest["gtfs_period_codes"] = _gtfs.period_codes(gtfs_peak_periods)
+    if gtfs_report_rows:
+        manifest["gtfs_report"] = gtfs_report_rows
+        unusable = _unusable_gtfs_datasets(gtfs_report_rows)
+        if unusable:
+            warnings.warn(
+                f"{len(unusable)} GTFS dataset(s) could not be used: "
+                + "; ".join(unusable)
+                + ". See manifest['gtfs_report'] or gtfs_report.csv.",
+                UserWarning,
+                stacklevel=2,
+            )
     if skipped_datasets:
         # Feeds the NAP returned for a requested mode whose routes turned
         # out to be of another one (e.g. Cercanías when asking for bus).
