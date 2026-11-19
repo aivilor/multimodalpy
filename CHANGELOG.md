@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `gtfs_report` in the manifest, also written as `gtfs_report.csv` in the output
+  folder: what happened to every NAP dataset of the area's provinces (written
+  with its routes, stops and edges in the area, nothing in the area, skipped for
+  its mode, not downloaded because of its declared transport type, failed to
+  download or to process, with the error). A dataset that could not be used at
+  all raises a `UserWarning`. Before, a feed that failed to process disappeared
+  without a trace, since the library's log is silent unless the application
+  configures logging, and the download report was inside `gtfs_zips/`, deleted
+  unless `keep_gtfs_zips=True` (#90).
+
 ### Changed
 - GTFS dataset names no longer carry the timestamp the NAP puts in front of its
   file names: `20261119_030028_GenValenciana_Interurbano.zip` gives

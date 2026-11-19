@@ -13,6 +13,7 @@ output_dir/
 ├── bike/                    nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
+├── gtfs_report.csv          with bus or train: what happened to each NAP dataset
 ├── gtfs_zips/               only with keep_gtfs_zips=True
 └── <area>.gpkg              only with formats="geopackage"
 ```
@@ -72,6 +73,27 @@ feed is treated as bus.
 Only the feeds of the modes asked for are written: a feed the NAP returns for
 `bus` whose routes turn out to be rail (or the other way round) is skipped and
 listed in the manifest's `skipped_datasets`, e.g. `{"renfe_cerca": "train"}`.
+
+### GTFS report (`gtfs_report.csv`)
+
+With bus or train, `gtfs_report.csv` and the manifest's `gtfs_report` list every
+NAP dataset of the area's provinces and what happened to it, one row per file
+(or per dataset, when nothing was downloaded from it):
+
+| Column | Meaning |
+|---|---|
+| `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP) |
+| `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
+| `file_id`, `file_name` | NAP file |
+| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `failed` (download) or `failed_processing` |
+| `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
+| `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
+| `error` | Why it failed |
+
+A dataset that could not be used at all (every file failed, or processing did)
+raises a `UserWarning` naming it. One that got a file is fine even if the NAP
+lists other files it no longer serves. The NAP only offers what is published for
+each province: an operator missing from the report is not on the NAP.
 
 ## `download_network()` parameters that shape the output
 

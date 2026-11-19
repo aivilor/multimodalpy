@@ -1421,6 +1421,7 @@ def download_gtfs(
     province_codes: Iterable[int] | None = None,
     buffer_m: float = 0.0,
     skipped: dict[str, str] | None = None,
+    report: list[dict[str, object]] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1447,18 +1448,36 @@ def download_gtfs(
     feeds as both bus and rail (e.g. Cercanías Renfe), so asking for bus
     may also download a train feed. Such a feed is skipped and logged and,
     if a ``skipped`` dict is given, added to it as ``{dataset: mode}``.
+
+    If a ``report`` list is given, it gets one row per NAP dataset or file
+    (see ``_nap.download_gtfs_nap_zips``), completed with what happened to
+    each downloaded file: ``status`` ``written``, ``nothing_in_area``,
+    ``skipped_mode`` or ``failed_processing`` (with ``error``), its
+    ``dataset`` name and ``mode``, and how many ``routes``, ``stops`` and
+    ``edges`` it has in the area.
     """
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    report_rows: list[dict[str, object]] = [] if report is None else report
     zips = download_gtfs_nap_zips(
         area_name,
         zip_dir,
         modes=modes,
         api_key=api_key,
         province_codes=province_codes,
+        report=report_rows,
     )
+    by_path = {str(row["path"]): row for row in report_rows if row.get("path")}
+
+    def outcome(zip_path: Path, **fields: object) -> None:
+        """Complete the report row of a downloaded file."""
+        row = by_path.get(str(zip_path))
+        if row is None:
+            row = {"file_name": Path(zip_path).name, "path": str(zip_path)}
+            report_rows.append(row)
+        row.update(fields)
 
     filter_geometry = None
     if clip_to_boundary and not boundary.empty:
@@ -1480,6 +1499,7 @@ def download_gtfs(
             )
             if skipped is not None:
                 skipped[dataset_name] = mode
+            outcome(zip_path, dataset=dataset_name, mode=mode, status="skipped_mode")
             continue
         try:
             stops, stop_edges, schedule = normalize_gtfs_feed(
@@ -1495,7 +1515,27 @@ def download_gtfs(
             )
         except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
             logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
+            outcome(
+                zip_path,
+                dataset=dataset_name,
+                mode=mode,
+                status="failed_processing",
+                error=f"{type(exc).__name__}: {exc}",
+            )
             continue
+        outcome(
+            zip_path,
+            dataset=dataset_name,
+            mode=mode,
+            status="written" if not stop_edges.empty else "nothing_in_area",
+            routes=(
+                int(stop_edges["route_id"].nunique())
+                if "route_id" in stop_edges.columns
+                else None
+            ),
+            stops=int(len(stops)),
+            edges=int(len(stop_edges)),
+        )
         results[dataset_name] = {
             "nodes": stops,
             "edges": stop_edges,

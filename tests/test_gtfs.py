@@ -690,3 +690,53 @@ def test_download_gtfs_uses_the_stable_names(tmp_path, monkeypatch):
     assert list(results) == ["genvalenciana_interurbano"]
     edges = results["genvalenciana_interurbano"]["edges"]
     assert edges["edge_id"].tolist() == ["genvalenciana_interurbano_R1_A_B"]
+
+
+# ---------------------------------------------------------------------------
+# Report: what happened to each downloaded file
+# ---------------------------------------------------------------------------
+def test_download_gtfs_completes_the_report(tmp_path, monkeypatch):
+    import geopandas as gpd
+
+    trips = [("R1", "WD", "t1")]
+    inside = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    outside = [
+        ("t1", "07:00:00", "07:00:00", "X", 1),
+        ("t1", "07:05:00", "07:05:00", "Y", 2),
+    ]
+    bus = _write_feed(tmp_path / "bus.zip", [("R1", "1", 3)], trips, inside)
+    far = _write_feed(tmp_path / "far.zip", [("R1", "1", 3)], trips, outside)
+    train = _write_feed(tmp_path / "train.zip", [("R1", "", 2)], trips, inside)
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"not a zip")
+    files = [bus, far, train, broken]
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        # Like the NAP client: one row per downloaded file, with its path.
+        for i, path in enumerate(files):
+            report.append({"dataset_id": i, "status": "downloaded", "path": str(path)})
+        return files
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia", boundary, tmp_path / "zips", modes=[1], api_key="k", report=report
+    )
+    rows = {row["dataset"]: row for row in report}
+    assert rows["bus"]["status"] == "written"
+    assert (rows["bus"]["routes"], rows["bus"]["stops"], rows["bus"]["edges"]) == (
+        1,
+        2,
+        1,
+    )
+    assert rows["far"]["status"] == "nothing_in_area"
+    assert rows["train"]["status"] == "skipped_mode"
+    assert rows["train"]["mode"] == "train"
+    assert rows["broken"]["status"] == "failed_processing"
+    assert rows["broken"]["error"]
+    assert len(report) == 4  # completed in place, not appended
+    assert set(results) == {"bus", "far"}
