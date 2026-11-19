@@ -35,12 +35,16 @@ Thanks for your interest in contributing! `multimodalpy` is a small, community-f
 Before opening a pull request, make sure the full check suite passes — this is the same suite run in CI:
 
 ```bash
-python -m pytest       # test suite + coverage report
-python -m mypy         # static type checking
-python -m ruff check . # linting
+python -m pytest                # test suite + coverage report
+python -m mypy                  # static type checking
+python -m ruff check .          # linting
+python -m ruff format --check . # formatting (ruff format . fixes it)
 ```
 
-All three must pass cleanly for a PR to be merged.
+All four must pass cleanly for a PR to be merged. CI runs the tests on Ubuntu
+and macOS with Python 3.11 to 3.14, and the checks with the ruff version pinned
+in the `lint` dependency group: install it with `pip install --group lint`, so
+your local ruff formats the same way.
 
 ### Code style
 
@@ -52,7 +56,8 @@ All three must pass cleanly for a PR to be merged.
 
 1. Push your branch and open a pull request against **`develop`** (not `main`) — this repo develops on `develop` and releases from `main`.
 2. Fill in the PR description: what changed and why, and how you tested it.
-3. Make sure CI (GitHub Actions `Tests` workflow) passes on your PR.
+3. Make sure CI (GitHub Actions `Tests` workflow: the tests and the lint job)
+   passes on your PR.
 4. Be responsive to review feedback — most PRs go through at least one round of comments.
 
 ## Reporting security issues
