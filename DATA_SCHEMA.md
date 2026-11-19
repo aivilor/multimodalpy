@@ -235,6 +235,11 @@ One edge per pair of consecutive stops of a route, with travel time statistics
 aggregated over every trip that runs it. Columns are listed with their former,
 long name.
 
+A segment that takes more than 3 hours between two consecutive stops is an error
+in the feed (a time typed on the wrong hour or day): its travel time is left
+empty, so it counts in `trips` but not in the travel times, and a `UserWarning`
+says how many there were in the study area.
+
 ### Identification
 
 | Column | Former name | Meaning |

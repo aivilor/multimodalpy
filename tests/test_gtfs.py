@@ -542,3 +542,55 @@ def test_edge_id_without_a_route_id():
         {"route_id": ["R1", None], "from_node": ["A", "A"], "to_node": ["B", "B"]}
     )
     assert _gtfs._edge_ids("ds", frame).tolist() == ["ds_R1_A_B", "ds__A_B"]
+
+
+# ---------------------------------------------------------------------------
+# Impossible segment times
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def feed_with_a_typo(tmp_path):
+    """t2's A -> B "takes" 10 h (17:16 typed for 08:16); t3's B -> C exactly 3 h."""
+    trips = [("R1", "WD", "t1"), ("R1", "WD", "t2"), ("R2", "WD", "t3")]
+    trips.append(("R4", "WD", "t5"))
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+        ("t2", "08:10:00", "08:10:00", "A", 1),
+        ("t2", "18:10:00", "18:10:00", "B", 2),
+        ("t3", "14:00:00", "14:00:00", "B", 1),
+        ("t3", "17:00:00", "17:00:00", "C", 2),
+        # Outside the area: not counted in the warning.
+        ("t5", "10:00:00", "10:00:00", "X", 1),
+        ("t5", "23:00:00", "23:00:00", "Y", 2),
+    ]
+    routes = [("R1", "1", 3), ("R2", "2", 3), ("R4", "4", 3)]
+    return _write_feed(tmp_path / "typo.zip", routes, trips, stop_times)
+
+
+def test_impossible_segment_times_are_left_empty(feed_with_a_typo):
+    with pytest.warns(UserWarning, match=r"ds: 1 segment\(s\).*more than 3 h"):
+        _, edges, schedule = _gtfs.normalize_gtfs_feed(
+            feed_with_a_typo,
+            dataset_name="ds",
+            layer_id="ds",
+            filter_geometry=AREA,
+            include_schedule_table=True,
+        )
+    times = schedule.set_index("trip_id")["travel_time_seconds"]
+    assert np.isnan(times["t2"])
+    assert times["t3"] == 3 * 3600  # exactly the limit is kept
+    a_to_b = edges.set_index("edge_id").loc["ds_R1_A_B"]
+    assert a_to_b["trip_count"] == 2  # the trip still ran
+    assert a_to_b["travel_time_seconds_mean"] == 300  # from t1 only
+    assert a_to_b["travel_time_seconds_max"] == 300
+    assert "implausible_time" not in schedule.columns
+
+
+def test_no_warning_without_impossible_times(feed):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _gtfs.normalize_gtfs_feed(
+            feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+        )

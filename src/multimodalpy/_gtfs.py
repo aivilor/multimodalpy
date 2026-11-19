@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,6 +50,12 @@ DEFAULT_PEAK_PERIODS: dict[str, tuple[int, int]] = {
     "peak_am": (7, 9),  # morning peak, 07:00-09:00
     "peak_pm": (17, 20),  # evening peak, 17:00-20:00
 }
+
+#: Longest believable travel time between two consecutive stops of a trip.
+#: Longer ones are errors in the feed (a time typed on the wrong day or
+#: hour: one Valencia interurban segment "took" 10.9 h); their travel time
+#: is left empty so it doesn't distort the edge statistics and the matrix.
+MAX_SEGMENT_SECONDS = 3 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +657,10 @@ def _build_stop_to_stop_trip_records(
         work["next_arrival_seconds"] - work["departure_seconds"]
     )
     work.loc[work["travel_time_seconds"] < 0, "travel_time_seconds"] = float("nan")
+    # Impossible times (see MAX_SEGMENT_SECONDS): left empty and marked, so
+    # normalize_gtfs_feed can say how many there were in the study area.
+    work["implausible_time"] = work["travel_time_seconds"] > MAX_SEGMENT_SECONDS
+    work.loc[work["implausible_time"], "travel_time_seconds"] = float("nan")
 
     work["hour_band"] = work["departure_seconds"].apply(
         lambda s: seconds_to_hour_band(s, band_size_hours=hour_band_size)
@@ -1096,6 +1107,26 @@ def build_gtfs_stop_to_stop_edges_gdf(
     return gdf
 
 
+def _warn_implausible_times(records: pd.DataFrame, filter_geometry, dataset_name):
+    """Warn about the impossible segment times left empty in the area."""
+    if (
+        "implausible_time" not in records.columns
+        or not records["implausible_time"].any()
+    ):
+        return
+    count = int(
+        _filter_records_by_geometry(records, filter_geometry)["implausible_time"].sum()
+    )
+    if count:
+        warnings.warn(
+            f"GTFS feed {dataset_name}: {count} segment(s) between consecutive "
+            f"stops take more than {MAX_SEGMENT_SECONDS // 3600} h, probably "
+            "errors in the feed; their travel time is left empty.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def normalize_gtfs_feed(
     feed_path: str | Path,
     *,
@@ -1167,6 +1198,7 @@ def normalize_gtfs_feed(
         include_hourly_summary=include_hourly_summary,
         records=records,
     )
+    _warn_implausible_times(records, filter_geometry, dataset_name)
     # The nodes are the stops the edges use, and only those: stops.txt
     # often lists stops no trip serves (a regional catalogue, stations,
     # entrances), and an edge crossing the boundary ends at a stop outside

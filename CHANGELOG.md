@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pairs in the Valencia interurban feed) repeated it, and joining the schedule
   to the edges by `edge_id` matched the wrong rows. It is now
   `<dataset>_<route_id>_<from_node>_<to_node>` (#90).
+- A GTFS segment with an impossible travel time between two consecutive stops,
+  an error in the feed (one Valencia interurban segment "took" 10.9 hours),
+  inflated the mean and maximum times of its edge and the matrix weights.
+  Segments over 3 hours (`MAX_SEGMENT_SECONDS`) now have no travel time: they
+  still count as trips, and a `UserWarning` says how many there were in the
+  area (#90).
 
 ## [0.5.0] - 2026-11-18
 
