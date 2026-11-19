@@ -12,8 +12,9 @@ matrices for shortest-path calculations. On the walking, cycling and driving
 networks it also computes isochrones and shortest paths
 (`multimodalpy.analysis`).
 
-Only municipalities in Spain are supported (not the Canary Islands with the
-default boundaries file). Each mode is exported as its own network; linking them
+Only Spain is supported: a municipality or a study area of your own, in
+peninsular Spain, the Balearic Islands, Ceuta or Melilla (not the Canary
+Islands). Each mode is exported as its own network; linking them
 into a single multimodal network is planned but not implemented yet.
 
 ## Installation

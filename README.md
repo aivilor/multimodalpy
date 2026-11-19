@@ -23,9 +23,9 @@ network analysis. On the walking, cycling and driving networks, `multimodalpy`
 also computes isochrones (the area reachable from a point within a travel time)
 and shortest paths between sets of points.
 
-> **Scope.** Only municipalities in Spain are supported: peninsular Spain, the
-> Balearic Islands, Ceuta and Melilla. The Canary Islands are not in the default
-> boundaries file (you can pass your own with `boundaries_path`).
+> **Scope.** Only Spain is supported: a municipality, or a study area of your
+> own (a metropolitan area, a district), in peninsular Spain, the Balearic
+> Islands, Ceuta or Melilla. The Canary Islands are not covered.
 >
 > **Status.** Each mode is exported as its own network. Linking them into a
 > single multimodal network (e.g. walking to and from stops) is planned but not
@@ -106,15 +106,77 @@ If the NAP rejects the key, or has no feeds for the area, the street layers are
 also written and a warning explains why there is no bus or train data
 (`manifest["gtfs_status"]`).
 
+### Your own study area
+
+To work on an area that is not one municipality (a metropolitan area, a
+district, a planning area), pass a Shapefile, GeoJSON or GeoPackage with its
+polygon as `boundaries_path`. No name or code columns are needed, and any CRS
+works as long as the file defines one. A GeoPackage with several layers is read
+from its only polygon layer:
+
+```python
+manifest = mmp.download_network(
+    boundaries_path="pateval.geojson",
+    modes=["walking", "bus", "train"],
+    output_dir="output",
+)
+manifest["provinces"]       # [{"code": 46, "name": "Valencia/València"}]
+manifest["municipalities"]  # every municipality in the area
+```
+
+The polygons in the file are merged into one, and everything is downloaded and
+clipped to it. It is crossed with the packaged municipal boundaries to know which
+provinces' bus and train feeds to download: a province counts when it holds at
+least 5% of the area, so the edges of a polygon drawn with another precision do
+not add neighbouring provinces. The files are named after the file
+(`pateval.gpkg`) unless you pass `area_name`. An area outside Spain's covered
+territory raises an error. Use `multimodalpy.find_area(boundaries_path=...)` to
+check the provinces and municipalities before downloading.
+
 ### Command line
 
 ```bash
 multimodalpy --area Valencia --modes walking bus \
     --output-dir output --formats geojson geopackage --buffer-m 500
+multimodalpy --boundaries pateval.geojson --modes walking bus
 ```
 
 Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
 same way.
+
+### Streets: the Overpass server
+
+The walking, bike and driving networks are downloaded from OpenStreetMap
+through an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
+server, by default the public `overpass-api.de`. It is run by volunteers and is
+often at capacity: it then answers with an error page instead of data.
+
+- A temporary failure (server busy, timeout, lost connection) is **retried four
+  times**, waiting 10, 20, 40 and 80 seconds, and each retry is logged.
+- If a network still can't be downloaded, the others are downloaded and written
+  anyway; the failed one is listed in the manifest's `failed_modes` and reported
+  with a warning. Only if nothing at all could be downloaded does
+  `download_network()` raise `OSMDownloadError`, which says which network and
+  which server failed.
+- Every answer is cached, so **running the same call again later** only
+  downloads what is missing. The cache is kept in the same folder as the
+  municipal boundaries (`pooch.os_cache("multimodalpy")`), not in your
+  working directory.
+- To use **another Overpass server**, pass its `.../api` address (the OSM wiki
+  keeps a [list of public instances](https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances);
+  some cover only one country, and their availability changes). There is no
+  automatic switch to another server:
+
+  ```python
+  mmp.download_network("Valencia", modes=["walking"],
+                       overpass_url="https://overpass.private.coffee/api")
+  ```
+
+  A large area may also need a longer `osm_timeout` (in seconds).
+
+Please be gentle with these public servers: their usage policies, listed with
+the instances, ask for moderate use. For many areas or frequent downloads, run your own
+Overpass instance and point `overpass_url` to it.
 
 ## What you get
 
@@ -221,11 +283,13 @@ paths and is much faster.
 | `output_dir` | `"output"` | Folder to write to. |
 | `formats` | `"geojson"` | `geojson`, `shapefile`, `geopackage`, `networkx`, `matrix`, or a list to write several at once. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer, e.g. `"EPSG:25830"` for metres in Spain. |
-| `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). |
-| `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`. |
+| `province` | `None` | Province name or INE code, to choose between towns that share a name (e.g. `"Castejón"` exists in Cuenca and Navarra). Only with a municipality name. |
+| `area_code` | `None` | The municipality's 5-digit INE code (`"46250"` for València) or its full INSPIRE `NATCODE`, instead of its name. |
 | `buffer_m` | `0` | Widen the download area by this many metres, so streets and routes crossing the municipal boundary are not cut. The exported boundary stays exact. |
 | `connect_parts` | `True` | For municipalities in several separate parts (e.g. Donostia/San Sebastián), add the shortest roads joining them, marked `connector=True`. `--no-connect-parts` in the CLI. |
-| `boundaries_path` | packaged file | Your own boundaries file (Shapefile or GeoJSON). |
+| `boundaries_path` | `None` | A Shapefile, GeoJSON or GeoPackage with your own study area, instead of a municipality (see "Your own study area"). |
+| `overpass_url` | `None` | Overpass server for the OpenStreetMap networks; by default the public `overpass-api.de` (see "Streets: the Overpass server"). |
+| `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
@@ -238,7 +302,7 @@ listing them).
 | Module | What it is for |
 |---|---|
 | `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
-| `multimodalpy.area` | `find_area()`: the municipality's boundary. |
+| `multimodalpy.area` | `find_area()`: the study area's polygon, provinces and municipalities. |
 | `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
 | `multimodalpy.analysis` | `isochrones()`, `shortest_path()` and the other network analyses. |
 
@@ -252,14 +316,16 @@ listing them).
    (accents, bilingual names such as `Elx/Elche` and small typos are handled)
    to get its polygon and province code. If the name fits several
    municipalities, you get the list of candidates and pick one with
-   `province` or `area_code`, instead of a merged area.
+   `province` or `area_code`, instead of a merged area. A polygon of your own
+   (`boundaries_path`) is crossed with the municipal boundaries instead, to get
+   the provinces and municipalities it overlaps.
 2. **Streets.** `osmnx` downloads the OSM network inside the polygon (widened
-   by `buffer_m` if set). If the municipality is made of separate parts, the
+   by `buffer_m` if set) from an Overpass server, retrying when it is busy. If the municipality is made of separate parts, the
    shortest roads joining them are added, so the network is not split into
    islands.
    `multimodalpy` adds a node at every real intersection, splits the edges
    there and computes a travel time per mode.
-3. **Public transport.** The province's GTFS feeds are downloaded from the NAP,
+3. **Public transport.** The GTFS feeds of the area's provinces are downloaded from the NAP,
    clipped to the area and turned into stop-to-stop edges with timetable
    statistics.
 4. **Export.** Every layer is written in the requested formats with the same
@@ -295,7 +361,7 @@ sidebar gives a ready-made citation (APA, BibTeX) from
   title     = {multimodalpy: Easy creation of multimodal transport networks
                from OpenStreetMap and GTFS data},
   year      = {2026},
-  version   = {0.4.0},
+  version   = {0.5.0},
   doi       = {10.5281/zenodo.NNNNNNN},
   url       = {https://github.com/aivilor/multimodalpy},
   license   = {MIT}

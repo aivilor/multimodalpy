@@ -36,7 +36,8 @@ AREAS = [
 
 
 @pytest.fixture
-def boundaries_path(tmp_path):
+def packaged(tmp_path, monkeypatch):
+    """The synthetic file, standing in for the packaged municipal boundaries."""
     gdf = gpd.GeoDataFrame(
         {
             "NAMEUNIT": [name for name, _, _ in AREAS],
@@ -52,11 +53,12 @@ def boundaries_path(tmp_path):
     )
     path = tmp_path / "boundaries.geojson"
     gdf.to_file(path, driver="GeoJSON")
+    monkeypatch.setattr(_boundaries, "_default_boundaries_path", lambda: path)
     return path
 
 
-def find(path, name, **kwargs):
-    return area.find_area(name, path, **kwargs).iloc[0]
+def find(packaged, name, **kwargs):
+    return area.find_area(name, **kwargs).iloc[0]
 
 
 # ---------------------------------------------------------------------------
@@ -71,95 +73,93 @@ def find(path, name, **kwargs):
         ("Donostia", "Donostia/San Sebastián", 20),
     ],
 )
-def test_bilingual_part_wins_over_longer_names(
-    boundaries_path, query, expected, province
-):
+def test_bilingual_part_wins_over_longer_names(packaged, query, expected, province):
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # an official name needs no warning
-        row = find(boundaries_path, query)
-    assert row["matched_value"] == expected
-    assert row["matched_rows"] == 1
-    assert row["province_code"] == province
+        row = find(packaged, query)
+    assert row["match_val"] == expected
+    assert row["match_rows"] == 1
+    assert row["prov_codes"] == [province]
 
 
-def test_whole_word_match_skips_longer_words(boundaries_path):
+def test_whole_word_match_skips_longer_words(packaged):
     with pytest.warns(UserWarning, match="whole words"):
-        row = find(boundaries_path, "Castellón")
-    assert row["matched_value"] == "Castelló de la Plana/Castellón de la Plana"
-    assert row["province_code"] == 12
+        row = find(packaged, "Castellón")
+    assert row["match_val"] == "Castelló de la Plana/Castellón de la Plana"
+    assert row["prov_codes"] == [12]
 
 
-def test_substring_matching_several_towns_is_ambiguous(boundaries_path):
+def test_substring_matching_several_towns_is_ambiguous(packaged):
     with pytest.raises(area.AmbiguousAreaError) as excinfo:
-        find(boundaries_path, "Sebasti")
+        find(packaged, "Sebasti")
     assert len(excinfo.value.candidates) == 2
 
 
 # ---------------------------------------------------------------------------
 # Same name in two provinces
 # ---------------------------------------------------------------------------
-def test_shared_name_raises_with_both_candidates(boundaries_path):
+def test_shared_name_raises_with_both_candidates(packaged):
     with pytest.raises(area.AmbiguousAreaError, match="province=") as excinfo:
-        find(boundaries_path, "Castejón")
+        find(packaged, "Castejón")
     labels = " ".join(excinfo.value.candidates)
     assert "Navarra" in labels and "Cuenca" in labels
 
 
-def test_ambiguous_error_is_a_value_error(boundaries_path):
+def test_ambiguous_error_is_a_value_error(packaged):
     with pytest.raises(ValueError):
-        find(boundaries_path, "Castejón")
+        find(packaged, "Castejón")
 
 
 @pytest.mark.parametrize(
     ("province", "expected_code"),
     [("Navarra", 31), ("nafarroa", 31), (31, 31), ("31", 31), ("Cuenca", 16)],
 )
-def test_province_picks_between_shared_names(boundaries_path, province, expected_code):
-    row = find(boundaries_path, "Castejón", province=province)
-    assert row["province_code"] == expected_code
+def test_province_picks_between_shared_names(packaged, province, expected_code):
+    row = find(packaged, "Castejón", province=province)
+    assert row["prov_codes"] == [expected_code]
 
 
-def test_unknown_province_raises(boundaries_path):
+def test_unknown_province_raises(packaged):
     with pytest.raises(ValueError, match="Unknown province"):
-        find(boundaries_path, "Castejón", province="Narnia")
+        find(packaged, "Castejón", province="Narnia")
 
 
-def test_province_out_of_range_raises(boundaries_path):
+def test_province_out_of_range_raises(packaged):
     with pytest.raises(ValueError, match="1 to 52"):
-        find(boundaries_path, "Castejón", province=99)
+        find(packaged, "Castejón", province=99)
 
 
-def test_province_with_no_rows_raises(boundaries_path):
+def test_province_with_no_rows_raises(packaged):
     with pytest.raises(ValueError, match="No boundary in the file belongs"):
-        find(boundaries_path, "Castejón", province="Lugo")
+        find(packaged, "Castejón", province="Lugo")
 
 
 # ---------------------------------------------------------------------------
 # Fuzzy matching
 # ---------------------------------------------------------------------------
-def test_typo_tied_between_two_towns_is_ambiguous(boundaries_path):
+def test_typo_tied_between_two_towns_is_ambiguous(packaged):
     with pytest.raises(area.AmbiguousAreaError) as excinfo:
-        find(boundaries_path, "Gerona")
+        find(packaged, "Gerona")
     labels = " ".join(excinfo.value.candidates)
     assert "Girona" in labels and "Gerena" in labels
 
 
-def test_typo_resolved_with_province_warns(boundaries_path):
+def test_typo_resolved_with_province_warns(packaged):
     with pytest.warns(UserWarning, match="typo"):
-        row = find(boundaries_path, "Gerona", province="Girona")
-    assert row["matched_value"] == "Girona"
+        row = find(packaged, "Gerona", province="Girona")
+    assert row["match_val"] == "Girona"
 
 
-def test_transposition_counts_as_one_edit(boundaries_path):
+def test_transposition_counts_as_one_edit(packaged):
     with pytest.warns(UserWarning, match="Valencai"):
-        row = find(boundaries_path, "Valencai")
-    assert row["matched_value"] == "València"
+        row = find(packaged, "Valencai")
+    assert row["match_val"] == "València"
 
 
-def test_unrelated_name_is_not_forced_onto_a_town(boundaries_path):
+def test_unrelated_name_is_not_forced_onto_a_town(packaged):
     # 70% similar to "Sevilla": accepted by the old 0.7 threshold.
     with pytest.raises(ValueError, match="No boundary found"):
-        find(boundaries_path, "Sevillanas")
+        find(packaged, "Sevillanas")
 
 
 def test_typo_distance_handles_transpositions():
@@ -171,46 +171,38 @@ def test_typo_distance_handles_transpositions():
 # ---------------------------------------------------------------------------
 # area_code
 # ---------------------------------------------------------------------------
-def test_area_code_accepts_five_digit_ine_code(boundaries_path):
-    row = find(boundaries_path, "ignored", area_code="46250")
-    assert row["matched_value"] == "34104646250"
-    assert row["province_code"] == 46
+def test_area_code_accepts_five_digit_ine_code(packaged):
+    row = find(packaged, "ignored", area_code="46250")
+    assert row["match_val"] == "34104646250"
+    assert row["prov_codes"] == [46]
 
 
-def test_area_code_still_accepts_full_natcode(boundaries_path):
-    row = find(boundaries_path, "ignored", area_code="34153131070")
-    assert row["province_code"] == 31
+def test_area_code_still_accepts_full_natcode(packaged):
+    row = find(packaged, "ignored", area_code="34153131070")
+    assert row["prov_codes"] == [31]
 
 
-def test_unknown_ine_code_raises(boundaries_path):
+def test_unknown_ine_code_raises(packaged):
     with pytest.raises(ValueError, match="No boundary found for code"):
-        find(boundaries_path, "ignored", area_code="99999")
+        find(packaged, "ignored", area_code="99999")
 
 
 # ---------------------------------------------------------------------------
 # Non-municipal territories
 # ---------------------------------------------------------------------------
-def test_non_municipal_territory_warns(boundaries_path):
+def test_non_municipal_territory_warns(packaged):
     with pytest.warns(UserWarning, match="not a municipality"):
-        row = find(boundaries_path, "Gibraltar")
-    assert row["province_code"] is None
+        row = find(packaged, "Gibraltar")
+    assert row["prov_codes"] == []
+    assert row["mun_codes"] == []
 
 
 # ---------------------------------------------------------------------------
 # Default file: coverage note and shapefile selection
 # ---------------------------------------------------------------------------
-def test_not_found_with_default_file_mentions_coverage(boundaries_path, monkeypatch):
-    monkeypatch.setattr(
-        _boundaries, "_default_boundaries_path", lambda: boundaries_path
-    )
-    with pytest.raises(ValueError, match="Canary Islands"):
+def test_not_found_mentions_coverage_and_own_areas(packaged):
+    with pytest.raises(ValueError, match="Canary Islands.*boundaries_path"):
         area.find_area("Las Palmas de Gran Canaria")
-
-
-def test_not_found_with_own_file_has_no_coverage_note(boundaries_path):
-    with pytest.raises(ValueError) as excinfo:
-        find(boundaries_path, "Las Palmas de Gran Canaria")
-    assert "Canary" not in str(excinfo.value)
 
 
 def test_pick_shapefile_skips_macos_metadata():
@@ -231,8 +223,8 @@ def test_boundaries_release_hash_is_set():
 # ---------------------------------------------------------------------------
 # Buffer
 # ---------------------------------------------------------------------------
-def test_study_area_geometry_buffer_widens_the_area(boundaries_path):
-    boundary = area.find_area("Sevilla", boundaries_path)
+def test_study_area_geometry_buffer_widens_the_area(packaged):
+    boundary = area.find_area("Sevilla")
     exact = _boundaries.study_area_geometry(boundary)
     buffered = _boundaries.study_area_geometry(boundary, buffer_m=500)
     assert buffered.contains(exact)
@@ -240,18 +232,16 @@ def test_study_area_geometry_buffer_widens_the_area(boundaries_path):
     assert exact.equals(boundary.geometry.iloc[0])
 
 
-def test_study_area_geometry_rejects_negative_buffer(boundaries_path):
-    boundary = area.find_area("Sevilla", boundaries_path)
+def test_study_area_geometry_rejects_negative_buffer(packaged):
+    boundary = area.find_area("Sevilla")
     with pytest.raises(ValueError, match="buffer_m"):
         _boundaries.study_area_geometry(boundary, buffer_m=-10)
 
 
-def test_download_osm_layers_uses_buffer_and_truncate_by_edge(
-    boundaries_path, monkeypatch
-):
+def test_download_osm_layers_uses_buffer_and_truncate_by_edge(packaged, monkeypatch):
     import osmnx as ox
 
-    boundary = area.find_area("Sevilla", boundaries_path)
+    boundary = area.find_area("Sevilla")
     captured = {}
 
     def fake_graph_from_polygon(polygon, **kwargs):

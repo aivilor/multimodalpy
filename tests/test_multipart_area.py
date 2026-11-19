@@ -120,7 +120,9 @@ def downloads(monkeypatch):
 
 
 def _boundary(geometry) -> gpd.GeoDataFrame:
-    return gpd.GeoDataFrame({"name": ["Test"]}, geometry=[geometry], crs="EPSG:4326")
+    return gpd.GeoDataFrame(
+        {"area_name": ["Test"]}, geometry=[geometry], crs="EPSG:4326"
+    )
 
 
 def _layers(geometry, **kwargs):

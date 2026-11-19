@@ -1,8 +1,8 @@
 """Transport networks: download, standardize and write them.
 
 :func:`download_network` is the library's main function: give it a
-municipality and the modes, and it writes every network in the formats
-requested::
+municipality (or a file with your own study area) and the modes, and it
+writes every network in the formats requested::
 
     import multimodalpy as mmp
 
@@ -12,6 +12,7 @@ requested::
         output_dir="output",
         formats=["geojson", "matrix"],
     )
+    mmp.download_network(boundaries_path="metro_area.geojson", modes=["bus"])
 
 :func:`download_osm` and :func:`download_gtfs` return the standardized
 layers in memory instead, for a study area from :func:`multimodalpy.find_area`.
@@ -35,10 +36,11 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from . import _gtfs
-from ._boundaries import find_area
-from ._gtfs import GTFS_EDGE_RENAME, download_gtfs
+from ._boundaries import boundary_for_export, find_area
+from ._gtfs import download_gtfs
 from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
 from ._osm import OSM_NETWORK_TYPES, download_osm
+from ._overpass import OSMDownloadError
 from ._text import slugify
 from ._writers import (
     _gtfs_to_graph_json,
@@ -51,6 +53,7 @@ from ._writers import (
 __all__ = [
     "FORMATS",
     "NAPAuthenticationError",
+    "OSMDownloadError",
     "download_gtfs",
     "download_network",
     "download_osm",
@@ -97,7 +100,7 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # Main function
 # ---------------------------------------------------------------------------
 def download_network(
-    area_name: str,
+    area_name: str | None = None,
     modes: Sequence[str] = ("walking",),
     output_dir: str | Path = "output",
     *,
@@ -115,26 +118,36 @@ def download_network(
     province: int | str | None = None,
     buffer_m: float = 0.0,
     connect_parts: bool = True,
+    overpass_url: str | None = None,
+    osm_timeout: float | None = None,
 ) -> dict:
-    """Download a municipality's transport networks and write them to disk.
+    """Download a study area's transport networks and write them to disk.
 
-    Finds the municipality (see :func:`multimodalpy.find_area`), downloads
-    each mode (walking, bike and driving from OpenStreetMap, bus and train
-    from the NAP), standardizes them to the columns in ``DATA_SCHEMA.md``
-    and writes them in every format requested.
+    Finds the study area (see :func:`multimodalpy.find_area`): a
+    municipality by name, or the polygon in ``boundaries_path``. Then it
+    downloads each mode (walking, bike and driving from OpenStreetMap, bus
+    and train from the NAP), standardizes them to the columns in
+    ``DATA_SCHEMA.md`` and writes them in every format requested.
 
     Parameters
     ----------
-    area_name : str
-        Name of the municipality to download.
+    area_name : str, optional
+        Name of the municipality to download. With ``boundaries_path`` it is
+        only the label of the output files (``<area_name>.gpkg``) and the
+        manifest, and defaults to the file name.
     modes : list[str]
         Transport modes to download. Options: "walking", "bike", "driving",
         "bus", "train".
     output_dir : str | Path
         Folder to write to. Created if it does not exist.
-    boundaries_path : Path, optional
-        Shapefile (.shp) or GeoJSON (.geojson) with the geometries to select
-        from. If not given, the packaged boundaries shapefile is used.
+    boundaries_path : str | Path, optional
+        Shapefile (.shp), GeoJSON (.geojson) or GeoPackage (.gpkg) with
+        your own study area: its polygons (merged into one) are the area,
+        whatever their columns, in any CRS (the file must define one). The
+        provinces holding at least 5% of it give the bus and train feeds;
+        everything is clipped to the polygon. It must overlap peninsular
+        Spain, the Balearic Islands, Ceuta or Melilla. Not combined with
+        ``area_code`` or ``province``.
     crs : str
         Output CRS. Defaults to "EPSG:4326" (WGS84, universal). Set another
         one (e.g. "EPSG:25830") to project the network.
@@ -160,7 +173,11 @@ def download_network(
     gtfs_peak_periods : dict, optional
         Peak periods for the per-column breakdown of the GTFS edges layer
         (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
-        for everything else.
+        for everything else. Periods with names of your own, e.g.
+        ``{"morning": (6, 9), "evening": (18, 21)}``, get a three-letter
+        code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
+        ``p1``, ``p2``... if the first three letters clash), listed in the
+        manifest's ``gtfs_period_codes``.
     write_schedule : bool
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
@@ -175,6 +192,9 @@ def download_network(
         Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
         Disabled by default: they're just the raw material for the layers
         and can be downloaded again.
+    area_code : str, optional
+        The municipality's 5-digit INE code or INSPIRE NATCODE, to pick it
+        exactly (then ``area_name`` is not needed).
     province : str | int, optional
         Province name or INE code (1-52), to choose between municipalities
         that share a name (e.g. "Castejón" exists in Cuenca and Navarra).
@@ -191,12 +211,39 @@ def download_network(
         Parts that can't be reached are listed in the manifest's
         ``unconnected_parts``. Defaults to True; has no effect on
         single-polygon municipalities.
+    overpass_url : str, optional
+        Overpass API server for the OpenStreetMap networks: its ``.../api``
+        address (e.g. ``"https://overpass.private.coffee/api"``; see the
+        list of public instances in the OpenStreetMap wiki). Defaults to
+        ``osmnx.settings.overpass_url`` (the public ``overpass-api.de``,
+        often at capacity). A temporary failure is retried four times
+        (10, 20, 40 and 80 s) before giving up; there's no automatic switch
+        to another server.
+    osm_timeout : float, optional
+        Seconds to wait for each Overpass answer, also the time limit the
+        server is asked to respect. Defaults to osmnx's 180 s; a large area
+        may need more.
 
     Returns
     -------
     dict
-        Manifest with the area, the modes, the folder and the files
-        written.
+        Manifest with the area (with its ``provinces`` and
+        ``municipalities``), the modes, the folder and the files written.
+
+        A GTFS feed whose routes are of a mode that wasn't requested
+        (the NAP declares some feeds as both bus and rail) is skipped and
+        listed in the manifest's ``skipped_datasets`` (``{dataset: mode}``).
+
+        If an OpenStreetMap network can't be downloaded (see
+        ``overpass_url``), the other networks are still downloaded and
+        written: the failure is listed in the manifest's ``failed_modes``
+        and reported with a ``UserWarning``.
+
+    Raises
+    ------
+    OSMDownloadError
+        If no network at all could be downloaded because the Overpass
+        server failed (at capacity, timeout, lost connection).
     """
     if isinstance(modes, str):
         modes = [modes]
@@ -234,11 +281,8 @@ def download_network(
                 stacklevel=2,
             )
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    area_slug = slugify(area_name)
-
-    # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping).
+    # 1) Resolve the study area (always in WGS84 for osmnx / GTFS clipping),
+    #    before creating anything: a wrong area fails without side effects.
     boundary = find_area(
         area_name,
         boundaries_path,
@@ -246,10 +290,18 @@ def download_network(
         province=province,
         target_crs="EPSG:4326",
     )
+    # The label find_area settled on: the name given, the municipality's
+    # name (with area_code alone) or the boundaries file's name.
+    area_name = str(boundary["area_name"].iloc[0])
+    area_slug = slugify(area_name)
 
-    layers: dict[str, gpd.GeoDataFrame | None] = {
-        "study_area_boundary": boundary.to_crs(crs)
-    }
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # The study area as written: its list columns (provinces and
+    # municipalities) joined as text, which every format can store.
+    boundary_layer = boundary_for_export(boundary).to_crs(crs)
+    layers: dict[str, gpd.GeoDataFrame | None] = {"study_area_boundary": boundary_layer}
     # Relative path, without extension, of each layer inside the output folder.
     layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
     osm_results: dict[str, dict[str, object]] = {}
@@ -258,15 +310,27 @@ def download_network(
     # networkx export so the graph carries the same attributes.
     gtfs_edge_columns: dict[str, list[str]] = {}
 
-    # 2) OSM.
+    # 2) OSM, one mode at a time: if the Overpass server fails one of them
+    #    (after its retries), the others are still downloaded and written,
+    #    and the failure is reported at the end and in the manifest.
+    osm_failures: dict[str, OSMDownloadError] = {}
+    for osm_mode in osm_modes:
+        try:
+            osm_results.update(
+                download_osm(
+                    boundary,
+                    modes=[osm_mode],
+                    output_crs=crs,
+                    buffer_m=buffer_m,
+                    connect_parts=connect_parts,
+                    overpass_url=overpass_url,
+                    osm_timeout=osm_timeout,
+                )
+            )
+        except OSMDownloadError as exc:
+            osm_failures[exc.mode] = exc
+            logger.warning("%s The other networks are still downloaded.", exc)
     if osm_modes:
-        osm_results = download_osm(
-            boundary,
-            modes=osm_modes,
-            output_crs=crs,
-            buffer_m=buffer_m,
-            connect_parts=connect_parts,
-        )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
             layers[f"osm_{mode}_edges"] = out["edges"]
@@ -276,6 +340,7 @@ def download_network(
     # 3) GTFS (bus / train) via NAP.
     schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_zips_dir = output_dir / "gtfs_zips"
+    skipped_datasets: dict[str, str] = {}
     if nap_modes and api_key is not None:
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
@@ -293,6 +358,7 @@ def download_network(
                 peak_periods=gtfs_peak_periods,
                 include_schedule_table=write_schedule,
                 buffer_m=buffer_m,
+                skipped=skipped_datasets,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -302,48 +368,16 @@ def download_network(
                 "Only the available layers will be written.",
                 gtfs_error,
             )
+    # Nothing at all could be downloaded: there is nothing to write, so the
+    # (first) OSM failure is raised instead of an empty result.
+    if osm_failures and not osm_results and not gtfs_results:
+        raise next(iter(osm_failures.values()))
+
     if gtfs_results:
-        GTFS_EDGES_COLUMNS = [
-            "edge_id",
-            "from_node",
-            "to_node",
-            "route_id",
-            "route_short_name",
-            "route_long_name",
-            "trip_count",
-            "travel_time_seconds_mean",
-            "travel_time_seconds_median",
-            "travel_time_seconds_min",
-            "travel_time_seconds_max",
-            "travel_time_seconds_mean_peak_am",
-            "travel_time_seconds_mean_peak_pm",
-            "travel_time_seconds_mean_rest_of_day",
-            "travel_time_seconds_median_peak_am",
-            "travel_time_seconds_median_peak_pm",
-            "travel_time_seconds_median_rest_of_day",
-            "trip_count_peak_am",
-            "trip_count_peak_pm",
-            "trip_count_rest_of_day",
-            "travel_time_seconds_mean_weekday",
-            "trip_count_weekday",
-            "travel_time_seconds_mean_weekend",
-            "trip_count_weekend",
-            "days_of_week_summary",
-            "hourly_travel_times",
-            "hourly_trip_counts",
-            "geometry",
-        ]
-        # Peak-period x weekday/weekend combination (e.g.
-        # "travel_time_seconds_mean_peak_am_weekday"). Only covers the
-        # default period names (peak_am/peak_pm/rest_of_day); if a custom
-        # ``gtfs_peak_periods`` is passed with other names, its combined
-        # columns aren't filtered here automatically.
-        for period_name in list(_gtfs.DEFAULT_PEAK_PERIODS.keys()) + ["rest_of_day"]:
-            for day_type_name in ("weekday", "weekend"):
-                GTFS_EDGES_COLUMNS.append(
-                    f"travel_time_seconds_mean_{period_name}_{day_type_name}"
-                )
-                GTFS_EDGES_COLUMNS.append(f"trip_count_{period_name}_{day_type_name}")
+        # Every column written, including the per-period ones of the
+        # periods actually used (``gtfs_peak_periods`` or the defaults).
+        GTFS_EDGES_COLUMNS = _gtfs.gtfs_edge_columns(gtfs_peak_periods)
+        gtfs_rename = _gtfs.gtfs_edge_rename(gtfs_peak_periods)
 
         GTFS_NODES_COLUMNS = ["node_id", "stop_name", "geometry"]
 
@@ -358,7 +392,7 @@ def download_network(
             edges_gdf = gtfs_out["edges"]
             keep_cols = [c for c in GTFS_EDGES_COLUMNS if c in edges_gdf.columns]
             gtfs_edge_columns[dataset] = keep_cols
-            edges_gdf = edges_gdf[keep_cols].rename(columns=GTFS_EDGE_RENAME)
+            edges_gdf = edges_gdf[keep_cols].rename(columns=gtfs_rename)
 
             layers[f"gtfs_{dataset}_edges"] = edges_gdf
             layer_paths[f"gtfs_{dataset}_edges"] = f"{gtfs_mode}/{dataset}/edges"
@@ -383,7 +417,7 @@ def download_network(
             files_here: list[str] = []
             # The boundary and the GTFS shapes layers are saved as
             # supporting GeoJSON.
-            boundary.to_crs(crs).to_file(
+            boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
             files_here.append("study_area_boundary.geojson")
@@ -414,7 +448,7 @@ def download_network(
         elif file_type == "matrix":
             # As with networkx, the boundary goes alongside as GeoJSON so
             # the folder is self-contained.
-            boundary.to_crs(crs).to_file(
+            boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
             files_here = ["study_area_boundary.geojson"]
@@ -458,8 +492,26 @@ def download_network(
         written_by_format[file_type] = files_here
         written.extend(files_here)
 
+    area_row = boundary.iloc[0]
     manifest: dict[str, Any] = {
         "area_name": area_name,
+        "boundaries_path": None if boundaries_path is None else str(boundaries_path),
+        "provinces": [
+            {"code": int(code), "name": name}
+            for code, name in zip(
+                area_row.get("prov_codes") or [],
+                area_row.get("prov_names") or [],
+                strict=True,
+            )
+        ],
+        "municipalities": [
+            {"code": code, "name": name}
+            for code, name in zip(
+                area_row.get("mun_codes") or [],
+                area_row.get("mun_names") or [],
+                strict=True,
+            )
+        ],
         "modes": list(modes),
         "crs": crs,
         "buffer_m": buffer_m,
@@ -480,6 +532,24 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if gtfs_results:
+        # Code of each period in the short column names (tts_m_pam, tm_mor_wd).
+        manifest["gtfs_period_codes"] = _gtfs.period_codes(gtfs_peak_periods)
+    if skipped_datasets:
+        # Feeds the NAP returned for a requested mode whose routes turned
+        # out to be of another one (e.g. Cercanías when asking for bus).
+        manifest["skipped_datasets"] = skipped_datasets
+    if osm_failures:
+        manifest["failed_modes"] = {
+            mode: str(exc) for mode, exc in osm_failures.items()
+        }
+        first = next(iter(osm_failures.values()))
+        warnings.warn(
+            f"The {', '.join(osm_failures)} network(s) could not be downloaded "
+            f"and were not written: {first} See manifest['failed_modes'].",
+            UserWarning,
+            stacklevel=2,
+        )
     if nap_modes and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"

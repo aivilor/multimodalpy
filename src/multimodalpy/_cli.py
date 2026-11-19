@@ -1,5 +1,8 @@
 """Command line: ``multimodalpy --area Valencia --modes walking bike``.
 
+The study area is a municipality (``--area``) or your own polygon
+(``--boundaries metro_area.geojson``).
+
 Also runs as ``python -m multimodalpy``. Every option maps to an argument of
 :func:`multimodalpy.download_network`; ``multimodalpy --help`` lists them.
 
@@ -19,18 +22,31 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="multimodalpy",
         description=(
-            "Download a Spanish municipality's transport networks and write them "
-            "to disk."
+            "Download the transport networks of a Spanish municipality, or of "
+            "your own study area, and write them to disk."
         ),
     )
-    parser.add_argument("--area", required=True, help="Municipality name.")
+    parser.add_argument(
+        "--area",
+        help=(
+            "Municipality name. With --boundaries, only the output label "
+            "(defaults to the file name)."
+        ),
+    )
     parser.add_argument(
         "--modes", nargs="+", default=["walking"], help="Transport modes."
     )
     parser.add_argument(
         "--output-dir", default="output", help="Folder to write to (default: output)."
     )
-    parser.add_argument("--boundaries", help="Boundaries shapefile/GeoJSON (optional).")
+    parser.add_argument(
+        "--boundaries",
+        help=(
+            "Shapefile/GeoJSON/GeoPackage with your own study area (any CRS); "
+            "replaces "
+            "the search by name."
+        ),
+    )
     parser.add_argument(
         "--crs", default="EPSG:4326", help="Output CRS (defaults to WGS84)."
     )
@@ -69,6 +85,18 @@ def main(argv: list[str] | None = None) -> None:
         help="Don't add the roads joining the parts of a multi-part municipality.",
     )
     parser.add_argument(
+        "--overpass-url",
+        help=(
+            "Overpass API server for the OpenStreetMap networks "
+            "(default: osmnx's, https://overpass-api.de/api)."
+        ),
+    )
+    parser.add_argument(
+        "--osm-timeout",
+        type=float,
+        help="Seconds to wait for each Overpass answer (default: 180).",
+    )
+    parser.add_argument(
         "--gtfs-hour-band-size",
         type=int,
         default=1,
@@ -94,6 +122,8 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     args = parser.parse_args(argv)
+    if not (args.area or args.area_code or args.boundaries):
+        parser.error("give the study area: --area, --area-code or --boundaries")
 
     network.download_network(
         area_name=args.area,
@@ -107,6 +137,8 @@ def main(argv: list[str] | None = None) -> None:
         province=args.province,
         buffer_m=args.buffer_m,
         connect_parts=args.connect_parts,
+        overpass_url=args.overpass_url,
+        osm_timeout=args.osm_timeout,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         write_schedule=args.write_schedule,

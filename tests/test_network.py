@@ -25,6 +25,7 @@ from shapely.geometry import LineString, Point, box
 
 import multimodalpy
 from multimodalpy import (
+    _boundaries,
     _cli,
     _gtfs,
     _matrix,
@@ -36,6 +37,7 @@ from multimodalpy import (
     io,
     network,
 )
+from multimodalpy.network import OSMDownloadError
 
 # Captured at import time, before any test monkeypatches it.
 REAL_FIND_AREA = area.find_area
@@ -105,7 +107,15 @@ def make_gtfs_result(mode: str = "bus") -> dict:
 @pytest.fixture
 def boundary() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(
-        [{"area_name": "Valencia", "province_code": 46}],
+        [
+            {
+                "area_name": "Valencia",
+                "prov_codes": [46],
+                "prov_names": ["Valencia/València"],
+                "mun_codes": ["46250"],
+                "mun_names": ["València"],
+            }
+        ],
         geometry=[box(-0.5, 39.3, -0.2, 39.6)],
         crs="EPSG:4326",
     )
@@ -117,7 +127,8 @@ def backends(monkeypatch, boundary):
 
     Returns a dict that records every call. Tests can set
     ``backends["gtfs_result"]`` or ``backends["gtfs_error"]`` to change what
-    the fake GTFS download does.
+    the fake GTFS download does, and add modes to ``backends["osm_failing"]``
+    for the fake OSM download to fail them as the Overpass server would.
     """
     calls: dict = {
         "boundary": [],
@@ -125,6 +136,8 @@ def backends(monkeypatch, boundary):
         "gtfs": [],
         "gtfs_result": {},
         "gtfs_error": None,
+        "osm_failing": set(),
+        "gtfs_skipped": {},
     }
 
     def fake_find_area(area_name, boundaries_path=None, **kwargs):
@@ -135,19 +148,35 @@ def backends(monkeypatch, boundary):
 
     def fake_download_osm(bnd, *, modes, output_crs, **kwargs):
         calls["osm"].append(
-            {"boundary": bnd, "modes": list(modes), "output_crs": output_crs}
+            {
+                "boundary": bnd,
+                "modes": list(modes),
+                "output_crs": output_crs,
+                **kwargs,
+            }
         )
         results = {}
         for mode in modes:
             network_type = _osm.OSM_NETWORK_TYPES[_text.normalize_name(mode)]
             label = _osm.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+            if label in calls["osm_failing"]:
+                raise OSMDownloadError(
+                    f"Could not download the {label} network from OpenStreetMap: "
+                    "the server answered HTTP 502 (it is at capacity).",
+                    mode=label,
+                    server="overpass-api.de",
+                    status_code=502,
+                    transient=True,
+                )
             results[label] = make_osm_result()
         return results
 
-    def fake_download_gtfs(area_name, bnd, zip_dir, **kwargs):
+    def fake_download_gtfs(area_name, bnd, zip_dir, *, skipped=None, **kwargs):
         calls["gtfs"].append(
             {"area_name": area_name, "zip_dir": Path(zip_dir), **kwargs}
         )
+        if skipped is not None:
+            skipped.update(calls["gtfs_skipped"])
         # The real function leaves the downloaded ZIPs in zip_dir.
         Path(zip_dir).mkdir(parents=True, exist_ok=True)
         (Path(zip_dir) / "feed.zip").write_bytes(b"not a real zip")
@@ -538,9 +567,10 @@ def test_download_network_osm_geojson_writes_one_folder_per_mode(tmp_path, backe
     assert "files_by_format" not in manifest
     assert "gtfs_status" not in manifest
 
-    assert len(backends["osm"]) == 1
-    assert backends["osm"][0]["modes"] == ["walking", "bike"]
+    # One download per OSM mode, so a failing one doesn't take the others.
+    assert [call["modes"] for call in backends["osm"]] == [["walking"], ["bike"]]
     assert backends["gtfs"] == []
+    assert "failed_modes" not in manifest
 
 
 def test_download_network_accepts_a_single_mode_as_string(tmp_path, backends):
@@ -568,16 +598,17 @@ def test_download_network_passes_boundary_arguments_and_reprojects_output(
         "Valencia",
         modes=["walking"],
         output_dir=tmp_path,
-        boundaries_path="my_boundaries.geojson",
         area_code="46250",
+        province="Valencia",
         crs="EPSG:25830",
         formats="geopackage",
     )
 
     call = backends["boundary"][0]
     assert call["area_name"] == "Valencia"
-    assert call["boundaries_path"] == "my_boundaries.geojson"
+    assert call["boundaries_path"] is None
     assert call["area_code"] == "46250"
+    assert call["province"] == "Valencia"
     assert call["target_crs"] == "EPSG:4326"  # the search always runs in WGS84
     assert backends["osm"][0]["output_crs"] == "EPSG:25830"
 
@@ -587,28 +618,183 @@ def test_download_network_passes_boundary_arguments_and_reprojects_output(
     assert layer.crs.to_epsg() == 25830
 
 
-def test_download_network_with_real_boundary_file(tmp_path, backends, monkeypatch):
+def test_download_network_with_real_find_area(tmp_path, backends, monkeypatch):
     """End to end through the real ``find_area`` (OSM still faked)."""
     monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
-    boundaries = gpd.GeoDataFrame(
-        {"nombre": ["Segovia", "Madrid"], "NATCODE": ["34074040136", "34132828079"]},
+    packaged = gpd.GeoDataFrame(
+        {"NAMEUNIT": ["Segovia", "Madrid"], "NATCODE": ["34074040136", "34132828079"]},
         geometry=[box(-4.2, 40.9, -4.0, 41.0), box(-3.8, 40.3, -3.5, 40.6)],
         crs="EPSG:4326",
     )
-    path = tmp_path / "boundaries.geojson"
-    boundaries.to_file(path, driver="GeoJSON")
+    path = tmp_path / "packaged.geojson"
+    packaged.to_file(path, driver="GeoJSON")
+    monkeypatch.setattr(_boundaries, "_default_boundaries_path", lambda: path)
 
     manifest = network.download_network(
-        "Segovia",
-        modes=["walking"],
-        output_dir=tmp_path / "out",
-        boundaries_path=path,
+        "Segovia", modes=["walking"], output_dir=tmp_path / "out"
     )
 
     assert "walking/nodes.geojson" in manifest["files"]
     used = backends["osm"][0]["boundary"].iloc[0]
-    assert used["matched_value"] == "Segovia"
-    assert used["province_code"] == 40
+    assert used["match_val"] == "Segovia"
+    assert used["prov_codes"] == [40]
+
+
+# ---------------------------------------------------------------------------
+# Study area from your own boundaries file
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def own_area(tmp_path, monkeypatch, backends):
+    """Real ``find_area`` over a synthetic packaged file, and a PAT-like polygon.
+
+    The polygon has none of the usual name or code columns (like a
+    "Plan de Acción Territorial" file) and is in EPSG:25830; it covers
+    Valencia's municipality and 30% of a Castellón one.
+    """
+    monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
+    packaged = gpd.GeoDataFrame(
+        {
+            "NAMEUNIT": ["València", "Sagunt/Sagunto", "Vinaròs"],
+            "NATCODE": ["34104646250", "34104646220", "34101212138"],
+            "NATLEVNAME": ["Municipio"] * 3,
+        },
+        geometry=[
+            box(720_000, 4_370_000, 730_000, 4_380_000),
+            box(730_000, 4_370_000, 740_000, 4_380_000),
+            box(720_000, 4_380_000, 730_000, 4_390_000),
+        ],
+        crs="EPSG:25830",
+    ).to_crs("EPSG:4258")
+    packaged_path = tmp_path / "packaged.shp"
+    packaged.to_file(packaged_path)
+    monkeypatch.setattr(_boundaries, "_default_boundaries_path", lambda: packaged_path)
+
+    study = gpd.GeoDataFrame(
+        {"objectid": [1], "pat": ["PAT Metropolitano"], "pat_abrevi": ["PATEVAL"]},
+        geometry=[box(720_000, 4_370_000, 730_000, 4_384_300)],
+        crs="EPSG:25830",
+    )
+    path = tmp_path / "pateval.geojson"
+    study.to_file(path)
+    return path
+
+
+@pytest.mark.filterwarnings("ignore:No bus/train layers")  # fake NAP: no feeds
+def test_download_network_with_only_a_boundaries_file(tmp_path, own_area, backends):
+    manifest = network.download_network(
+        boundaries_path=own_area,
+        modes=["walking", "bus"],
+        output_dir=tmp_path / "out",
+        formats=["geopackage", "matrix"],
+    )
+
+    # The label is the file name: pateval.gpkg, and so for the GTFS step.
+    assert manifest["area_name"] == "pateval"
+    assert "pateval.gpkg::study_area_boundary" in manifest["files"]
+    assert backends["gtfs"][0]["area_name"] == "pateval"
+    assert manifest["boundaries_path"] == str(own_area)
+
+    # Both provinces hold at least 5% of the area: both feeds are asked for.
+    used = backends["osm"][0]["boundary"].iloc[0]
+    assert used["prov_codes"] == [46, 12]
+    assert manifest["provinces"] == [
+        {"code": 46, "name": "Valencia/València"},
+        {"code": 12, "name": "Castellón/Castelló"},
+    ]
+    assert manifest["municipalities"] == [
+        {"code": "12138", "name": "Vinaròs"},
+        {"code": "46250", "name": "València"},
+    ]
+
+    layer = gpd.read_file(
+        tmp_path / "out" / "pateval.gpkg", layer="study_area_boundary"
+    )
+    assert layer.iloc[0]["prov_codes"] == "46; 12"
+    # The polygon is the user's (14.3 km tall), not the municipalities' (20 km).
+    assert layer.to_crs("EPSG:25830").area.iloc[0] == pytest.approx(143e6, rel=1e-3)
+
+
+def test_download_network_area_name_labels_a_boundaries_file(
+    tmp_path, own_area, backends
+):
+    manifest = network.download_network(
+        "Área Metropolitana",
+        boundaries_path=own_area,
+        output_dir=tmp_path,
+        formats="geopackage",
+    )
+    assert manifest["area_name"] == "Área Metropolitana"
+    assert (tmp_path / "area_metropolitana.gpkg").exists()
+
+
+def test_download_network_outside_the_coverage_writes_nothing(
+    tmp_path, own_area, backends
+):
+    far_away = gpd.GeoDataFrame(
+        geometry=[box(-15.6, 27.9, -15.3, 28.2)], crs="EPSG:4326"
+    )
+    path = tmp_path / "canarias.geojson"
+    far_away.to_file(path)
+    with pytest.raises(ValueError, match="outside the area covered"):
+        network.download_network(boundaries_path=path, output_dir=tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+    assert backends["osm"] == []
+
+
+def test_download_network_needs_an_area(tmp_path, monkeypatch, backends):
+    monkeypatch.setattr(network, "find_area", REAL_FIND_AREA)
+    with pytest.raises(ValueError, match="Give the study area"):
+        network.download_network(output_dir=tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_download_network_with_area_code_alone_uses_the_municipality_name(
+    tmp_path, own_area, backends
+):
+    manifest = network.download_network(
+        area_code="46250", output_dir=tmp_path, formats="geopackage"
+    )
+    assert manifest["area_name"] == "València"
+    assert manifest["boundaries_path"] is None
+    assert manifest["municipalities"] == [{"code": "46250", "name": "València"}]
+    assert (tmp_path / "valencia.gpkg").exists()
+
+
+@pytest.mark.parametrize(
+    "file_format", ["geojson", "shapefile", "geopackage", "matrix"]
+)
+def test_study_area_boundary_lists_are_written_as_text(tmp_path, backends, file_format):
+    network.download_network(
+        "Valencia", modes=["walking"], output_dir=tmp_path, formats=file_format
+    )
+    if file_format == "geopackage":
+        layer = gpd.read_file(tmp_path / "valencia.gpkg", layer="study_area_boundary")
+    else:
+        suffix = ".shp" if file_format == "shapefile" else ".geojson"
+        layer = gpd.read_file(tmp_path / f"study_area_boundary{suffix}")
+    row = layer.iloc[0]
+    assert str(row["prov_codes"]) == "46"
+    assert row["mun_names"] == "València"
+
+
+def test_download_gtfs_takes_the_provinces_from_the_boundary(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_zips(area_name, output_dir, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(
+        [{"area_name": "AMV", "prov_codes": [46, 12]}],
+        geometry=[box(-0.5, 39.3, -0.2, 39.6)],
+        crs="EPSG:4326",
+    )
+    assert network.download_gtfs("AMV", boundary, tmp_path, modes=[1]) == {}
+    assert seen["province_codes"] == [46, 12]
+
+    network.download_gtfs("AMV", boundary, tmp_path, modes=[1], province_codes=[3])
+    assert seen["province_codes"] == [3]
 
 
 # ---------------------------------------------------------------------------
@@ -980,7 +1166,7 @@ def sent_keys(monkeypatch):
 def test_nap_key_is_read_from_dotenv_file(no_env_key, sent_keys):
     (no_env_key / ".env").write_text('NAP_API_KEY="from-dotenv"\n', "utf-8")
     zips = _nap.download_gtfs_nap_zips(
-        "Valencia", no_env_key / "zips", province_code=46
+        "Valencia", no_env_key / "zips", province_codes=[46]
     )
     assert zips == []
     assert sent_keys == ["from-dotenv"]
@@ -991,13 +1177,15 @@ def test_environment_variable_takes_priority_over_dotenv(
 ):
     (no_env_key / ".env").write_text("NAP_API_KEY=from-dotenv\n", "utf-8")
     monkeypatch.setenv("NAP_API_KEY", "from-env")
-    _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
+    _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_codes=[46])
     assert sent_keys == ["from-env"]
 
 
 def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
     with pytest.raises(ValueError, match="Missing NAP API key"):
-        _nap.download_gtfs_nap_zips("Valencia", no_env_key / "zips", province_code=46)
+        _nap.download_gtfs_nap_zips(
+            "Valencia", no_env_key / "zips", province_codes=[46]
+        )
     assert sent_keys == []
 
 
@@ -1053,9 +1241,139 @@ def test_cli_defaults(monkeypatch):
     assert captured["keep_gtfs_zips"] is False
 
 
-def test_cli_requires_area_and_valid_output_type():
+# ---------------------------------------------------------------------------
+# Overpass failures
+# ---------------------------------------------------------------------------
+def test_custom_gtfs_periods_are_written_and_weighted(tmp_path, backends):
+    result = make_gtfs_result("bus")
+    edges = result["edges"]
+    edges["travel_time_seconds_mean_morning"] = [80.0]
+    edges["trip_count_morning"] = [4]
+    edges["travel_time_seconds_mean_morning_weekday"] = [82.0]
+    edges["travel_time_seconds_mean_rest_of_day"] = [99.0]
+    backends["gtfs_result"] = {"ds1": result}
+
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        formats=["geojson", "matrix"],
+        api_key="key",
+        gtfs_peak_periods={"morning": (6, 9)},
+    )
+
+    assert manifest["gtfs_period_codes"] == {"morning": "mor", "rest_of_day": "rod"}
+    written = gpd.read_file(tmp_path / "bus" / "ds1" / "edges.geojson")
+    assert {"tts_m_mor", "trips_mor", "tm_mor_wd", "tts_m_rod"} <= set(written.columns)
+    matrix = io.read_matrix(tmp_path / "bus" / "ds1" / "matrix.npz", weight="tm_mor_wd")
+    assert matrix.weight == "tm_mor_wd"
+    assert matrix.matrix.data.tolist() == [82.0]
+    assert matrix.meta["gtfs_period_codes"]["morning"] == "mor"
+
+
+def test_skipped_gtfs_feeds_are_listed_in_the_manifest(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_skipped"] = {"ouigo": "train"}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert manifest["gtfs_datasets"] == ["emt"]
+    assert manifest["skipped_datasets"] == {"ouigo": "train"}
+    assert not (tmp_path / "train").exists()
+
+
+def test_no_skipped_feeds_no_manifest_entry(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert "skipped_datasets" not in manifest
+
+
+def test_failed_osm_mode_keeps_the_others(tmp_path, backends):
+    backends["osm_failing"].add("bike")
+    with pytest.warns(UserWarning, match=r"The bike network\(s\) could not"):
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bike", "driving"], output_dir=tmp_path
+        )
+    assert "HTTP 502" in manifest["failed_modes"]["bike"]
+    assert list(manifest["failed_modes"]) == ["bike"]
+    assert "walking/edges.geojson" in manifest["files"]
+    assert "driving/edges.geojson" in manifest["files"]
+    assert not (tmp_path / "bike").exists()
+
+
+def test_failed_osm_modes_still_write_the_gtfs(tmp_path, backends):
+    backends["osm_failing"].update({"walking", "bike"})
+    backends["gtfs_result"] = {"ds1": make_gtfs_result()}
+    with pytest.warns(UserWarning, match="walking, bike network"):
+        manifest = network.download_network(
+            "Valencia",
+            modes=["walking", "bike", "bus"],
+            output_dir=tmp_path,
+            api_key="key",
+        )
+    assert set(manifest["failed_modes"]) == {"walking", "bike"}
+    assert manifest["gtfs_datasets"] == ["ds1"]
+
+
+def test_nothing_downloaded_raises_the_osm_error(tmp_path, backends):
+    backends["osm_failing"].update({"walking", "bike"})
+    with pytest.raises(OSMDownloadError, match="walking network") as info:
+        network.download_network(
+            "Valencia", modes=["walking", "bike"], output_dir=tmp_path
+        )
+    assert info.value.status_code == 502
+    assert len(backends["osm"]) == 2  # both were tried
+    assert not (tmp_path / "study_area_boundary.geojson").exists()
+
+
+def test_download_network_passes_the_overpass_options(tmp_path, backends):
+    network.download_network(
+        "Valencia",
+        modes=["walking"],
+        output_dir=tmp_path,
+        overpass_url="https://overpass.example/api",
+        osm_timeout=600,
+    )
+    call = backends["osm"][0]
+    assert call["overpass_url"] == "https://overpass.example/api"
+    assert call["osm_timeout"] == 600
+
+
+def test_cli_forwards_the_overpass_options(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
+    _cli.main(
+        [
+            "--area",
+            "Valencia",
+            "--overpass-url",
+            "https://overpass.example/api",
+            "--osm-timeout",
+            "600",
+        ]
+    )
+    assert captured["overpass_url"] == "https://overpass.example/api"
+    assert captured["osm_timeout"] == 600.0
+
+
+def test_cli_accepts_a_boundaries_file_without_area(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: captured.update(kwargs)
+    )
+    _cli.main(["--boundaries", "pateval.geojson", "--modes", "bus"])
+    assert captured["area_name"] is None
+    assert captured["boundaries_path"] == "pateval.geojson"
+
+
+def test_cli_requires_area_and_valid_output_type(capsys):
     with pytest.raises(SystemExit):
         _cli.main([])
+    assert "--area, --area-code or --boundaries" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         _cli.main(["--area", "Valencia", "--formats", "csv"])
 
@@ -1131,12 +1449,104 @@ def test_rejected_key_while_downloading_files_stops_with_auth_error(
     monkeypatch.setattr(requests, "get", fake_get)
 
     with pytest.raises(_nap.NAPAuthenticationError, match="Invalid"):
-        _nap.download_gtfs_nap_zips("Valencia", tmp_path, modes=[1], province_code=46)
+        _nap.download_gtfs_nap_zips(
+            "Valencia", tmp_path, modes=[1], province_codes=[46]
+        )
 
     # Stopped at the first file instead of trying (and failing) every one.
     assert not any(url.endswith("/fichero/11/descarga") for url in requested)
     report = pd.read_csv(tmp_path / "nap_download_report.csv")
     assert report["status"].tolist() == ["failed"]
+
+
+@pytest.fixture
+def nap_two_provinces(monkeypatch):
+    """Fake NAP: Valencia (46) and Castellón (12) both list Renfe (file 30)."""
+    import requests
+
+    requested: list[str] = []
+    datasets = {
+        46: [
+            {
+                "id": 1,
+                "nombre": "EMT",
+                "tiposTransporte": [{"id": 1}],
+                "ficheros": [{"id": 10}],
+            },
+            {
+                "id": 3,
+                "nombre": "Renfe",
+                "tiposTransporte": [{"id": 2}],
+                "ficheros": [{"id": 30}],
+            },
+        ],
+        12: [
+            {
+                "id": 2,
+                "nombre": "TRAM",
+                "tiposTransporte": [{"id": 1}],
+                "ficheros": [{"id": 20}],
+            },
+            {
+                "id": 3,
+                "nombre": "Renfe",
+                "tiposTransporte": [{"id": 2}],
+                "ficheros": [{"id": 30}],
+            },
+        ],
+    }
+
+    def fake_get(url, headers=None, timeout=None):
+        requested.append(url)
+        if "/conjunto-dato/region/" in url:
+            region = int(url.rsplit("/", 1)[1])
+            if region not in datasets:
+                return _NoDatasetsResponse()
+            return _Response(payload={"data": datasets[region]})
+        if "/fichero/" in url:
+            file_id = url.split("/fichero/")[1].split("/")[0]
+            return _Response(
+                payload={
+                    "data": {
+                        "enlaceDescarga": f"https://files.example/{file_id}.zip",
+                        "nombreFichero": f"feed_{file_id}.zip",
+                    }
+                }
+            )
+        return _Response()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    return requested
+
+
+def test_nap_downloads_every_province_once_per_file(tmp_path, nap_two_provinces):
+    zips = _nap.download_gtfs_nap_zips(
+        "AMV", tmp_path, modes=[1, 2], province_codes=[46, 12]
+    )
+    assert sorted(path.name for path in zips) == [
+        "feed_10.zip",
+        "feed_20.zip",
+        "feed_30.zip",
+    ]
+    downloads = [url for url in nap_two_provinces if url.endswith("/descarga")]
+    assert len(downloads) == 3  # Renfe is listed twice but downloaded once
+    report = pd.read_csv(tmp_path / "nap_download_report.csv")
+    assert report["province_code"].tolist() == [46, 46, 12]
+
+
+def test_nap_province_without_datasets_is_skipped(tmp_path, nap_two_provinces):
+    zips = _nap.download_gtfs_nap_zips(
+        "AMV", tmp_path, modes=[1], province_codes=[1, 46, 46]
+    )
+    assert [path.name for path in zips] == ["feed_10.zip"]
+    regions = [url for url in nap_two_provinces if "/conjunto-dato/" in url]
+    assert len(regions) == 2  # province 1 (empty) and 46, asked only once
+
+
+def test_nap_rejects_invalid_province_codes(tmp_path, nap_two_provinces):
+    with pytest.raises(ValueError, match="between 1 and 52"):
+        _nap.download_gtfs_nap_zips("AMV", tmp_path, province_codes=[46, 99])
+    assert nap_two_provinces == []  # checked before any request
 
 
 def test_download_network_without_key_warns_before_downloading_and_skips_gtfs(

@@ -42,7 +42,8 @@ FORMAT_VERSION = 1
 OSM_WEIGHTS: dict[str, str] = {"tts": "s", "length": "m"}
 OSM_DEFAULT_WEIGHT = "tts"
 
-#: Travel-time columns of the GTFS edge layers (short names), all in seconds.
+#: Travel-time columns of the GTFS edge layers (short names), all in seconds,
+#: with the default periods (see :func:`gtfs_weights` for other periods).
 #: Trip counts are left out on purpose: they are not travel times.
 GTFS_WEIGHTS: dict[str, str] = {
     name: "s"
@@ -68,6 +69,25 @@ GTFS_WEIGHTS: dict[str, str] = {
     )
 }
 GTFS_DEFAULT_WEIGHT = "tts_m"
+
+
+def gtfs_weights(periods: Mapping[str, object] | None = None) -> dict[str, str]:
+    """Travel-time weights of a GTFS layer built with these ``periods``.
+
+    The same 18 statistics as :data:`GTFS_WEIGHTS`, with the period codes of
+    the periods actually used (``gtfs_peak_periods``), so their travel times
+    become weights too.
+    """
+    from ._gtfs import period_codes
+
+    codes = list(period_codes(periods).values())
+    names = ["tts_m", "tts_md", "tts_mn", "tts_mx"]
+    names += [f"tts_m_{code}" for code in codes]
+    names += [f"tts_md_{code}" for code in codes]
+    names += ["tts_m_wd", "tts_m_we"]
+    names += [f"tm_{code}_{day}" for code in codes for day in ("wd", "we")]
+    return dict.fromkeys(names, "s")
+
 
 # Keys of the scipy CSR layout, so ``scipy.sparse.load_npz`` opens the file.
 _SCIPY_KEYS = ("format", "shape", "indptr", "indices", "data")
@@ -387,13 +407,16 @@ def gtfs_network_matrix(
     """Build the matrix of a GTFS dataset from its final layers.
 
     ``edges`` must use the short column names of the GTFS edge layer
-    (``tts_m``, ``tm_pam_wd``, ...). Weights: the travel-time columns in
-    :data:`GTFS_WEIGHTS` present in the layer, ``tts_m`` by default. Stops
+    (``tts_m``, ``tm_pam_wd``, ...). Weights: the travel-time columns of
+    :func:`gtfs_weights` present in the layer, ``tts_m`` by default. Stops
     reached by an edge but outside the stops layer are appended with
     ``in_area=False``. ``periods`` (period name -> start and end hour) is
-    stored in the metadata, since it gives the hours behind ``pam`` /
-    ``ppm`` / ``rod``.
+    stored in the metadata as ``gtfs_periods``, since it gives the hours
+    behind ``pam`` / ``ppm`` / ``rod``, with each period's code in
+    ``gtfs_period_codes``.
     """
+    from ._gtfs import period_codes
+
     xs, ys = _point_xy(stops)
     node_table = pd.DataFrame(
         {"node_id": stops["node_id"].astype(str).to_numpy(), "x": xs, "y": ys}
@@ -407,7 +430,7 @@ def gtfs_network_matrix(
     return build_network_matrix(
         node_table,
         edge_table,
-        weights=GTFS_WEIGHTS,
+        weights=gtfs_weights(periods),
         default_weight=GTFS_DEFAULT_WEIGHT,
         layer=f"{mode}/{dataset}",
         meta={
@@ -415,6 +438,7 @@ def gtfs_network_matrix(
             "dataset": dataset,
             "crs": _crs_text(edges, stops),
             "gtfs_periods": gtfs_periods,
+            "gtfs_period_codes": period_codes(periods),
             **dict(meta or {}),
         },
     )
@@ -520,7 +544,6 @@ def read_network_matrix(path: str | Path) -> NetworkMatrix:
         meta=meta,
         edge_type=edge_type,
     )
-
 
 
 # ---------------------------------------------------------------------------
@@ -764,4 +787,3 @@ def load_network_matrix(network: Any, *, mode: str | None = None) -> NetworkMatr
         "network must be a path, a networkx graph or the result of read_matrix; "
         f"got {type(network).__name__}."
     )
-
