@@ -224,11 +224,16 @@ def download_network(
         Manifest with the area (with its ``provinces`` and
         ``municipalities``), the modes, the folder and the files written.
 
+        If an OpenStreetMap network can't be downloaded (see
+        ``overpass_url``), the other networks are still downloaded and
+        written: the failure is listed in the manifest's ``failed_modes``
+        and reported with a ``UserWarning``.
+
     Raises
     ------
     OSMDownloadError
-        If an OpenStreetMap network can't be downloaded from the Overpass
-        server (at capacity, timeout, lost connection).
+        If no network at all could be downloaded because the Overpass
+        server failed (at capacity, timeout, lost connection).
     """
     if isinstance(modes, str):
         modes = [modes]
@@ -295,17 +300,27 @@ def download_network(
     # networkx export so the graph carries the same attributes.
     gtfs_edge_columns: dict[str, list[str]] = {}
 
-    # 2) OSM.
+    # 2) OSM, one mode at a time: if the Overpass server fails one of them
+    #    (after its retries), the others are still downloaded and written,
+    #    and the failure is reported at the end and in the manifest.
+    osm_failures: dict[str, OSMDownloadError] = {}
+    for osm_mode in osm_modes:
+        try:
+            osm_results.update(
+                download_osm(
+                    boundary,
+                    modes=[osm_mode],
+                    output_crs=crs,
+                    buffer_m=buffer_m,
+                    connect_parts=connect_parts,
+                    overpass_url=overpass_url,
+                    osm_timeout=osm_timeout,
+                )
+            )
+        except OSMDownloadError as exc:
+            osm_failures[exc.mode] = exc
+            logger.warning("%s The other networks are still downloaded.", exc)
     if osm_modes:
-        osm_results = download_osm(
-            boundary,
-            modes=osm_modes,
-            output_crs=crs,
-            buffer_m=buffer_m,
-            connect_parts=connect_parts,
-            overpass_url=overpass_url,
-            osm_timeout=osm_timeout,
-        )
         for mode, out in osm_results.items():
             layers[f"osm_{mode}_nodes"] = out["nodes"]
             layers[f"osm_{mode}_edges"] = out["edges"]
@@ -341,6 +356,11 @@ def download_network(
                 "Only the available layers will be written.",
                 gtfs_error,
             )
+    # Nothing at all could be downloaded: there is nothing to write, so the
+    # (first) OSM failure is raised instead of an empty result.
+    if osm_failures and not osm_results and not gtfs_results:
+        raise next(iter(osm_failures.values()))
+
     if gtfs_results:
         GTFS_EDGES_COLUMNS = [
             "edge_id",
@@ -537,6 +557,17 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if osm_failures:
+        manifest["failed_modes"] = {
+            mode: str(exc) for mode, exc in osm_failures.items()
+        }
+        first = next(iter(osm_failures.values()))
+        warnings.warn(
+            f"The {', '.join(osm_failures)} network(s) could not be downloaded "
+            f"and were not written: {first} See manifest['failed_modes'].",
+            UserWarning,
+            stacklevel=2,
+        )
     if nap_modes and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"

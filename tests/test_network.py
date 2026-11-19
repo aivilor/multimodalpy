@@ -37,6 +37,7 @@ from multimodalpy import (
     io,
     network,
 )
+from multimodalpy.network import OSMDownloadError
 
 # Captured at import time, before any test monkeypatches it.
 REAL_FIND_AREA = area.find_area
@@ -126,7 +127,8 @@ def backends(monkeypatch, boundary):
 
     Returns a dict that records every call. Tests can set
     ``backends["gtfs_result"]`` or ``backends["gtfs_error"]`` to change what
-    the fake GTFS download does.
+    the fake GTFS download does, and add modes to ``backends["osm_failing"]``
+    for the fake OSM download to fail them as the Overpass server would.
     """
     calls: dict = {
         "boundary": [],
@@ -134,6 +136,7 @@ def backends(monkeypatch, boundary):
         "gtfs": [],
         "gtfs_result": {},
         "gtfs_error": None,
+        "osm_failing": set(),
     }
 
     def fake_find_area(area_name, boundaries_path=None, **kwargs):
@@ -155,6 +158,15 @@ def backends(monkeypatch, boundary):
         for mode in modes:
             network_type = _osm.OSM_NETWORK_TYPES[_text.normalize_name(mode)]
             label = _osm.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+            if label in calls["osm_failing"]:
+                raise OSMDownloadError(
+                    f"Could not download the {label} network from OpenStreetMap: "
+                    "the server answered HTTP 502 (it is at capacity).",
+                    mode=label,
+                    server="overpass-api.de",
+                    status_code=502,
+                    transient=True,
+                )
             results[label] = make_osm_result()
         return results
 
@@ -552,9 +564,10 @@ def test_download_network_osm_geojson_writes_one_folder_per_mode(tmp_path, backe
     assert "files_by_format" not in manifest
     assert "gtfs_status" not in manifest
 
-    assert len(backends["osm"]) == 1
-    assert backends["osm"][0]["modes"] == ["walking", "bike"]
+    # One download per OSM mode, so a failing one doesn't take the others.
+    assert [call["modes"] for call in backends["osm"]] == [["walking"], ["bike"]]
     assert backends["gtfs"] == []
+    assert "failed_modes" not in manifest
 
 
 def test_download_network_accepts_a_single_mode_as_string(tmp_path, backends):
@@ -1223,6 +1236,47 @@ def test_cli_defaults(monkeypatch):
     assert captured["gtfs_hour_range"] is None
     assert captured["write_schedule"] is False
     assert captured["keep_gtfs_zips"] is False
+
+
+# ---------------------------------------------------------------------------
+# Overpass failures
+# ---------------------------------------------------------------------------
+def test_failed_osm_mode_keeps_the_others(tmp_path, backends):
+    backends["osm_failing"].add("bike")
+    with pytest.warns(UserWarning, match=r"The bike network\(s\) could not"):
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bike", "driving"], output_dir=tmp_path
+        )
+    assert "HTTP 502" in manifest["failed_modes"]["bike"]
+    assert list(manifest["failed_modes"]) == ["bike"]
+    assert "walking/edges.geojson" in manifest["files"]
+    assert "driving/edges.geojson" in manifest["files"]
+    assert not (tmp_path / "bike").exists()
+
+
+def test_failed_osm_modes_still_write_the_gtfs(tmp_path, backends):
+    backends["osm_failing"].update({"walking", "bike"})
+    backends["gtfs_result"] = {"ds1": make_gtfs_result()}
+    with pytest.warns(UserWarning, match="walking, bike network"):
+        manifest = network.download_network(
+            "Valencia",
+            modes=["walking", "bike", "bus"],
+            output_dir=tmp_path,
+            api_key="key",
+        )
+    assert set(manifest["failed_modes"]) == {"walking", "bike"}
+    assert manifest["gtfs_datasets"] == ["ds1"]
+
+
+def test_nothing_downloaded_raises_the_osm_error(tmp_path, backends):
+    backends["osm_failing"].update({"walking", "bike"})
+    with pytest.raises(OSMDownloadError, match="walking network") as info:
+        network.download_network(
+            "Valencia", modes=["walking", "bike"], output_dir=tmp_path
+        )
+    assert info.value.status_code == 502
+    assert len(backends["osm"]) == 2  # both were tried
+    assert not (tmp_path / "study_area_boundary.geojson").exists()
 
 
 def test_download_network_passes_the_overpass_options(tmp_path, backends):
