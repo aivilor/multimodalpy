@@ -5,9 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-18
 
 ### Added
+- `boundaries_path` (and `--boundaries`) also accepts a GeoPackage (`.gpkg`).
+  One with a single layer is read as it is; with several, its only polygon
+  layer; several polygon layers raise an error listing them (#86).
+- The manifest's `skipped_datasets` and `gtfs_period_codes`, and the matrix
+  metadata's `gtfs_period_codes` (see below) (#86).
+- CI runs the tests on Ubuntu and macOS with Python 3.11 to 3.14, and a lint
+  job (`ruff check`, `ruff format --check`, `mypy`). ruff is pinned in the
+  `lint` dependency group and no longer formats the Markdown files (#86).
 - `download_network()` and `download_osm()` take `overpass_url`, to download the
   OpenStreetMap networks from another Overpass server, and `osm_timeout`, the
   seconds to wait for each answer (`--overpass-url` and `--osm-timeout` on the
@@ -55,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError`.
 - **Breaking:** `download_gtfs()` takes `province_codes` (a list) instead of
   `province_code`, and reads them from the boundary's `prov_codes`.
+- **Breaking:** the study-area columns `matched_column`, `matched_value`,
+  `matched_rows` and `source_path` are now `match_col`, `match_val`,
+  `match_rows` and `source`, in `find_area()`'s result and the
+  `study_area_boundary` layer. The old names were longer than ten characters,
+  so a Shapefile cut them short with a warning (#86).
+- A GTFS feed whose routes are of a mode that was not asked for is skipped
+  instead of written: the NAP declares some feeds as both bus and rail, so
+  asking for `bus` also downloaded Cercanías into `train/`. Skipped feeds are
+  listed in the manifest's `skipped_datasets` (#86).
 - `download_network()`: `area_name` is optional. With `boundaries_path` it is
   only the label of the files and the manifest, and defaults to the file name
   (`pateval.geojson` → `pateval.gpkg`); with `area_code` alone, it is the
@@ -71,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `download_network("Valencia", boundaries_path="my_municipalities.shp")` | `download_network("Valencia")` (packaged boundaries) |
   | (not possible) | `download_network(boundaries_path="my_area.geojson")` |
   | `find_area(...)["province_code"]` | `find_area(...)["prov_codes"]` (a list) |
+  | `find_area(...)["matched_column"]`, `["matched_value"]`, `["matched_rows"]`, `["source_path"]` | `["match_col"]`, `["match_val"]`, `["match_rows"]`, `["source"]` |
   | `find_area(name, path, name_columns=..., code_columns=...)` | removed: give the area as a geometry |
   | `download_gtfs(..., province_code=46)` | `download_gtfs(..., province_codes=[46])` |
 
@@ -95,6 +113,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a network that still fails is reported in `failed_modes`, and the others
     are written; `OSMDownloadError` is raised only if nothing could be
     downloaded.
+- OUIGO was saved under `bus/`: its routes use the extended route type 101
+  (high-speed rail), and only the basic route types were recognised as rail.
+  The extended railway (100–199), suburban, urban and metro rail (300–699),
+  tram (900–999) and funicular (1400–1499) types now count as train (#86).
+- With `gtfs_peak_periods` named other than `peak_am` and `peak_pm`, the
+  per-period columns were computed but dropped: the columns kept, their short
+  names and the matrix weights only knew the default names. They now follow the
+  periods used. The default periods keep `pam`, `ppm` and `rod`; others get
+  their first three letters (`morning` gives `tts_m_mor`, `tm_mor_wd`…) or `p1`,
+  `p2`… when those clash, listed in the manifest's `gtfs_period_codes` and the
+  matrix metadata (#86).
+
+[0.5.0]: https://github.com/aivilor/multimodalpy/compare/v0.4.0...v0.5.0
 
 ## [0.4.0] - 2026-11-03
 
@@ -310,22 +341,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.1] - 2026-09-30
 
-### Changed
-- Republished to TestPyPI with corrected README (installation
-  instructions, badges, repository links) and dev-install instructions
-  matching the project's `[dependency-groups]` setup
-  (`pip install -e . --group dev`).
-
-## [0.1.0] - 2026-09-30
-
-### Added
-- Initial release: OSM + GTFS multimodal network download and export
-  pipeline (`get_network.main`), supporting GeoJSON, Shapefile,
-  GeoPackage, and NetworkX graph output formats.
-- Published to TestPyPI for pre-release testing.
-
-## [Unreleased]
-
 ### Added
 - `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md`, aligning the project with
   pyOpenSci's peer-review documentation requirements.
@@ -333,15 +348,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auto-generated API reference documentation.
 - `CITATION.cff` for machine-readable citation metadata.
 
+### Changed
+- Republished to TestPyPI with corrected README (installation
+  instructions, badges, repository links) and dev-install instructions
+  matching the project's `[dependency-groups]` setup
+  (`pip install -e . --group dev`).
+
 ### Fixed
-- OSM topology no longer depends on the output CRS. Topology nodes were
-  matched on coordinates rounded to 3 decimals in the requested `crs`,
-  which in the default EPSG:4326 is ~100 m: nearby intersections merged
-  into a single node, edges became self-loops and nodes were moved to the
-  rounded position. The topology is now built in a projected CRS in
-  metres chosen from the data (the local UTM zone), with a 1 mm
-  tolerance, and the final layers are reprojected to `crs` at the end.
-  Nodes keep their exact coordinates.
 - Corrected `.gitignore` so build artifacts in `dist/` are actually
   excluded from version control (previous pattern only matched a nested,
   nonexistent `data/outputs/dist/` path).
@@ -352,8 +365,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (nodes, edges, schedule tables) that were dropped during a merge
   conflict resolution.
 
+## [0.1.0] - 2026-09-30
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.4.0...HEAD
+### Added
+- Initial release: OSM + GTFS multimodal network download and export
+  pipeline (`get_network.main`), supporting GeoJSON, Shapefile,
+  GeoPackage, and NetworkX graph output formats.
+- Published to TestPyPI for pre-release testing.
+
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
