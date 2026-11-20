@@ -42,7 +42,7 @@ python -m ruff format --check . # formatting (ruff format . fixes it)
 ```
 
 All four must pass cleanly for a PR to be merged. CI runs the tests on Ubuntu
-and macOS with Python 3.11 to 3.14, and the checks with the ruff version pinned
+with Python 3.11 to 3.14 and on macOS with 3.11 and 3.14, and the checks with the ruff version pinned
 in the `lint` dependency group: install it with `pip install --group lint`, so
 your local ruff formats the same way.
 

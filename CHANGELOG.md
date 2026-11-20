@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-20
+
+### Added
+- `gtfs_service_date` in `download_network()` (`--gtfs-service-date` on the
+  command line) and `service_date` in `download_gtfs()`: count only the GTFS
+  trips that run on that day, as `calendar.txt` and `calendar_dates.txt` say.
+  By default every trip of a feed counts once, whatever days it runs, so a feed
+  with several timetables (winter and summer, Monday–Thursday and Friday) adds
+  them up and `trips` is not a daily frequency; with a date, `trips` and the
+  per-period columns are that day's, the schedule holds that day's trips and
+  the weekday/weekend columns are filled for the day's type only. A feed with
+  no trip that day is not written: `gtfs_report` says `no_service_on_date`,
+  with the dates its calendar covers, and a `UserWarning` names it. The
+  manifest records `gtfs_service_date`.
+- `gtfs_feeds` in `download_network()` (`--gtfs-feed [NAME=]SOURCE` on the
+  command line, repeatable) and `feeds` in `download_gtfs()`: GTFS feeds from
+  outside the NAP, as `{name: source}` or a list of sources, a source being an
+  http(s) address or a local zip or folder. They are processed like the NAP's
+  feeds, written to `bus/<name>/` or `train/<name>/`, and listed in the
+  manifest's `gtfs_feeds`. The first use is València's MetroBus, published on
+  the Generalitat's open data portal and not on the NAP. Without a NAP API key,
+  the NAP is skipped with a warning and only these feeds are used
+  (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
+  not http(s), or `gtfs_feeds` without `bus` or `train` in `modes` fail before
+  anything is downloaded.
+- `gtfs_report` has a `source` column, `nap` or `user`, and lists the feeds of
+  `gtfs_feeds` too; one that cannot be downloaded or processed raises the same
+  `UserWarning` as a NAP dataset.
+
+### Changed
+- The OpenStreetMap modes asked for (walking, bike, driving) are downloaded
+  with a single Overpass query instead of one per mode: the ways of all of them
+  at once, the union of osmnx's filters, from which each network is built with
+  the ways that match its own filter, through the same steps as
+  `osmnx.graph_from_polygon`. The networks are the same; the busy public
+  server gets one request instead of three (#95). This uses osmnx internals; if
+  they change, or a filter can't be read, each mode gets its own query again.
+  Since the modes share the query, a server failure fails all of them, listed
+  in `failed_modes`; the bus and train networks are still written. The first
+  download after upgrading doesn't reuse the cached per-mode answers.
+- `download_osm()` takes `failures`: with a dict, a network that can't be
+  downloaded is recorded there (`{mode: OSMDownloadError}`) and the others are
+  returned, instead of raising.
+- CI runs the tests on macOS with the oldest and newest supported Python (3.11
+  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
+  and a job waiting for one could fail the whole run.
+
+### Fixed
+- Trips defined in `frequencies.txt` (a template trip that leaves "every 10
+  minutes from 07:00 to 21:00") counted as a single trip: the number of
+  departures was computed but never used. Each departure is now a trip of its
+  own, `<trip_id>@<HH:MM:SS>`, with the template's times shifted to it, so it
+  counts in `trips`, its period, its type of day, its hour band and the
+  schedule.
+
+[0.6.0]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...v0.6.0
+
 ## [0.5.1] - 2026-11-19
 
 ### Added
@@ -426,7 +483,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0

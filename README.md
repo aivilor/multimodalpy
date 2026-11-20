@@ -106,6 +106,27 @@ If the NAP rejects the key, or has no feeds for the area, the street layers are
 also written and a warning explains why there is no bus or train data
 (`manifest["gtfs_status"]`).
 
+### Bus and train feeds from outside the NAP
+
+Some operators publish their GTFS elsewhere: València's MetroBus, for example,
+is on the Generalitat's open data portal, not on the NAP. Add such feeds with
+`gtfs_feeds`, as addresses or local zips (or folders), named after their output
+folder:
+
+```python
+manifest = mmp.download_network(
+    boundaries_path="pateval.geojson",
+    modes=["bus"],
+    gtfs_feeds={"metrobus": "https://gvinterbus.gva.es/estatico/gtfs.zip"},
+)
+```
+
+They are processed like the NAP's feeds (`bus/metrobus/`) and listed in
+`gtfs_report.csv` with `source = user`. A list of sources works too, each named
+after its file. Without a NAP key, only these feeds are used. In the command
+line: `--gtfs-feed metrobus=https://gvinterbus.gva.es/estatico/gtfs.zip`
+(repeat it for several).
+
 ### Your own study area
 
 To work on an area that is not one municipality (a metropolitan area, a
@@ -151,11 +172,15 @@ through an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
 server, by default the public `overpass-api.de`. It is run by volunteers and is
 often at capacity: it then answers with an error page instead of data.
 
+- All the street modes asked for come from **a single query**: the ways of
+  every mode are downloaded at once and each network is built from its own
+  ways, exactly as osmnx would build it from a query of its own. Three modes
+  are one request to the server instead of three.
 - A temporary failure (server busy, timeout, lost connection) is **retried four
   times**, waiting 10, 20, 40 and 80 seconds, and each retry is logged.
-- If a network still can't be downloaded, the others are downloaded and written
-  anyway; the failed one is listed in the manifest's `failed_modes` and reported
-  with a warning. Only if nothing at all could be downloaded does
+- If the streets still can't be downloaded, the bus and train networks are
+  written anyway; the street modes are listed in the manifest's `failed_modes`
+  and reported with a warning. Since they share one query, they fail together. Only if nothing at all could be downloaded does
   `download_network()` raise `OSMDownloadError`, which says which network and
   which server failed.
 - Every answer is cached, so **running the same call again later** only
@@ -293,6 +318,8 @@ paths and is much faster.
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
+| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: address or local zip}` (see "Bus and train feeds from outside the NAP"). |
+| `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
 
 `download_network()` writes the files and returns a manifest (a dictionary
 listing them).
@@ -361,7 +388,7 @@ sidebar gives a ready-made citation (APA, BibTeX) from
   title     = {multimodalpy: Easy creation of multimodal transport networks
                from OpenStreetMap and GTFS data},
   year      = {2026},
-  version   = {0.5.1},
+  version   = {0.6.0},
   doi       = {10.5281/zenodo.NNNNNNN},
   url       = {https://github.com/aivilor/multimodalpy},
   license   = {MIT}

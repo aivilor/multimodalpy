@@ -19,26 +19,38 @@ Main functions:
 - ``add_edge_travel_time(graph, speed_kmh)``       -> simple travel time (legacy)
 - ``download_osm(boundary, modes=...)``             -> download + final layers
 
+Several modes are downloaded with a single Overpass query (see
+``_SharedDownload``), and each network is then built from it exactly as
+``osmnx.graph_from_polygon`` builds it from its own query.
+
 No file is written here; that's done by ``_writers``.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import warnings
-from collections import Counter
-from collections.abc import Iterable
+from collections import Counter, OrderedDict
+from collections.abc import Callable, Iterable
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import networkx as nx
 
 from ._boundaries import study_area_geometry
-from ._overpass import call_overpass, overpass_settings
+from ._overpass import (
+    OSMDownloadError,
+    call_overpass,
+    overpass_error,
+    overpass_settings,
+)
 from ._text import normalize_name
+
+logger = logging.getLogger(__name__)
 
 # CRS of the graphs downloaded by osmnx. The output CRS is decided in the
 # main function (``main``); defaults to WGS84 (EPSG:4326), the universal CRS.
@@ -1056,6 +1068,17 @@ def _connect_parts(graph, area_graph, parts: list) -> tuple[object, list[int]]:
     return connected, unconnected
 
 
+def _download_polygon(polygon, connect_parts: bool):
+    """Polygon whose network is downloaded: the area, or the hull of its parts.
+
+    A multi-part area joined with ``connect_parts`` is downloaded over the
+    convex hull of its parts (see :func:`_download_connected_graph`).
+    """
+    if connect_parts and polygon.geom_type == "MultiPolygon":
+        return _connection_area(polygon)
+    return polygon
+
+
 def _download_connected_graph(
     polygon,
     *,
@@ -1063,6 +1086,7 @@ def _download_connected_graph(
     simplify: bool,
     retain_all: bool,
     truncate_by_edge: bool,
+    graph_from_polygon: Callable[..., Any] | None = None,
 ):
     """OSM graph of a multi-part area, with the roads that join its parts.
 
@@ -1074,7 +1098,7 @@ def _download_connected_graph(
     """
     import osmnx as ox
 
-    graph = ox.graph_from_polygon(
+    graph = (graph_from_polygon or ox.graph_from_polygon)(
         _connection_area(polygon),
         network_type=network_type,
         simplify=simplify,
@@ -1098,8 +1122,13 @@ def _download_graph(
     retain_all: bool,
     truncate_by_edge: bool,
     connect_parts: bool,
+    graph_from_polygon: Callable[..., Any] | None = None,
 ) -> tuple[object, list[int]]:
-    """OSM graph of the study area and its unconnected parts (if several)."""
+    """OSM graph of the study area and its unconnected parts (if several).
+
+    ``graph_from_polygon`` builds each graph: ``osmnx.graph_from_polygon``
+    (one query per call) by default, or a :class:`_SharedDownload`'s.
+    """
     import osmnx as ox
 
     if connect_parts and polygon.geom_type == "MultiPolygon":
@@ -1109,8 +1138,9 @@ def _download_graph(
             simplify=simplify,
             retain_all=retain_all,
             truncate_by_edge=truncate_by_edge,
+            graph_from_polygon=graph_from_polygon,
         )
-    graph = ox.graph_from_polygon(
+    graph = (graph_from_polygon or ox.graph_from_polygon)(
         polygon,
         network_type=network_type,
         simplify=simplify,
@@ -1121,8 +1151,232 @@ def _download_graph(
 
 
 # ---------------------------------------------------------------------------
+# One Overpass query for several modes
+# ---------------------------------------------------------------------------
+# osmnx sends one query per network type (``graph_from_polygon``), so three
+# modes meant three requests to an often busy server, mostly for the same
+# streets. Here the ways of every mode asked for are downloaded with one
+# query, the union of osmnx's filters, and each network is built from the
+# ways that match its own filter, through the same osmnx steps
+# ``graph_from_polygon`` follows. This uses osmnx internals (``_overpass``
+# and ``graph._create_graph``, unchanged from 2.0 to 2.2); if they are
+# missing, or a filter can't be read, each mode gets its own query again.
+
+# One ``["key"]``, ``["key"="value"]``, ``["key"!="value"]``,
+# ``["key"~"regex"]`` or ``["key"!~"regex"]`` condition of a way filter.
+_FILTER_CLAUSE = re.compile(r'\["([^"]+)"(?:(=|!=|~|!~)"([^"]*)")?\]')
+
+
+def _parse_way_filter(way_filter: str) -> list[tuple[str, str | None, str]] | None:
+    """Split an Overpass way filter into ``(key, operator, value)`` conditions.
+
+    Returns ``None`` if any part is something else (a regex on the key, a
+    case-insensitive match...), so the caller can fall back to osmnx.
+    """
+    clauses: list[tuple[str, str | None, str]] = []
+    position = 0
+    for match in _FILTER_CLAUSE.finditer(way_filter):
+        if match.start() != position:
+            return None
+        key, operator, value = match.groups()
+        clauses.append((key, operator, value or ""))
+        position = match.end()
+    if position != len(way_filter) or not clauses:
+        return None
+    return clauses
+
+
+def _tags_match(tags: dict[str, str], clauses) -> bool:
+    """Whether a way with ``tags`` passes every condition, as Overpass decides.
+
+    ``!=`` and ``!~`` also pass when the key is missing; regular expressions
+    match anywhere in the value and are case-sensitive.
+    """
+    for key, operator, value in clauses:
+        tag = tags.get(key)
+        if operator is None:
+            passed = tag is not None
+        elif operator == "=":
+            passed = tag == value
+        elif operator == "!=":
+            passed = tag != value
+        elif operator == "~":
+            passed = tag is not None and re.search(value, tag) is not None
+        else:  # "!~"
+            passed = tag is None or re.search(value, tag) is None
+        if not passed:
+            return False
+    return True
+
+
+def _keep_ways(response: dict, clauses) -> dict:
+    """Keep only the ways of an Overpass answer that pass ``clauses``, and their nodes.
+
+    The answer to that filter alone: the other ways and the nodes only they
+    use are dropped, so the graph has no stray nodes.
+    """
+    elements = response.get("elements", [])
+    ways = {
+        element["id"]
+        for element in elements
+        if element.get("type") == "way"
+        and _tags_match(element.get("tags", {}), clauses)
+    }
+    nodes = {
+        node
+        for element in elements
+        if element.get("type") == "way" and element["id"] in ways
+        for node in element.get("nodes", [])
+    }
+    kept = [
+        element
+        for element in elements
+        if (element.get("type") == "way" and element["id"] in ways)
+        or (element.get("type") == "node" and element.get("id") in nodes)
+    ]
+    return {**response, "elements": kept}
+
+
+class _SharedDownload:
+    """The networks of several modes from a single Overpass query.
+
+    :meth:`fetch` downloads, for a polygon, the ways of every network type
+    with one query (one per piece if osmnx splits a very large area);
+    :meth:`graph_from_polygon` then builds one network from that answer,
+    with the arguments and result of ``osmnx.graph_from_polygon``.
+    Raises ``_SharedDownloadUnavailable`` when built if the osmnx internals
+    it needs are missing or a filter can't be read.
+    """
+
+    def __init__(self, network_types: Iterable[str]) -> None:
+        try:
+            from osmnx import _overpass as ox_overpass
+            from osmnx import graph as ox_graph
+
+            self._request = ox_overpass._overpass_request
+            self._settings = ox_overpass._make_overpass_settings
+            self._pieces = ox_overpass._make_overpass_polygon_coord_strs
+            self._create_graph = ox_graph._create_graph
+            filters = {
+                network_type: ox_overpass._get_network_filter(network_type)
+                for network_type in network_types
+            }
+        except (ImportError, AttributeError) as exc:
+            raise _SharedDownloadUnavailable(f"osmnx internals changed: {exc}") from exc
+        self._filters = filters
+        self._clauses = {}
+        for network_type, way_filter in filters.items():
+            clauses = _parse_way_filter(way_filter)
+            if clauses is None:
+                raise _SharedDownloadUnavailable(
+                    f"cannot read the {network_type} filter {way_filter!r}"
+                )
+            self._clauses[network_type] = clauses
+        self._answers: dict[bytes, list[dict]] = {}
+
+    @staticmethod
+    def _buffered(polygon):
+        """Widen the polygon by 500 m, the area osmnx downloads before cutting."""
+        from osmnx import projection
+
+        polygon_utm, crs_utm = projection.project_geometry(polygon)
+        buffered, _ = projection.project_geometry(
+            polygon_utm.buffer(500), crs=crs_utm, to_latlong=True
+        )
+        return buffered
+
+    def fetch(self, polygon) -> None:
+        """Download the ways of every network type around ``polygon``, once."""
+        key = polygon.wkb
+        if key in self._answers:
+            return
+        settings = self._settings()
+        answers = []
+        for piece in self._pieces(self._buffered(polygon)):
+            ways = "".join(
+                f"way{way_filter}(poly:{piece!r});"
+                for way_filter in self._filters.values()
+            )
+            query = f"{settings};(({ways});>;);out;"
+            answers.append(self._request(OrderedDict(data=query)))
+        self._answers[key] = answers
+
+    def graph_from_polygon(
+        self,
+        polygon,
+        *,
+        network_type: str,
+        simplify: bool = True,
+        retain_all: bool = False,
+        truncate_by_edge: bool = False,
+    ):
+        """``osmnx.graph_from_polygon``, built from the answer of :meth:`fetch`."""
+        import networkx as nx
+        from osmnx import settings, simplification, stats, truncate
+
+        self.fetch(polygon)  # already done by download_osm, inside the retries
+        buffered = self._buffered(polygon)
+        answers = [
+            _keep_ways(answer, self._clauses[network_type])
+            for answer in self._answers[polygon.wkb]
+        ]
+        bidirectional = network_type in settings.bidirectional_network_types
+        graph_buffered = self._create_graph(answers, bidirectional)
+        graph_buffered = truncate.truncate_graph_polygon(
+            graph_buffered, buffered, truncate_by_edge=truncate_by_edge
+        )
+        if not retain_all:
+            graph_buffered = truncate.largest_component(graph_buffered, strongly=False)
+        if simplify:
+            graph_buffered = simplification.simplify_graph(graph_buffered)
+        graph = truncate.truncate_graph_polygon(
+            graph_buffered, polygon, truncate_by_edge=truncate_by_edge
+        )
+        if not retain_all:
+            graph = truncate.largest_component(graph, strongly=False)
+        street_counts = stats.count_streets_per_node(graph_buffered, nodes=graph.nodes)
+        nx.set_node_attributes(graph, values=street_counts, name="street_count")
+        return graph
+
+
+class _SharedDownloadUnavailable(Exception):
+    """A single query can't be used here; each mode gets its own."""
+
+
+def _shared_download(network_types: list[str]) -> _SharedDownload | None:
+    """Return a :class:`_SharedDownload` for several network types, or ``None``.
+
+    ``None`` for a single one (osmnx's own query is the same), or when the
+    shared query can't be used; then each mode is downloaded on its own.
+    """
+    if len(network_types) < 2:
+        return None
+    try:
+        return _SharedDownload(network_types)
+    except _SharedDownloadUnavailable as exc:
+        logger.info("One Overpass query per mode: %s", exc)
+        return None
+
+
+def _joined(labels: list[str]) -> str:
+    """Join labels: ``walking``, ``walking and bike``, ``walking, bike and driving``."""
+    return (
+        labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+    )
+
+
+# ---------------------------------------------------------------------------
 # Download and standardize the OSM layers
 # ---------------------------------------------------------------------------
+def _network_type(mode: str) -> tuple[str, str]:
+    """``(osmnx network_type, layer label)`` of a mode or its synonym."""
+    network_type = OSM_NETWORK_TYPES.get(normalize_name(mode))
+    if network_type is None:
+        valid = ", ".join(sorted(OSM_NETWORK_TYPES))
+        raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
+    return network_type, NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+
+
 def download_osm(
     boundary: gpd.GeoDataFrame,
     *,
@@ -1135,6 +1389,7 @@ def download_osm(
     connect_parts: bool = True,
     overpass_url: str | None = None,
     osm_timeout: float | None = None,
+    failures: dict[str, OSMDownloadError] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download OSM network layers for the given modes and standardizes them.
 
@@ -1183,6 +1438,15 @@ def download_osm(
     :class:`~multimodalpy.network.OSMDownloadError`, naming the network and
     the server. Answers are cached (see ``_overpass.osm_cache_dir``), so a
     rerun only downloads what is missing.
+
+    Several modes are downloaded with a single query: the ways of all of
+    them at once, from which each network is built as osmnx would build it
+    from its own query. If that query fails, every mode fails with it.
+
+    By default the first network that can't be downloaded raises
+    :class:`~multimodalpy.network.OSMDownloadError`. With a ``failures``
+    dict, it is recorded there instead (``{mode: error}``) and the networks
+    that could be built are returned.
     """
     try:
         import osmnx  # noqa: F401 - only checks it's installed
@@ -1191,21 +1455,47 @@ def download_osm(
             "Install osmnx to download OSM networks: pip install osmnx"
         ) from exc
 
+    # Unknown modes fail before anything is downloaded; synonyms count once.
+    wanted: dict[str, str] = {}
+    for mode in modes:
+        network_type, label = _network_type(mode)
+        wanted.setdefault(label, network_type)
+    labels = list(wanted)
+
     polygon = study_area_geometry(boundary, buffer_m=buffer_m)
     results: dict[str, dict[str, object]] = {}
+    failed: dict[str, OSMDownloadError] = {} if failures is None else failures
     with overpass_settings(overpass_url, osm_timeout):
-        for mode in modes:
-            results.update(
-                _download_mode(
-                    polygon,
-                    mode,
-                    output_crs=output_crs,
-                    simplify=simplify,
-                    retain_all=retain_all,
-                    truncate_by_edge=truncate_by_edge,
-                    connect_parts=connect_parts,
+        shared = _shared_download(list(wanted.values()))
+        if shared is not None:
+            try:
+                call_overpass(
+                    partial(shared.fetch, _download_polygon(polygon, connect_parts)),
+                    mode=_joined(labels),
                 )
-            )
+            except OSMDownloadError as exc:
+                if failures is None:
+                    raise
+                failed.update(dict.fromkeys(labels, exc))
+                return results
+        for label in labels:
+            try:
+                results.update(
+                    _download_mode(
+                        polygon,
+                        label,
+                        output_crs=output_crs,
+                        simplify=simplify,
+                        retain_all=retain_all,
+                        truncate_by_edge=truncate_by_edge,
+                        connect_parts=connect_parts,
+                        shared=shared,
+                    )
+                )
+            except OSMDownloadError as exc:
+                if failures is None:
+                    raise
+                failed[label] = exc
     return results
 
 
@@ -1218,27 +1508,34 @@ def _download_mode(
     retain_all: bool,
     truncate_by_edge: bool,
     connect_parts: bool,
+    shared: _SharedDownload | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Download and standardize one OSM mode (see :func:`download_osm`)."""
-    input_key = normalize_name(mode)
-    network_type = OSM_NETWORK_TYPES.get(input_key)
-    if network_type is None:
-        valid = ", ".join(sorted(OSM_NETWORK_TYPES))
-        raise ValueError(f"Unknown OSM mode '{mode}'. Valid values: {valid}")
-    layer_key = NETWORK_TYPE_TO_LAYER_LABEL[network_type]
+    """Download and standardize one OSM mode (see :func:`download_osm`).
 
-    graph, unconnected = call_overpass(
-        partial(
-            _download_graph,
-            polygon,
-            network_type=network_type,
-            simplify=simplify,
-            retain_all=retain_all,
-            truncate_by_edge=truncate_by_edge,
-            connect_parts=connect_parts,
-        ),
-        mode=layer_key,
+    With ``shared``, the network is built from its answer, already
+    downloaded; otherwise it gets its own query.
+    """
+    network_type, layer_key = _network_type(mode)
+    download = partial(
+        _download_graph,
+        polygon,
+        network_type=network_type,
+        simplify=simplify,
+        retain_all=retain_all,
+        truncate_by_edge=truncate_by_edge,
+        connect_parts=connect_parts,
     )
+    if shared is None:
+        graph, unconnected = call_overpass(download, mode=layer_key)
+    else:
+        try:
+            graph, unconnected = download(graph_from_polygon=shared.graph_from_polygon)
+        except Exception as exc:
+            # e.g. no street of this mode in the answer.
+            error = overpass_error(exc, layer_key)
+            if error is None:
+                raise
+            raise error from exc
     if unconnected:
         warnings.warn(
             f"No {layer_key} route was found to part(s) "

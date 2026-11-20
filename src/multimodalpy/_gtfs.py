@@ -23,10 +23,11 @@ No file is written here; that's done by ``_writers``.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile, ZipFile
@@ -239,6 +240,16 @@ def gtfs_time_to_seconds(time_str) -> float:
     return hours * 3600 + minutes * 60 + seconds
 
 
+def seconds_to_gtfs_time(seconds) -> str | None:
+    """Convert seconds since midnight to 'HH:MM:SS' (HH may be >= 24)."""
+    import math
+
+    if seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
+        return None
+    total = int(round(seconds))
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
 def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
     """Group seconds-since-midnight into an hour band like '08-09'."""
     import math
@@ -392,6 +403,120 @@ def build_gtfs_stops_gdf(
     gdf["source_name"] = dataset_name
     gdf["node_type"] = "stop"
     return gdf
+
+
+# ---------------------------------------------------------------------------
+# Service date: the trips that run on one day
+# ---------------------------------------------------------------------------
+_WEEKDAY_COLUMNS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
+
+def parse_service_date(value: object) -> datetime.date:
+    """Read a service date: a ``date``, ``"2026-11-25"`` or ``"20261125"``."""
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(
+        f"gtfs_service_date must be a date, 'YYYY-MM-DD' or 'YYYYMMDD'. Received: "
+        f"{value!r}"
+    )
+
+
+def _gtfs_dates(values: pd.Series) -> pd.Series:
+    import pandas as pd
+
+    return pd.to_datetime(values, format="%Y%m%d", errors="coerce").dt.date
+
+
+def active_service_ids(
+    calendar: pd.DataFrame | None,
+    calendar_dates: pd.DataFrame | None,
+    service_date: datetime.date,
+) -> set[str]:
+    """``service_id`` of the services that run on ``service_date``.
+
+    As the GTFS reference says: the services of ``calendar.txt`` whose
+    ``start_date``-``end_date`` range holds the date and that run on its day
+    of the week, plus the ones ``calendar_dates.txt`` adds that day
+    (``exception_type`` 1), minus the ones it removes (2).
+    """
+    import pandas as pd
+
+    active: set[str] = set()
+    weekday = _WEEKDAY_COLUMNS[service_date.weekday()]
+    needed = {"service_id", "start_date", "end_date", weekday}
+    if calendar is not None and needed <= set(calendar.columns):
+        start = _gtfs_dates(calendar["start_date"])
+        end = _gtfs_dates(calendar["end_date"])
+        runs = pd.to_numeric(calendar[weekday], errors="coerce") == 1
+        in_range = (start <= service_date) & (end >= service_date)
+        active = set(calendar.loc[runs & in_range.fillna(False), "service_id"])
+    if calendar_dates is not None and {
+        "service_id",
+        "date",
+        "exception_type",
+    } <= set(calendar_dates.columns):
+        that_day = calendar_dates[_gtfs_dates(calendar_dates["date"]) == service_date]
+        kind = pd.to_numeric(that_day["exception_type"], errors="coerce")
+        active |= set(that_day.loc[kind == 1, "service_id"])
+        active -= set(that_day.loc[kind == 2, "service_id"])
+    return active
+
+
+def service_period(
+    calendar: pd.DataFrame | None, calendar_dates: pd.DataFrame | None
+) -> tuple[datetime.date, datetime.date] | None:
+    """First and last day the feed's calendar covers, or ``None`` if unknown."""
+    import pandas as pd
+
+    days: list[pd.Series] = []
+    if calendar is not None:
+        days += [
+            _gtfs_dates(calendar[col])
+            for col in ("start_date", "end_date")
+            if col in calendar.columns
+        ]
+    if calendar_dates is not None and "date" in calendar_dates.columns:
+        days.append(_gtfs_dates(calendar_dates["date"]))
+    every = pd.concat(days).dropna() if days else pd.Series(dtype=object)
+    if every.empty:
+        return None
+    return min(every), max(every)
+
+
+def _no_service_message(feed_path: str | Path, service_date: datetime.date) -> str:
+    """Why a feed has no trip on ``service_date``, or ``""`` if it has some."""
+    calendar = _read_optional_gtfs_table(feed_path, "calendar.txt")
+    calendar_dates = _read_optional_gtfs_table(feed_path, "calendar_dates.txt")
+    trips = read_gtfs_table(feed_path, "trips.txt")
+    if "service_id" not in trips.columns:
+        return ""
+    active = active_service_ids(calendar, calendar_dates, service_date)
+    if trips["service_id"].isin(active).any():
+        return ""
+    message = f"no trips on {service_date.isoformat()}"
+    period = service_period(calendar, calendar_dates)
+    if period is not None:
+        message += (
+            f"; its calendar runs from {period[0].isoformat()} "
+            f"to {period[1].isoformat()}"
+        )
+    return message
 
 
 def _classify_day_type(runs_weekday, runs_weekend) -> str | None:
@@ -606,6 +731,107 @@ def _edge_ids(dataset_name: str, frame: pd.DataFrame) -> pd.Series:
     )
 
 
+def _expand_frequencies(
+    stop_times: pd.DataFrame,
+    trips: pd.DataFrame,
+    frequencies: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Turn the trips defined in ``frequencies.txt`` into one trip per departure.
+
+    A frequency-based trip is a template: its ``stop_times`` give the times
+    between stops, and each ``frequencies.txt`` row says it leaves every
+    ``headway_secs`` from ``start_time`` until (not including) ``end_time``.
+    Each departure becomes a trip of its own, ``<trip_id>@<HH:MM:SS>``, with
+    the template's times shifted to it, so it counts in ``trip_count``, its
+    period and its hour band like any other trip. The templates are
+    replaced; a template with no valid row (no headway, no times) is kept
+    as it is.
+    """
+    import numpy as np
+    import pandas as pd
+
+    needed = {"trip_id", "start_time", "end_time", "headway_secs"}
+    if frequencies is None or frequencies.empty or not needed <= set(frequencies):
+        return stop_times, trips
+
+    freq = frequencies.loc[:, ["trip_id", "start_time", "end_time", "headway_secs"]]
+    freq = freq.assign(
+        start=freq["start_time"].map(gtfs_time_to_seconds),
+        end=freq["end_time"].map(gtfs_time_to_seconds),
+        headway=pd.to_numeric(freq["headway_secs"], errors="coerce"),
+    ).dropna(subset=["start", "end", "headway"])
+    freq = freq[(freq["headway"] > 0) & (freq["end"] > freq["start"])]
+    freq = freq[freq["trip_id"].isin(set(stop_times["trip_id"]))]
+    if freq.empty:
+        return stop_times, trips
+
+    template = stop_times[stop_times["trip_id"].isin(set(freq["trip_id"]))].copy()
+    template["_seq"] = pd.to_numeric(template["stop_sequence"], errors="coerce")
+    times = {
+        col: template[col].map(gtfs_time_to_seconds)
+        for col in ("arrival_time", "departure_time")
+        if col in template.columns
+    }
+    # The template's first time: its departure from the first stop (or its
+    # arrival there, if the departure is missing).
+    first = template.assign(**times).sort_values("_seq").groupby("trip_id").first()
+    base = pd.Series(np.nan, index=first.index)
+    for col in ("departure_time", "arrival_time"):
+        if col in first.columns:
+            base = base.fillna(first[col])
+    base = base.dropna()
+    freq = freq[freq["trip_id"].isin(base.index)]
+    if freq.empty:
+        return stop_times, trips
+
+    # One row per departure: start, start + headway, ... before end.
+    departures = freq.assign(
+        departure=[
+            np.arange(start, end, headway)
+            for start, end, headway in freq[["start", "end", "headway"]].itertuples(
+                index=False
+            )
+        ]
+    ).explode("departure")[["trip_id", "departure"]]
+    departures["departure"] = departures["departure"].astype(float)
+    departures = departures.drop_duplicates()
+    departures["new_trip_id"] = (
+        departures["trip_id"] + "@" + departures["departure"].map(seconds_to_gtfs_time)
+    )
+    departures["offset"] = departures["departure"] - departures["trip_id"].map(base)
+
+    expanded = template.drop(columns="_seq").merge(
+        departures[["trip_id", "new_trip_id", "offset"]], on="trip_id"
+    )
+    for col in times:
+        expanded[col] = (
+            expanded[col].map(gtfs_time_to_seconds) + expanded["offset"]
+        ).map(seconds_to_gtfs_time)
+    expanded = expanded.drop(columns=["trip_id", "offset"]).rename(
+        columns={"new_trip_id": "trip_id"}
+    )
+
+    expanded_trips = trips.merge(
+        departures[["trip_id", "new_trip_id"]].drop_duplicates(), on="trip_id"
+    )
+    expanded_trips = expanded_trips.drop(columns="trip_id").rename(
+        columns={"new_trip_id": "trip_id"}
+    )[list(trips.columns)]
+
+    replaced = set(departures["trip_id"])
+    stop_times = pd.concat(
+        [
+            stop_times[~stop_times["trip_id"].isin(replaced)],
+            expanded[stop_times.columns],
+        ],
+        ignore_index=True,
+    )
+    trips = pd.concat(
+        [trips[~trips["trip_id"].isin(replaced)], expanded_trips], ignore_index=True
+    )
+    return stop_times, trips
+
+
 def _build_stop_to_stop_trip_records(
     stop_times: pd.DataFrame,
     stops: pd.DataFrame,
@@ -619,6 +845,7 @@ def _build_stop_to_stop_trip_records(
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
+    service_date: datetime.date | None = None,
 ) -> pd.DataFrame:
     """Build the intermediate, unaggregated table of trip-segment records.
 
@@ -626,9 +853,17 @@ def _build_stop_to_stop_trip_records(
     both the aggregated edges layer (``build_gtfs_stop_to_stop_edges_gdf``)
     and the flat schedule table (``build_gtfs_schedule_table``), to avoid
     duplicating the travel-time and merge logic.
+
+    With ``service_date``, only the trips that run that day are kept (see
+    :func:`active_service_ids`).
     """
     import pandas as pd
 
+    if service_date is not None and "service_id" in trips.columns:
+        active = active_service_ids(calendar, calendar_dates, service_date)
+        trips = trips[trips["service_id"].isin(active)]
+        stop_times = stop_times[stop_times["trip_id"].isin(set(trips["trip_id"]))]
+    stop_times, trips = _expand_frequencies(stop_times, trips, frequencies)
     work = stop_times.copy()
     work["stop_sequence"] = pd.to_numeric(work["stop_sequence"], errors="coerce")
     work = work.dropna(subset=["trip_id", "stop_id", "stop_sequence"]).sort_values(
@@ -653,9 +888,11 @@ def _build_stop_to_stop_trip_records(
     )
     work = work.dropna(subset=["next_stop_id"]).copy()
 
+    # float even with no rows (e.g. no trip on the service date), so the
+    # aggregations still work on an empty table.
     work["travel_time_seconds"] = (
         work["next_arrival_seconds"] - work["departure_seconds"]
-    )
+    ).astype(float)
     work.loc[work["travel_time_seconds"] < 0, "travel_time_seconds"] = float("nan")
     # Impossible times (see MAX_SEGMENT_SECONDS): left empty and marked, so
     # normalize_gtfs_feed can say how many there were in the study area.
@@ -704,23 +941,6 @@ def _build_stop_to_stop_trip_records(
 
     trips_work = _attach_service_days(trips, calendar, calendar_dates)
 
-    if (
-        frequencies is not None
-        and not frequencies.empty
-        and "trip_id" in frequencies.columns
-    ):
-        freq = frequencies.copy()
-        freq["headway_secs"] = pd.to_numeric(freq["headway_secs"], errors="coerce")
-        freq["start_seconds"] = freq["start_time"].apply(gtfs_time_to_seconds)
-        freq["end_seconds"] = freq["end_time"].apply(gtfs_time_to_seconds)
-        freq["trips_per_window"] = (
-            (freq["end_seconds"] - freq["start_seconds"]) / freq["headway_secs"]
-        ).clip(lower=0)
-        freq_trip_counts = freq.groupby("trip_id")["trips_per_window"].sum()
-        trips_work["frequency_trip_count"] = trips_work["trip_id"].map(freq_trip_counts)
-    else:
-        trips_work["frequency_trip_count"] = pd.NA
-
     trip_cols = _existing_columns(
         trips_work,
         [
@@ -734,7 +954,6 @@ def _build_stop_to_stop_trip_records(
             "runs_weekday",
             "runs_weekend",
             "day_type",
-            "frequency_trip_count",
         ],
     )
     route_cols = _existing_columns(
@@ -773,6 +992,7 @@ def build_gtfs_schedule_table(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     records: pd.DataFrame | None = None,
     filter_geometry=None,
+    service_date: datetime.date | None = None,
 ) -> pd.DataFrame:
     """Option B: a flat table (no geometry), one record per trip and segment.
 
@@ -799,6 +1019,7 @@ def build_gtfs_schedule_table(
             hour_band_size=hour_band_size,
             hour_range=hour_range,
             peak_periods=peak_periods,
+            service_date=service_date,
         )
     records = _filter_records_by_geometry(records, filter_geometry)
     columns = _existing_columns(
@@ -901,6 +1122,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
     records: pd.DataFrame | None = None,
+    service_date: datetime.date | None = None,
 ) -> gpd.GeoDataFrame:
     """Build the stop-to-stop edges layer: one row per pair of stops.
 
@@ -938,6 +1160,11 @@ def build_gtfs_stop_to_stop_edges_gdf(
     ``records`` takes the output of ``_build_stop_to_stop_trip_records``
     if it was already built with the same arguments, so it is not built
     again (see ``normalize_gtfs_feed``).
+
+    With ``service_date``, the records are the trips of that day, and the
+    weekday/weekend columns count them under that day's type only: a
+    Wednesday fills the ``*_weekday`` columns and leaves the ``*_weekend``
+    ones empty.
     """
     import geopandas as gpd
     import pandas as pd
@@ -956,7 +1183,19 @@ def build_gtfs_stop_to_stop_edges_gdf(
             hour_band_size=hour_band_size,
             hour_range=hour_range,
             peak_periods=peak_periods,
+            service_date=service_date,
         )
+    if records.empty:
+        # No trip at all (none runs on the service date): an empty layer
+        # with the usual columns.
+        columns = [col for col in gtfs_edge_columns(peak_periods) if col != "geometry"]
+        empty = gpd.GeoDataFrame(
+            {col: pd.Series(dtype=object) for col in [*columns, "route_type"]},
+            geometry=gpd.GeoSeries([], crs=SOURCE_CRS),
+        )
+        empty["dataset_name"] = pd.Series(dtype=object)
+        empty["layer_id"] = pd.Series(dtype=object)
+        return empty
     edges = records
     in_area = _filter_records_by_geometry(edges, filter_geometry)
     # If nothing touches the area, aggregate a single record instead of
@@ -1011,6 +1250,12 @@ def build_gtfs_stop_to_stop_edges_gdf(
         "weekday": edges.get("runs_weekday"),
         "weekend": edges.get("runs_weekend"),
     }
+    if service_date is not None:
+        on_weekend = service_date.weekday() >= 5
+        day_type_masks = {
+            "weekday": pd.Series(not on_weekend, index=edges.index),
+            "weekend": pd.Series(on_weekend, index=edges.index),
+        }
     for day_type_name, mask in day_type_masks.items():
         if mask is None:
             for metric in ("travel_time_seconds_mean", "trip_count"):
@@ -1147,6 +1392,7 @@ def normalize_gtfs_feed(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
     include_schedule_table: bool = True,
+    service_date: datetime.date | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
     """Normalize a GTFS feed into (stops, edges, schedule).
 
@@ -1167,6 +1413,10 @@ def normalize_gtfs_feed(
     ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend`` /
     ``day_type`` columns in the schedule), derived from ``calendar.txt``
     (falling back to ``calendar_dates.txt`` if it doesn't exist).
+
+    With ``service_date`` (a ``datetime.date``), only the trips that run
+    that day are used, so ``trip_count`` is that day's number of trips;
+    without it, every trip of the feed counts once, whatever days it runs.
     """
     import pandas as pd
 
@@ -1193,6 +1443,7 @@ def normalize_gtfs_feed(
         hour_band_size=hour_band_size,
         hour_range=hour_range,
         peak_periods=peak_periods,
+        service_date=service_date,
     )
     stop_edges_gdf = build_gtfs_stop_to_stop_edges_gdf(
         stop_times,
@@ -1205,6 +1456,7 @@ def normalize_gtfs_feed(
         peak_periods=peak_periods,
         include_hourly_summary=include_hourly_summary,
         records=records,
+        service_date=service_date,
     )
     _warn_implausible_times(records, filter_geometry, dataset_name)
     # The nodes are the stops the edges use, and only those: stops.txt
@@ -1396,13 +1648,128 @@ def dataset_name_from_file(zip_path: str | Path, taken: set[str] | None = None) 
     stem = Path(zip_path).stem
     rest = _DOWNLOAD_STAMP.sub("", stem)
     name = slugify(rest if rest.strip("_ ") else stem)
-    if taken is None:
-        return name
+    return name if taken is None else _unique_name(name, taken)
+
+
+def _unique_name(name: str, taken: set[str]) -> str:
+    """``name``, or ``name_2``, ``name_3``... if taken; added to ``taken``."""
     unique, number = name, 2
     while unique in taken:
         unique, number = f"{name}_{number}", number + 1
     taken.add(unique)
     return unique
+
+
+# ---------------------------------------------------------------------------
+# GTFS feeds from outside the NAP (gtfs_feeds)
+# ---------------------------------------------------------------------------
+#: What ``gtfs_feeds`` accepts: ``{name: source}``, or a list of sources or
+#: ``(name, source)`` pairs. A source is an http(s) address or a local GTFS
+#: zip or folder.
+GTFSFeeds = Mapping[str, "str | Path"] | Sequence["str | Path | tuple[str, str | Path]"]
+
+
+def _is_url(source: str) -> bool:
+    return source.lower().startswith(("http://", "https://"))
+
+
+def user_feed_sources(feeds: GTFSFeeds | None) -> list[tuple[str | None, str]]:
+    """Check ``gtfs_feeds`` and return it as ``[(name or None, source)]``.
+
+    Raises ``ValueError`` for an empty source, a name that is not text or an
+    address other than http(s), and ``FileNotFoundError`` for a local file or
+    folder that doesn't exist, so a mistake fails before anything is
+    downloaded.
+    """
+    if feeds is None:
+        return []
+    if isinstance(feeds, (str, Path)):
+        feeds = [feeds]
+    items: list[tuple[object, object]] = (
+        list(feeds.items())
+        if isinstance(feeds, Mapping)
+        else [
+            item if isinstance(item, tuple) and len(item) == 2 else (None, item)
+            for item in feeds
+        ]
+    )
+    sources: list[tuple[str | None, str]] = []
+    for name, source in items:
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ValueError(
+                f"gtfs_feeds: a feed name must be text. Received: {name!r}"
+            )
+        text = str(source).strip() if source is not None else ""
+        if not text:
+            raise ValueError(f"gtfs_feeds: empty source for feed {name!r}.")
+        if _is_url(text):
+            sources.append((name, text))
+            continue
+        if "://" in text:
+            raise ValueError(
+                "gtfs_feeds: only http(s) addresses can be downloaded. "
+                f"Received: {text}"
+            )
+        path = Path(text).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"gtfs_feeds: no such GTFS file or folder: {text}")
+        sources.append((name, str(path)))
+    return sources
+
+
+def _feed_file_name(source: str) -> str:
+    """File name of a source: the last part of its address or path."""
+    from urllib.parse import urlparse
+
+    path = urlparse(source).path if _is_url(source) else source
+    return Path(path.rstrip("/")).name or "gtfs"
+
+
+def _fetch_user_feeds(
+    sources: list[tuple[str | None, str]],
+    zip_dir: Path,
+    report: list[dict[str, object]],
+) -> list[tuple[Path, str | None, dict[str, object] | None]]:
+    """Download the ``gtfs_feeds`` addresses into ``zip_dir``; keep local paths.
+
+    Returns ``(path, name, report row)`` per feed obtained. Every feed gets a
+    report row with ``source`` ``"user"``; a download that fails is
+    ``failed``, with the error, and is not returned.
+    """
+    import requests
+
+    from ._overpass import user_agent
+
+    fetched: list[tuple[Path, str | None, dict[str, object] | None]] = []
+    files_taken: set[str] = set()
+    for name, source in sources:
+        file_name = _feed_file_name(source)
+        row: dict[str, object] = {
+            "source": "user",
+            "dataset_name": name or file_name,
+            "file_name": file_name,
+        }
+        report.append(row)
+        if not _is_url(source):
+            row.update(status="downloaded", path=source)
+            fetched.append((Path(source), name, row))
+            continue
+        stem = _unique_name(slugify(name or Path(file_name).stem), files_taken)
+        target = Path(zip_dir) / f"{stem}.zip"
+        try:
+            response = requests.get(
+                source, headers={"User-Agent": user_agent()}, timeout=(30, 300)
+            )
+            response.raise_for_status()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(response.content)
+        except Exception as exc:  # noqa: BLE001 - reported, the rest go on
+            logger.warning("Could not download GTFS feed %s: %s", source, exc)
+            row.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            continue
+        row.update(status="downloaded", path=str(target))
+        fetched.append((target, name, row))
+    return fetched
 
 
 def download_gtfs(
@@ -1422,6 +1789,9 @@ def download_gtfs(
     buffer_m: float = 0.0,
     skipped: dict[str, str] | None = None,
     report: list[dict[str, object]] | None = None,
+    service_date: datetime.date | str | None = None,
+    feeds: GTFSFeeds | None = None,
+    use_nap: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1455,25 +1825,53 @@ def download_gtfs(
     ``skipped_mode`` or ``failed_processing`` (with ``error``), its
     ``dataset`` name and ``mode``, and how many ``routes``, ``stops`` and
     ``edges`` it has in the area.
+
+    ``service_date`` (a date, ``"YYYY-MM-DD"`` or ``"YYYYMMDD"``) keeps only
+    the trips that run that day (see :func:`normalize_gtfs_feed`). A feed
+    with no trip that day is not written: its report row says
+    ``no_service_on_date``, with the dates its calendar covers in ``error``.
+
+    ``feeds`` adds GTFS feeds from outside the NAP: ``{name: source}``, or a
+    list of sources or ``(name, source)`` pairs, a source being an http(s)
+    address (downloaded into ``zip_dir``) or a local zip or folder. They are
+    processed like the NAP's, after them; a feed's ``dataset`` is its name
+    (or its file name), numbered if another feed already has it, and its
+    report row has ``source`` ``"user"`` (``"nap"`` for the NAP's). With
+    ``use_nap=False`` the NAP is skipped and only ``feeds`` are used, so no
+    API key is needed.
     """
+    day = None if service_date is None else parse_service_date(service_date)
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    sources = user_feed_sources(feeds)
     report_rows: list[dict[str, object]] = [] if report is None else report
-    zips = download_gtfs_nap_zips(
-        area_name,
-        zip_dir,
-        modes=modes,
-        api_key=api_key,
-        province_codes=province_codes,
-        report=report_rows,
-    )
+    zips: list[Path] = []
+    if use_nap:
+        zips = list(
+            download_gtfs_nap_zips(
+                area_name,
+                zip_dir,
+                modes=modes,
+                api_key=api_key,
+                province_codes=province_codes,
+                report=report_rows,
+            )
+        )
+        for nap_row in report_rows:
+            nap_row.setdefault("source", "nap")
     by_path = {str(row["path"]): row for row in report_rows if row.get("path")}
+    # (file, name given or None, its report row): the NAP's, then the user's.
+    feed_files: list[tuple[Path, str | None, dict[str, object] | None]] = [
+        (Path(path), None, by_path.get(str(path))) for path in zips
+    ]
+    feed_files += _fetch_user_feeds(sources, Path(zip_dir), report_rows)
 
-    def outcome(zip_path: Path, **fields: object) -> None:
+    def outcome(
+        zip_path: Path, row: dict[str, object] | None, **fields: object
+    ) -> None:
         """Complete the report row of a downloaded file."""
-        row = by_path.get(str(zip_path))
         if row is None:
             row = {"file_name": Path(zip_path).name, "path": str(zip_path)}
             report_rows.append(row)
@@ -1486,8 +1884,12 @@ def download_gtfs(
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     taken: set[str] = set()
-    for zip_path in zips:
-        dataset_name = dataset_name_from_file(zip_path, taken)
+    for zip_path, given_name, row in feed_files:
+        dataset_name = (
+            _unique_name(slugify(given_name), taken)
+            if given_name
+            else dataset_name_from_file(zip_path, taken)
+        )
         # "bus" or "train", from the feed's route_type: decides the output
         # folder, and whether the feed was asked for at all.
         mode = infer_transport_mode(zip_path)
@@ -1499,9 +1901,22 @@ def download_gtfs(
             )
             if skipped is not None:
                 skipped[dataset_name] = mode
-            outcome(zip_path, dataset=dataset_name, mode=mode, status="skipped_mode")
+            outcome(
+                zip_path, row, dataset=dataset_name, mode=mode, status="skipped_mode"
+            )
             continue
         try:
+            no_service = "" if day is None else _no_service_message(zip_path, day)
+            if no_service:
+                outcome(
+                    zip_path,
+                    row,
+                    dataset=dataset_name,
+                    mode=mode,
+                    status="no_service_on_date",
+                    error=no_service,
+                )
+                continue
             stops, stop_edges, schedule = normalize_gtfs_feed(
                 zip_path,
                 dataset_name=dataset_name,
@@ -1512,11 +1927,13 @@ def download_gtfs(
                 hour_range=hour_range,
                 peak_periods=peak_periods,
                 include_schedule_table=include_schedule_table,
+                service_date=day,
             )
         except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
             logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
             outcome(
                 zip_path,
+                row,
                 dataset=dataset_name,
                 mode=mode,
                 status="failed_processing",
@@ -1525,6 +1942,7 @@ def download_gtfs(
             continue
         outcome(
             zip_path,
+            row,
             dataset=dataset_name,
             mode=mode,
             status="written" if not stop_edges.empty else "nothing_in_area",

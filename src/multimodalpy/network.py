@@ -19,11 +19,13 @@ layers in memory instead, for a study area from :func:`multimodalpy.find_area`.
 
 Modes are split between the two sources: "walking", "bike" and "driving"
 come from OpenStreetMap; "bus" and "train" from the official GTFS feeds of
-Spain's National Access Point (NAP), which needs a free API key.
+Spain's National Access Point (NAP), which needs a free API key, and from
+any feeds of your own (``gtfs_feeds``).
 """
 
 from __future__ import annotations
 
+import datetime
 import logging
 import shutil
 import warnings
@@ -101,6 +103,7 @@ def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
 # ---------------------------------------------------------------------------
 #: Columns of ``gtfs_report`` (manifest and ``gtfs_report.csv``), in order.
 _GTFS_REPORT_COLUMNS = (
+    "source",
     "province_code",
     "dataset_id",
     "dataset_name",
@@ -139,9 +142,8 @@ def _unusable_gtfs_datasets(rows: list[dict[str, object]]) -> list[str]:
     """
     by_dataset: dict[object, list[dict[str, object]]] = {}
     for row in rows:
-        by_dataset.setdefault(row.get("dataset_id") or row.get("file_name"), []).append(
-            row
-        )
+        key = row.get("dataset_id") or row.get("dataset_name") or row.get("file_name")
+        by_dataset.setdefault(key, []).append(row)
     unusable = []
     for dataset_rows in by_dataset.values():
         statuses = {row["status"] for row in dataset_rows}
@@ -168,6 +170,8 @@ def download_network(
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
+    gtfs_service_date: str | datetime.date | None = None,
+    gtfs_feeds: _gtfs.GTFSFeeds | None = None,
     write_schedule: bool = False,
     keep_gtfs_zips: bool = False,
     province: int | str | None = None,
@@ -233,6 +237,27 @@ def download_network(
         code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
         ``p1``, ``p2``... if the first three letters clash), listed in the
         manifest's ``gtfs_period_codes``.
+    gtfs_service_date : str | datetime.date, optional
+        Count the GTFS trips of this day only (``"2026-11-25"``,
+        ``"20261125"`` or a ``datetime.date``): the trips whose service runs
+        that day, as the feed's ``calendar.txt`` and ``calendar_dates.txt``
+        say. Then ``trips`` and the per-period columns are that day's
+        frequencies, and the weekday/weekend columns are filled for its type
+        of day only. By default every trip of the feed counts once, whatever
+        days it runs, so a feed with several timetables (winter and summer,
+        Monday-Thursday and Friday) adds them up. A feed with no trip that
+        day is not written (``no_service_on_date`` in ``gtfs_report``, with
+        the dates its calendar covers) and raises a ``UserWarning``.
+    gtfs_feeds : dict | list, optional
+        GTFS feeds from outside the NAP, processed like the NAP's for the
+        "bus"/"train" modes asked for: ``{name: source}`` (the name is the
+        output folder, ``bus/<name>/``), or a list of sources, named after
+        their files. A source is an http(s) address, downloaded into
+        ``gtfs_zips/``, or a local GTFS zip or folder, e.g.
+        ``{"metrobus": "https://gvinterbus.gva.es/estatico/gtfs.zip"}``.
+        Without a NAP API key, the NAP is skipped with a ``UserWarning`` and
+        only these feeds are used. Each one has a row in ``gtfs_report``
+        with ``source="user"``.
     write_schedule : bool
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
@@ -267,7 +292,8 @@ def download_network(
         ``unconnected_parts``. Defaults to True; has no effect on
         single-polygon municipalities.
     overpass_url : str, optional
-        Overpass API server for the OpenStreetMap networks: its ``.../api``
+        Overpass API server for the OpenStreetMap networks (all the modes
+        asked for are downloaded with a single query): its ``.../api``
         address (e.g. ``"https://overpass.private.coffee/api"``; see the
         list of public instances in the OpenStreetMap wiki). Defaults to
         ``osmnx.settings.overpass_url`` (the public ``overpass-api.de``,
@@ -286,11 +312,13 @@ def download_network(
         ``municipalities``), the modes, the folder and the files written.
 
         ``gtfs_report`` (also written as ``gtfs_report.csv``) says what
-        happened to every NAP dataset of the area's provinces: ``written``
+        happened to every NAP dataset of the area's provinces and to every
+        feed of ``gtfs_feeds`` (``source`` ``"nap"`` or ``"user"``): ``written``
         (with its ``routes``, ``stops`` and ``edges`` in the area),
         ``nothing_in_area``, ``skipped_mode``, ``not_requested_type`` (its
         declared ``transport_types`` are not among the modes asked for),
-        ``failed`` (download) or ``failed_processing``, with the ``error``.
+        ``no_service_on_date`` (with ``gtfs_service_date``), ``failed``
+        (download) or ``failed_processing``, with the ``error``.
         A dataset that could not be used at all raises a ``UserWarning``.
 
         A GTFS feed whose routes are of a mode that wasn't requested
@@ -300,7 +328,9 @@ def download_network(
         If an OpenStreetMap network can't be downloaded (see
         ``overpass_url``), the other networks are still downloaded and
         written: the failure is listed in the manifest's ``failed_modes``
-        and reported with a ``UserWarning``.
+        and reported with a ``UserWarning``. The walking, bike and driving
+        networks come from a single Overpass query, so when the server
+        fails it, all of them are listed.
 
     Raises
     ------
@@ -330,6 +360,19 @@ def download_network(
             output_formats.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
+    # A malformed date fails before anything is downloaded.
+    service_date = (
+        None
+        if gtfs_service_date is None
+        else _gtfs.parse_service_date(gtfs_service_date)
+    )
+    # So do a missing local feed and gtfs_feeds without bus or train.
+    feed_sources = _gtfs.user_feed_sources(gtfs_feeds)
+    if feed_sources and not nap_modes:
+        raise ValueError(
+            "gtfs_feeds needs 'bus' or 'train' in modes: only the feeds of the "
+            "modes asked for are processed."
+        )
 
     # Check the NAP key before downloading anything: otherwise a missing
     # key only shows up after the OSM step, which can take minutes.
@@ -338,8 +381,13 @@ def download_network(
         api_key = resolve_nap_api_key(api_key)
         if api_key is None:
             gtfs_error = f"ValueError: {missing_nap_key_message()}"
+            skipped_what = (
+                "The NAP will be skipped and only gtfs_feeds used."
+                if feed_sources
+                else "Bus/train will be skipped."
+            )
             warnings.warn(
-                f"Bus/train will be skipped. {missing_nap_key_message()}",
+                f"{skipped_what} {missing_nap_key_message()}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -373,25 +421,25 @@ def download_network(
     # networkx export so the graph carries the same attributes.
     gtfs_edge_columns: dict[str, list[str]] = {}
 
-    # 2) OSM, one mode at a time: if the Overpass server fails one of them
-    #    (after its retries), the others are still downloaded and written,
-    #    and the failure is reported at the end and in the manifest.
+    # 2) OSM, every mode with a single Overpass query. A network that can't
+    #    be downloaded (after the retries) is recorded instead of raised: the
+    #    others, and the GTFS, are still written, and the failure is
+    #    reported at the end and in the manifest.
     osm_failures: dict[str, OSMDownloadError] = {}
-    for osm_mode in osm_modes:
-        try:
-            osm_results.update(
-                download_osm(
-                    boundary,
-                    modes=[osm_mode],
-                    output_crs=crs,
-                    buffer_m=buffer_m,
-                    connect_parts=connect_parts,
-                    overpass_url=overpass_url,
-                    osm_timeout=osm_timeout,
-                )
+    if osm_modes:
+        osm_results.update(
+            download_osm(
+                boundary,
+                modes=osm_modes,
+                output_crs=crs,
+                buffer_m=buffer_m,
+                connect_parts=connect_parts,
+                overpass_url=overpass_url,
+                osm_timeout=osm_timeout,
+                failures=osm_failures,
             )
-        except OSMDownloadError as exc:
-            osm_failures[exc.mode] = exc
+        )
+        for exc in dict.fromkeys(osm_failures.values()):
             logger.warning("%s The other networks are still downloaded.", exc)
     if osm_modes:
         for mode, out in osm_results.items():
@@ -405,7 +453,7 @@ def download_network(
     gtfs_zips_dir = output_dir / "gtfs_zips"
     skipped_datasets: dict[str, str] = {}
     gtfs_report: list[dict[str, object]] = []
-    if nap_modes and api_key is not None:
+    if nap_modes and (api_key is not None or feed_sources):
         # A failure here (NAP 404, corrupt feed, network outage) shouldn't
         # throw away the OSM layers already built: it's logged, noted in
         # the manifest, and whatever could be obtained is written anyway.
@@ -424,6 +472,9 @@ def download_network(
                 buffer_m=buffer_m,
                 skipped=skipped_datasets,
                 report=gtfs_report,
+                service_date=service_date,
+                feeds=gtfs_feeds,
+                use_nap=api_key is not None,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -468,7 +519,14 @@ def download_network(
                     f"{gtfs_mode}/{dataset}/schedule"
                 )
 
-    if nap_modes and not keep_gtfs_zips:
+    # Never delete a feed of the user's own: gtfs_feeds may point at a zip
+    # kept from an earlier run (keep_gtfs_zips=True) in this same folder.
+    own_feed_inside = any(
+        Path(source).resolve().is_relative_to(gtfs_zips_dir.resolve())
+        for _, source in feed_sources
+        if not _gtfs._is_url(source)
+    )
+    if nap_modes and not keep_gtfs_zips and not own_feed_inside:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
 
     # What happened to every NAP dataset, next to the layers: the copy the
@@ -607,6 +665,12 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if service_date is not None and nap_modes:
+        manifest["gtfs_service_date"] = service_date.isoformat()
+    if feed_sources:
+        manifest["gtfs_feeds"] = [
+            {"name": name, "source": source} for name, source in feed_sources
+        ]
     if gtfs_results:
         # Code of each period in the short column names (tts_m_pam, tm_mor_wd).
         manifest["gtfs_period_codes"] = _gtfs.period_codes(gtfs_peak_periods)
@@ -618,6 +682,20 @@ def download_network(
                 f"{len(unusable)} GTFS dataset(s) could not be used: "
                 + "; ".join(unusable)
                 + ". See manifest['gtfs_report'] or gtfs_report.csv.",
+                UserWarning,
+                stacklevel=2,
+            )
+        no_service = [
+            f"{row['dataset']} ({row['error']})"
+            for row in gtfs_report_rows
+            if row["status"] == "no_service_on_date"
+        ]
+        if no_service:
+            warnings.warn(
+                f"{len(no_service)} GTFS dataset(s) have no trips on "
+                f"{manifest['gtfs_service_date']} and were not written: "
+                + "; ".join(no_service)
+                + ".",
                 UserWarning,
                 stacklevel=2,
             )

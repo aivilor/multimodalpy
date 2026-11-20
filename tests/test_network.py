@@ -147,12 +147,13 @@ def backends(monkeypatch, boundary):
         )
         return boundary
 
-    def fake_download_osm(bnd, *, modes, output_crs, **kwargs):
+    def fake_download_osm(bnd, *, modes, output_crs, failures=None, **kwargs):
         calls["osm"].append(
             {
                 "boundary": bnd,
                 "modes": list(modes),
                 "output_crs": output_crs,
+                "failures": failures,
                 **kwargs,
             }
         )
@@ -161,7 +162,7 @@ def backends(monkeypatch, boundary):
             network_type = _osm.OSM_NETWORK_TYPES[_text.normalize_name(mode)]
             label = _osm.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
             if label in calls["osm_failing"]:
-                raise OSMDownloadError(
+                error = OSMDownloadError(
                     f"Could not download the {label} network from OpenStreetMap: "
                     "the server answered HTTP 502 (it is at capacity).",
                     mode=label,
@@ -169,6 +170,11 @@ def backends(monkeypatch, boundary):
                     status_code=502,
                     transient=True,
                 )
+                # Like the real one: recorded if asked to, raised otherwise.
+                if failures is None:
+                    raise error
+                failures[label] = error
+                continue
             results[label] = make_osm_result()
         return results
 
@@ -572,8 +578,9 @@ def test_download_network_osm_geojson_writes_one_folder_per_mode(tmp_path, backe
     assert "files_by_format" not in manifest
     assert "gtfs_status" not in manifest
 
-    # One download per OSM mode, so a failing one doesn't take the others.
-    assert [call["modes"] for call in backends["osm"]] == [["walking"], ["bike"]]
+    # Every OSM mode in one call (one Overpass query), failures recorded.
+    assert [call["modes"] for call in backends["osm"]] == [["walking", "bike"]]
+    assert backends["osm"][0]["failures"] == {}
     assert backends["gtfs"] == []
     assert "failed_modes" not in manifest
 
@@ -1338,7 +1345,8 @@ def test_gtfs_report_is_in_the_manifest_and_the_output_folder(tmp_path, backends
     assert "path" not in report[0]  # local paths stay out of the manifest
     written = pd.read_csv(tmp_path / "gtfs_report.csv")
     assert written["status"].tolist() == [row["status"] for row in report]
-    assert list(written.columns)[:4] == [
+    assert list(written.columns)[:5] == [
+        "source",
         "province_code",
         "dataset_id",
         "dataset_name",
@@ -1425,7 +1433,7 @@ def test_nothing_downloaded_raises_the_osm_error(tmp_path, backends):
             "Valencia", modes=["walking", "bike"], output_dir=tmp_path
         )
     assert info.value.status_code == 502
-    assert len(backends["osm"]) == 2  # both were tried
+    assert len(backends["osm"]) == 1
     assert not (tmp_path / "study_area_boundary.geojson").exists()
 
 
@@ -1747,3 +1755,201 @@ def test_cli_forwards_api_key(monkeypatch):
 
     _cli.main(["--area", "Valencia"])
     assert captured["api_key"] is None
+
+
+# ---------------------------------------------------------------------------
+# gtfs_service_date
+# ---------------------------------------------------------------------------
+def test_gtfs_service_date_reaches_the_gtfs_download(tmp_path, backends):
+    import datetime
+
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="key",
+        gtfs_service_date="20261125",
+    )
+    assert backends["gtfs"][0]["service_date"] == datetime.date(2026, 11, 25)
+    assert manifest["gtfs_service_date"] == "2026-11-25"
+
+
+def test_no_service_date_in_the_manifest_by_default(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert backends["gtfs"][0]["service_date"] is None
+    assert "gtfs_service_date" not in manifest
+
+
+def test_a_malformed_service_date_fails_before_downloading(tmp_path, backends):
+    with pytest.raises(ValueError, match="gtfs_service_date"):
+        network.download_network(
+            "Valencia",
+            modes=["walking", "bus"],
+            output_dir=tmp_path / "out",
+            api_key="key",
+            gtfs_service_date="25/11/2026",
+        )
+    assert backends["boundary"] == [] and backends["osm"] == []
+    assert not (tmp_path / "out").exists()
+
+
+def test_feeds_without_service_that_day_raise_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt"),
+        _row(
+            1325,
+            "no_service_on_date",
+            dataset="genvalenciana_interurbano",
+            error="no trips on 2026-08-15; its calendar runs from 2026-01-01 "
+            "to 2026-07-31",
+        ),
+    ]
+    with pytest.warns(UserWarning, match="1 GTFS dataset") as record:
+        network.download_network(
+            "Valencia",
+            modes=["bus"],
+            output_dir=tmp_path,
+            api_key="key",
+            gtfs_service_date="2026-08-15",
+        )
+    message = str(record[0].message)
+    assert "no trips on 2026-08-15" in message
+    assert "genvalenciana_interurbano" in message
+    assert "could not be used" not in message
+
+
+def test_cli_passes_the_service_date(monkeypatch):
+    received = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs)
+    )
+    _cli.main(
+        ["--area", "Valencia", "--modes", "bus", "--gtfs-service-date", "2026-11-25"]
+    )
+    assert received["gtfs_service_date"] == "2026-11-25"
+
+
+# ---------------------------------------------------------------------------
+# gtfs_feeds
+# ---------------------------------------------------------------------------
+METROBUS = "https://gvinterbus.gva.es/estatico/gtfs.zip"
+
+
+def test_gtfs_feeds_reach_the_gtfs_download(tmp_path, backends):
+    backends["gtfs_result"] = {"metrobus": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="key",
+        gtfs_feeds={"metrobus": METROBUS},
+    )
+    call = backends["gtfs"][0]
+    assert call["feeds"] == {"metrobus": METROBUS}
+    assert call["use_nap"] is True
+    assert manifest["gtfs_feeds"] == [{"name": "metrobus", "source": METROBUS}]
+    assert (tmp_path / "bus" / "metrobus" / "edges.geojson").is_file()
+
+
+def test_gtfs_feeds_without_a_nap_key_skip_the_nap(tmp_path, backends, monkeypatch):
+    monkeypatch.delenv("NAP_API_KEY", raising=False)
+    monkeypatch.setattr(network, "resolve_nap_api_key", lambda key: None)
+    backends["gtfs_result"] = {"metrobus": make_gtfs_result("bus")}
+    with pytest.warns(UserWarning, match="only gtfs_feeds used"):
+        manifest = network.download_network(
+            "Valencia",
+            modes=["bus"],
+            output_dir=tmp_path,
+            gtfs_feeds={"metrobus": METROBUS},
+        )
+    assert backends["gtfs"][0]["use_nap"] is False
+    assert manifest["gtfs_datasets"] == ["metrobus"]
+    assert "gtfs_status" not in manifest
+
+
+def test_gtfs_feeds_need_bus_or_train(tmp_path, backends):
+    with pytest.raises(ValueError, match="'bus' or 'train'"):
+        network.download_network(
+            "Valencia",
+            modes=["walking"],
+            output_dir=tmp_path / "out",
+            gtfs_feeds=[METROBUS],
+        )
+    assert backends["boundary"] == [] and not (tmp_path / "out").exists()
+
+
+def test_a_missing_local_feed_fails_before_downloading(tmp_path, backends):
+    with pytest.raises(FileNotFoundError, match="nowhere.zip"):
+        network.download_network(
+            "Valencia",
+            modes=["walking", "bus"],
+            output_dir=tmp_path / "out",
+            api_key="key",
+            gtfs_feeds=[tmp_path / "nowhere.zip"],
+        )
+    assert backends["boundary"] == [] and backends["osm"] == []
+
+
+def test_an_own_feed_kept_in_gtfs_zips_is_not_deleted(tmp_path, backends):
+    kept = tmp_path / "gtfs_zips" / "emt.zip"
+    kept.parent.mkdir()
+    kept.write_bytes(b"zip kept from an earlier run")
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="key",
+        gtfs_feeds=[kept],
+    )
+    assert kept.is_file()
+
+
+def test_a_user_feed_that_fails_raises_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt", source="nap"),
+        {
+            "source": "user",
+            "dataset_name": "metrobus",
+            "file_name": "gtfs.zip",
+            "status": "failed",
+            "error": "HTTPError: 404 Client Error",
+        },
+    ]
+    with pytest.warns(UserWarning, match="1 GTFS dataset") as record:
+        manifest = network.download_network(
+            "Valencia",
+            modes=["bus"],
+            output_dir=tmp_path,
+            api_key="key",
+            gtfs_feeds={"metrobus": METROBUS},
+        )
+    assert "metrobus (HTTPError: 404" in str(record[0].message)
+    assert [row["source"] for row in manifest["gtfs_report"]] == ["nap", "user"]
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ([], None),
+        (["--gtfs-feed", METROBUS], [METROBUS]),
+        (
+            ["--gtfs-feed", f"metrobus={METROBUS}", "--gtfs-feed", "feeds/emt.zip"],
+            [("metrobus", METROBUS), "feeds/emt.zip"],
+        ),
+        (["--gtfs-feed", "https://x.org/g.zip?a=b"], ["https://x.org/g.zip?a=b"]),
+    ],
+)
+def test_cli_passes_the_gtfs_feeds(monkeypatch, args, expected):
+    received = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs)
+    )
+    _cli.main(["--area", "Valencia", "--modes", "bus", *args])
+    assert received["gtfs_feeds"] == expected
