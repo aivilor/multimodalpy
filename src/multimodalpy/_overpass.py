@@ -235,8 +235,10 @@ def overpass_server() -> str:
 def _error(failure: _Failure, mode: str, attempts: int) -> OSMDownloadError:
     server = overpass_server()
     tries = f", after {attempts} attempts" if attempts > 1 else ""
+    # ``mode`` names several networks when they were downloaded together.
+    networks = "networks" if " and " in mode else "network"
     message = (
-        f"Could not download the {mode} network from OpenStreetMap: "
+        f"Could not download the {mode} {networks} from OpenStreetMap: "
         f"{failure.reason} (Overpass server {server}{tries})."
     )
     if failure.transient:
@@ -253,6 +255,16 @@ def _error(failure: _Failure, mode: str, attempts: int) -> OSMDownloadError:
         status_code=failure.status_code,
         transient=failure.transient,
     )
+
+
+def overpass_error(exc: BaseException, mode: str) -> OSMDownloadError | None:
+    """Return the :class:`OSMDownloadError` for a failed request, or ``None``.
+
+    For failures raised outside :func:`call_overpass`, e.g. while building a
+    network from an answer already downloaded (no data for that network).
+    """
+    failure = _classify(exc)
+    return None if failure is None else _error(failure, mode, attempts=1)
 
 
 def call_overpass(

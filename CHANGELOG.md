@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-20
 
 ### Added
 - `gtfs_service_date` in `download_network()` (`--gtfs-service-date` on the
@@ -34,6 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_feeds` too; one that cannot be downloaded or processed raises the same
   `UserWarning` as a NAP dataset.
 
+### Changed
+- The OpenStreetMap modes asked for (walking, bike, driving) are downloaded
+  with a single Overpass query instead of one per mode: the ways of all of them
+  at once, the union of osmnx's filters, from which each network is built with
+  the ways that match its own filter, through the same steps as
+  `osmnx.graph_from_polygon`. The networks are the same; the busy public
+  server gets one request instead of three (#95). This uses osmnx internals; if
+  they change, or a filter can't be read, each mode gets its own query again.
+  Since the modes share the query, a server failure fails all of them, listed
+  in `failed_modes`; the bus and train networks are still written. The first
+  download after upgrading doesn't reuse the cached per-mode answers.
+- `download_osm()` takes `failures`: with a dict, a network that can't be
+  downloaded is recorded there (`{mode: OSMDownloadError}`) and the others are
+  returned, instead of raising.
+- CI runs the tests on macOS with the oldest and newest supported Python (3.11
+  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
+  and a job waiting for one could fail the whole run.
+
 ### Fixed
 - Trips defined in `frequencies.txt` (a template trip that leaves "every 10
   minutes from 07:00 to 21:00") counted as a single trip: the number of
@@ -42,10 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts in `trips`, its period, its type of day, its hour band and the
   schedule.
 
-### Changed
-- CI runs the tests on macOS with the oldest and newest supported Python (3.11
-  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
-  and a job waiting for one could fail the whole run.
+[0.6.0]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...v0.6.0
 
 ## [0.5.1] - 2026-11-19
 
@@ -468,7 +483,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
