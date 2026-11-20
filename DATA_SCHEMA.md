@@ -120,8 +120,10 @@ saying why. When parts of a multi-part municipality could not be connected, an
 `unconnected_parts` field lists them per mode, e.g. `{"driving": [3]}`. When an
 OpenStreetMap network could not be downloaded from the Overpass server, a
 `failed_modes` field gives the reason per mode, e.g.
-`{"bike": "Could not download the bike network ... HTTP 502 ..."}`; the other
-networks are written as usual. Diagnostic messages go through `logging` and are silent unless the
+`{"bike": "Could not download the walking and bike networks ... HTTP 502 ..."}`;
+the other networks are written as usual. The street modes are downloaded with a
+single Overpass query, so when the server fails it they are all listed; a mode
+can also fail alone when the area has no street of its kind. Diagnostic messages go through `logging` and are silent unless the
 application enables them, e.g. `logging.basicConfig(level=logging.INFO)`.
 
 ## Column names

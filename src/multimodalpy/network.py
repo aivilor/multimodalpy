@@ -292,7 +292,8 @@ def download_network(
         ``unconnected_parts``. Defaults to True; has no effect on
         single-polygon municipalities.
     overpass_url : str, optional
-        Overpass API server for the OpenStreetMap networks: its ``.../api``
+        Overpass API server for the OpenStreetMap networks (all the modes
+        asked for are downloaded with a single query): its ``.../api``
         address (e.g. ``"https://overpass.private.coffee/api"``; see the
         list of public instances in the OpenStreetMap wiki). Defaults to
         ``osmnx.settings.overpass_url`` (the public ``overpass-api.de``,
@@ -327,7 +328,9 @@ def download_network(
         If an OpenStreetMap network can't be downloaded (see
         ``overpass_url``), the other networks are still downloaded and
         written: the failure is listed in the manifest's ``failed_modes``
-        and reported with a ``UserWarning``.
+        and reported with a ``UserWarning``. The walking, bike and driving
+        networks come from a single Overpass query, so when the server
+        fails it, all of them are listed.
 
     Raises
     ------
@@ -418,25 +421,25 @@ def download_network(
     # networkx export so the graph carries the same attributes.
     gtfs_edge_columns: dict[str, list[str]] = {}
 
-    # 2) OSM, one mode at a time: if the Overpass server fails one of them
-    #    (after its retries), the others are still downloaded and written,
-    #    and the failure is reported at the end and in the manifest.
+    # 2) OSM, every mode with a single Overpass query. A network that can't
+    #    be downloaded (after the retries) is recorded instead of raised: the
+    #    others, and the GTFS, are still written, and the failure is
+    #    reported at the end and in the manifest.
     osm_failures: dict[str, OSMDownloadError] = {}
-    for osm_mode in osm_modes:
-        try:
-            osm_results.update(
-                download_osm(
-                    boundary,
-                    modes=[osm_mode],
-                    output_crs=crs,
-                    buffer_m=buffer_m,
-                    connect_parts=connect_parts,
-                    overpass_url=overpass_url,
-                    osm_timeout=osm_timeout,
-                )
+    if osm_modes:
+        osm_results.update(
+            download_osm(
+                boundary,
+                modes=osm_modes,
+                output_crs=crs,
+                buffer_m=buffer_m,
+                connect_parts=connect_parts,
+                overpass_url=overpass_url,
+                osm_timeout=osm_timeout,
+                failures=osm_failures,
             )
-        except OSMDownloadError as exc:
-            osm_failures[exc.mode] = exc
+        )
+        for exc in dict.fromkeys(osm_failures.values()):
             logger.warning("%s The other networks are still downloaded.", exc)
     if osm_modes:
         for mode, out in osm_results.items():

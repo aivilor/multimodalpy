@@ -147,12 +147,13 @@ def backends(monkeypatch, boundary):
         )
         return boundary
 
-    def fake_download_osm(bnd, *, modes, output_crs, **kwargs):
+    def fake_download_osm(bnd, *, modes, output_crs, failures=None, **kwargs):
         calls["osm"].append(
             {
                 "boundary": bnd,
                 "modes": list(modes),
                 "output_crs": output_crs,
+                "failures": failures,
                 **kwargs,
             }
         )
@@ -161,7 +162,7 @@ def backends(monkeypatch, boundary):
             network_type = _osm.OSM_NETWORK_TYPES[_text.normalize_name(mode)]
             label = _osm.NETWORK_TYPE_TO_LAYER_LABEL[network_type]
             if label in calls["osm_failing"]:
-                raise OSMDownloadError(
+                error = OSMDownloadError(
                     f"Could not download the {label} network from OpenStreetMap: "
                     "the server answered HTTP 502 (it is at capacity).",
                     mode=label,
@@ -169,6 +170,11 @@ def backends(monkeypatch, boundary):
                     status_code=502,
                     transient=True,
                 )
+                # Like the real one: recorded if asked to, raised otherwise.
+                if failures is None:
+                    raise error
+                failures[label] = error
+                continue
             results[label] = make_osm_result()
         return results
 
@@ -572,8 +578,9 @@ def test_download_network_osm_geojson_writes_one_folder_per_mode(tmp_path, backe
     assert "files_by_format" not in manifest
     assert "gtfs_status" not in manifest
 
-    # One download per OSM mode, so a failing one doesn't take the others.
-    assert [call["modes"] for call in backends["osm"]] == [["walking"], ["bike"]]
+    # Every OSM mode in one call (one Overpass query), failures recorded.
+    assert [call["modes"] for call in backends["osm"]] == [["walking", "bike"]]
+    assert backends["osm"][0]["failures"] == {}
     assert backends["gtfs"] == []
     assert "failed_modes" not in manifest
 
@@ -1426,7 +1433,7 @@ def test_nothing_downloaded_raises_the_osm_error(tmp_path, backends):
             "Valencia", modes=["walking", "bike"], output_dir=tmp_path
         )
     assert info.value.status_code == 502
-    assert len(backends["osm"]) == 2  # both were tried
+    assert len(backends["osm"]) == 1
     assert not (tmp_path / "study_area_boundary.geojson").exists()
 
 

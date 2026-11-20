@@ -172,11 +172,15 @@ through an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
 server, by default the public `overpass-api.de`. It is run by volunteers and is
 often at capacity: it then answers with an error page instead of data.
 
+- All the street modes asked for come from **a single query**: the ways of
+  every mode are downloaded at once and each network is built from its own
+  ways, exactly as osmnx would build it from a query of its own. Three modes
+  are one request to the server instead of three.
 - A temporary failure (server busy, timeout, lost connection) is **retried four
   times**, waiting 10, 20, 40 and 80 seconds, and each retry is logged.
-- If a network still can't be downloaded, the others are downloaded and written
-  anyway; the failed one is listed in the manifest's `failed_modes` and reported
-  with a warning. Only if nothing at all could be downloaded does
+- If the streets still can't be downloaded, the bus and train networks are
+  written anyway; the street modes are listed in the manifest's `failed_modes`
+  and reported with a warning. Since they share one query, they fail together. Only if nothing at all could be downloaded does
   `download_network()` raise `OSMDownloadError`, which says which network and
   which server failed.
 - Every answer is cached, so **running the same call again later** only

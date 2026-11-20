@@ -34,6 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_feeds` too; one that cannot be downloaded or processed raises the same
   `UserWarning` as a NAP dataset.
 
+### Changed
+- The OpenStreetMap modes asked for (walking, bike, driving) are downloaded
+  with a single Overpass query instead of one per mode: the ways of all of them
+  at once, the union of osmnx's filters, from which each network is built with
+  the ways that match its own filter, through the same steps as
+  `osmnx.graph_from_polygon`. The networks are the same; the busy public
+  server gets one request instead of three (#95). This uses osmnx internals; if
+  they change, or a filter can't be read, each mode gets its own query again.
+  Since the modes share the query, a server failure fails all of them, listed
+  in `failed_modes`; the bus and train networks are still written. The first
+  download after upgrading doesn't reuse the cached per-mode answers.
+- `download_osm()` takes `failures`: with a dict, a network that can't be
+  downloaded is recorded there (`{mode: OSMDownloadError}`) and the others are
+  returned, instead of raising.
+- CI runs the tests on macOS with the oldest and newest supported Python (3.11
+  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
+  and a job waiting for one could fail the whole run.
+
 ### Fixed
 - Trips defined in `frequencies.txt` (a template trip that leaves "every 10
   minutes from 07:00 to 21:00") counted as a single trip: the number of
@@ -41,11 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own, `<trip_id>@<HH:MM:SS>`, with the template's times shifted to it, so it
   counts in `trips`, its period, its type of day, its hour band and the
   schedule.
-
-### Changed
-- CI runs the tests on macOS with the oldest and newest supported Python (3.11
-  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
-  and a job waiting for one could fail the whole run.
 
 ## [0.5.1] - 2026-11-19
 
