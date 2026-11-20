@@ -1747,3 +1747,80 @@ def test_cli_forwards_api_key(monkeypatch):
 
     _cli.main(["--area", "Valencia"])
     assert captured["api_key"] is None
+
+
+# ---------------------------------------------------------------------------
+# gtfs_service_date
+# ---------------------------------------------------------------------------
+def test_gtfs_service_date_reaches_the_gtfs_download(tmp_path, backends):
+    import datetime
+
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="key",
+        gtfs_service_date="20261125",
+    )
+    assert backends["gtfs"][0]["service_date"] == datetime.date(2026, 11, 25)
+    assert manifest["gtfs_service_date"] == "2026-11-25"
+
+
+def test_no_service_date_in_the_manifest_by_default(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    manifest = network.download_network(
+        "Valencia", modes=["bus"], output_dir=tmp_path, api_key="key"
+    )
+    assert backends["gtfs"][0]["service_date"] is None
+    assert "gtfs_service_date" not in manifest
+
+
+def test_a_malformed_service_date_fails_before_downloading(tmp_path, backends):
+    with pytest.raises(ValueError, match="gtfs_service_date"):
+        network.download_network(
+            "Valencia",
+            modes=["walking", "bus"],
+            output_dir=tmp_path / "out",
+            api_key="key",
+            gtfs_service_date="25/11/2026",
+        )
+    assert backends["boundary"] == [] and backends["osm"] == []
+    assert not (tmp_path / "out").exists()
+
+
+def test_feeds_without_service_that_day_raise_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt"),
+        _row(
+            1325,
+            "no_service_on_date",
+            dataset="genvalenciana_interurbano",
+            error="no trips on 2026-08-15; its calendar runs from 2026-01-01 "
+            "to 2026-07-31",
+        ),
+    ]
+    with pytest.warns(UserWarning, match="1 GTFS dataset") as record:
+        network.download_network(
+            "Valencia",
+            modes=["bus"],
+            output_dir=tmp_path,
+            api_key="key",
+            gtfs_service_date="2026-08-15",
+        )
+    message = str(record[0].message)
+    assert "no trips on 2026-08-15" in message
+    assert "genvalenciana_interurbano" in message
+    assert "could not be used" not in message
+
+
+def test_cli_passes_the_service_date(monkeypatch):
+    received = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs)
+    )
+    _cli.main(
+        ["--area", "Valencia", "--modes", "bus", "--gtfs-service-date", "2026-11-25"]
+    )
+    assert received["gtfs_service_date"] == "2026-11-25"

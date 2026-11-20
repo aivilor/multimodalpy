@@ -23,6 +23,7 @@ No file is written here; that's done by ``_writers``.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 import warnings
@@ -404,6 +405,120 @@ def build_gtfs_stops_gdf(
     return gdf
 
 
+# ---------------------------------------------------------------------------
+# Service date: the trips that run on one day
+# ---------------------------------------------------------------------------
+_WEEKDAY_COLUMNS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
+
+def parse_service_date(value: object) -> datetime.date:
+    """Read a service date: a ``date``, ``"2026-11-25"`` or ``"20261125"``."""
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(
+        f"gtfs_service_date must be a date, 'YYYY-MM-DD' or 'YYYYMMDD'. Received: "
+        f"{value!r}"
+    )
+
+
+def _gtfs_dates(values: pd.Series) -> pd.Series:
+    import pandas as pd
+
+    return pd.to_datetime(values, format="%Y%m%d", errors="coerce").dt.date
+
+
+def active_service_ids(
+    calendar: pd.DataFrame | None,
+    calendar_dates: pd.DataFrame | None,
+    service_date: datetime.date,
+) -> set[str]:
+    """``service_id`` of the services that run on ``service_date``.
+
+    As the GTFS reference says: the services of ``calendar.txt`` whose
+    ``start_date``-``end_date`` range holds the date and that run on its day
+    of the week, plus the ones ``calendar_dates.txt`` adds that day
+    (``exception_type`` 1), minus the ones it removes (2).
+    """
+    import pandas as pd
+
+    active: set[str] = set()
+    weekday = _WEEKDAY_COLUMNS[service_date.weekday()]
+    needed = {"service_id", "start_date", "end_date", weekday}
+    if calendar is not None and needed <= set(calendar.columns):
+        start = _gtfs_dates(calendar["start_date"])
+        end = _gtfs_dates(calendar["end_date"])
+        runs = pd.to_numeric(calendar[weekday], errors="coerce") == 1
+        in_range = (start <= service_date) & (end >= service_date)
+        active = set(calendar.loc[runs & in_range.fillna(False), "service_id"])
+    if calendar_dates is not None and {
+        "service_id",
+        "date",
+        "exception_type",
+    } <= set(calendar_dates.columns):
+        that_day = calendar_dates[_gtfs_dates(calendar_dates["date"]) == service_date]
+        kind = pd.to_numeric(that_day["exception_type"], errors="coerce")
+        active |= set(that_day.loc[kind == 1, "service_id"])
+        active -= set(that_day.loc[kind == 2, "service_id"])
+    return active
+
+
+def service_period(
+    calendar: pd.DataFrame | None, calendar_dates: pd.DataFrame | None
+) -> tuple[datetime.date, datetime.date] | None:
+    """First and last day the feed's calendar covers, or ``None`` if unknown."""
+    import pandas as pd
+
+    days: list[pd.Series] = []
+    if calendar is not None:
+        days += [
+            _gtfs_dates(calendar[col])
+            for col in ("start_date", "end_date")
+            if col in calendar.columns
+        ]
+    if calendar_dates is not None and "date" in calendar_dates.columns:
+        days.append(_gtfs_dates(calendar_dates["date"]))
+    every = pd.concat(days).dropna() if days else pd.Series(dtype=object)
+    if every.empty:
+        return None
+    return min(every), max(every)
+
+
+def _no_service_message(feed_path: str | Path, service_date: datetime.date) -> str:
+    """Why a feed has no trip on ``service_date``, or ``""`` if it has some."""
+    calendar = _read_optional_gtfs_table(feed_path, "calendar.txt")
+    calendar_dates = _read_optional_gtfs_table(feed_path, "calendar_dates.txt")
+    trips = read_gtfs_table(feed_path, "trips.txt")
+    if "service_id" not in trips.columns:
+        return ""
+    active = active_service_ids(calendar, calendar_dates, service_date)
+    if trips["service_id"].isin(active).any():
+        return ""
+    message = f"no trips on {service_date.isoformat()}"
+    period = service_period(calendar, calendar_dates)
+    if period is not None:
+        message += (
+            f"; its calendar runs from {period[0].isoformat()} "
+            f"to {period[1].isoformat()}"
+        )
+    return message
+
+
 def _classify_day_type(runs_weekday, runs_weekend) -> str | None:
     """Combine the boolean activity flags into a readable label."""
     import pandas as pd
@@ -730,6 +845,7 @@ def _build_stop_to_stop_trip_records(
     hour_band_size: int = 1,
     hour_range: tuple[int, int] | None = None,
     peak_periods: dict[str, tuple[int, int]] | None = None,
+    service_date: datetime.date | None = None,
 ) -> pd.DataFrame:
     """Build the intermediate, unaggregated table of trip-segment records.
 
@@ -737,9 +853,16 @@ def _build_stop_to_stop_trip_records(
     both the aggregated edges layer (``build_gtfs_stop_to_stop_edges_gdf``)
     and the flat schedule table (``build_gtfs_schedule_table``), to avoid
     duplicating the travel-time and merge logic.
+
+    With ``service_date``, only the trips that run that day are kept (see
+    :func:`active_service_ids`).
     """
     import pandas as pd
 
+    if service_date is not None and "service_id" in trips.columns:
+        active = active_service_ids(calendar, calendar_dates, service_date)
+        trips = trips[trips["service_id"].isin(active)]
+        stop_times = stop_times[stop_times["trip_id"].isin(set(trips["trip_id"]))]
     stop_times, trips = _expand_frequencies(stop_times, trips, frequencies)
     work = stop_times.copy()
     work["stop_sequence"] = pd.to_numeric(work["stop_sequence"], errors="coerce")
@@ -765,9 +888,11 @@ def _build_stop_to_stop_trip_records(
     )
     work = work.dropna(subset=["next_stop_id"]).copy()
 
+    # float even with no rows (e.g. no trip on the service date), so the
+    # aggregations still work on an empty table.
     work["travel_time_seconds"] = (
         work["next_arrival_seconds"] - work["departure_seconds"]
-    )
+    ).astype(float)
     work.loc[work["travel_time_seconds"] < 0, "travel_time_seconds"] = float("nan")
     # Impossible times (see MAX_SEGMENT_SECONDS): left empty and marked, so
     # normalize_gtfs_feed can say how many there were in the study area.
@@ -867,6 +992,7 @@ def build_gtfs_schedule_table(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     records: pd.DataFrame | None = None,
     filter_geometry=None,
+    service_date: datetime.date | None = None,
 ) -> pd.DataFrame:
     """Option B: a flat table (no geometry), one record per trip and segment.
 
@@ -893,6 +1019,7 @@ def build_gtfs_schedule_table(
             hour_band_size=hour_band_size,
             hour_range=hour_range,
             peak_periods=peak_periods,
+            service_date=service_date,
         )
     records = _filter_records_by_geometry(records, filter_geometry)
     columns = _existing_columns(
@@ -995,6 +1122,7 @@ def build_gtfs_stop_to_stop_edges_gdf(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
     records: pd.DataFrame | None = None,
+    service_date: datetime.date | None = None,
 ) -> gpd.GeoDataFrame:
     """Build the stop-to-stop edges layer: one row per pair of stops.
 
@@ -1032,6 +1160,11 @@ def build_gtfs_stop_to_stop_edges_gdf(
     ``records`` takes the output of ``_build_stop_to_stop_trip_records``
     if it was already built with the same arguments, so it is not built
     again (see ``normalize_gtfs_feed``).
+
+    With ``service_date``, the records are the trips of that day, and the
+    weekday/weekend columns count them under that day's type only: a
+    Wednesday fills the ``*_weekday`` columns and leaves the ``*_weekend``
+    ones empty.
     """
     import geopandas as gpd
     import pandas as pd
@@ -1050,7 +1183,19 @@ def build_gtfs_stop_to_stop_edges_gdf(
             hour_band_size=hour_band_size,
             hour_range=hour_range,
             peak_periods=peak_periods,
+            service_date=service_date,
         )
+    if records.empty:
+        # No trip at all (none runs on the service date): an empty layer
+        # with the usual columns.
+        columns = [col for col in gtfs_edge_columns(peak_periods) if col != "geometry"]
+        empty = gpd.GeoDataFrame(
+            {col: pd.Series(dtype=object) for col in [*columns, "route_type"]},
+            geometry=gpd.GeoSeries([], crs=SOURCE_CRS),
+        )
+        empty["dataset_name"] = pd.Series(dtype=object)
+        empty["layer_id"] = pd.Series(dtype=object)
+        return empty
     edges = records
     in_area = _filter_records_by_geometry(edges, filter_geometry)
     # If nothing touches the area, aggregate a single record instead of
@@ -1105,6 +1250,12 @@ def build_gtfs_stop_to_stop_edges_gdf(
         "weekday": edges.get("runs_weekday"),
         "weekend": edges.get("runs_weekend"),
     }
+    if service_date is not None:
+        on_weekend = service_date.weekday() >= 5
+        day_type_masks = {
+            "weekday": pd.Series(not on_weekend, index=edges.index),
+            "weekend": pd.Series(on_weekend, index=edges.index),
+        }
     for day_type_name, mask in day_type_masks.items():
         if mask is None:
             for metric in ("travel_time_seconds_mean", "trip_count"):
@@ -1241,6 +1392,7 @@ def normalize_gtfs_feed(
     peak_periods: dict[str, tuple[int, int]] | None = None,
     include_hourly_summary: bool = True,
     include_schedule_table: bool = True,
+    service_date: datetime.date | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, pd.DataFrame | None]:
     """Normalize a GTFS feed into (stops, edges, schedule).
 
@@ -1261,6 +1413,10 @@ def normalize_gtfs_feed(
     ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend`` /
     ``day_type`` columns in the schedule), derived from ``calendar.txt``
     (falling back to ``calendar_dates.txt`` if it doesn't exist).
+
+    With ``service_date`` (a ``datetime.date``), only the trips that run
+    that day are used, so ``trip_count`` is that day's number of trips;
+    without it, every trip of the feed counts once, whatever days it runs.
     """
     import pandas as pd
 
@@ -1287,6 +1443,7 @@ def normalize_gtfs_feed(
         hour_band_size=hour_band_size,
         hour_range=hour_range,
         peak_periods=peak_periods,
+        service_date=service_date,
     )
     stop_edges_gdf = build_gtfs_stop_to_stop_edges_gdf(
         stop_times,
@@ -1299,6 +1456,7 @@ def normalize_gtfs_feed(
         peak_periods=peak_periods,
         include_hourly_summary=include_hourly_summary,
         records=records,
+        service_date=service_date,
     )
     _warn_implausible_times(records, filter_geometry, dataset_name)
     # The nodes are the stops the edges use, and only those: stops.txt
@@ -1516,6 +1674,7 @@ def download_gtfs(
     buffer_m: float = 0.0,
     skipped: dict[str, str] | None = None,
     report: list[dict[str, object]] | None = None,
+    service_date: datetime.date | str | None = None,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1549,7 +1708,13 @@ def download_gtfs(
     ``skipped_mode`` or ``failed_processing`` (with ``error``), its
     ``dataset`` name and ``mode``, and how many ``routes``, ``stops`` and
     ``edges`` it has in the area.
+
+    ``service_date`` (a date, ``"YYYY-MM-DD"`` or ``"YYYYMMDD"``) keeps only
+    the trips that run that day (see :func:`normalize_gtfs_feed`). A feed
+    with no trip that day is not written: its report row says
+    ``no_service_on_date``, with the dates its calendar covers in ``error``.
     """
+    day = None if service_date is None else parse_service_date(service_date)
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
@@ -1596,6 +1761,16 @@ def download_gtfs(
             outcome(zip_path, dataset=dataset_name, mode=mode, status="skipped_mode")
             continue
         try:
+            no_service = "" if day is None else _no_service_message(zip_path, day)
+            if no_service:
+                outcome(
+                    zip_path,
+                    dataset=dataset_name,
+                    mode=mode,
+                    status="no_service_on_date",
+                    error=no_service,
+                )
+                continue
             stops, stop_edges, schedule = normalize_gtfs_feed(
                 zip_path,
                 dataset_name=dataset_name,
@@ -1606,6 +1781,7 @@ def download_gtfs(
                 hour_range=hour_range,
                 peak_periods=peak_periods,
                 include_schedule_table=include_schedule_table,
+                service_date=day,
             )
         except Exception as exc:  # noqa: BLE001 - a corrupt feed shouldn't break everything
             logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)

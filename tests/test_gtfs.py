@@ -827,3 +827,168 @@ def test_seconds_to_gtfs_time():
     assert _gtfs.seconds_to_gtfs_time(0) == "00:00:00"
     assert _gtfs.seconds_to_gtfs_time(25 * 3600 + 61) == "25:01:01"
     assert _gtfs.seconds_to_gtfs_time(float("nan")) is None
+
+
+# ---------------------------------------------------------------------------
+# Service date: the trips that run on one day
+# ---------------------------------------------------------------------------
+CALENDAR = (
+    "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+    "start_date,end_date\n"
+    "WD,1,1,1,1,1,0,0,20260101,20261231\n"
+    "SAT,0,0,0,0,0,1,0,20260101,20261231\n"
+    "SUMMER,1,1,1,1,1,0,0,20260701,20260831\n"
+)
+# 8 December 2026 (a Tuesday) is a holiday: the weekday service doesn't run
+# and the Saturday one does; 9 December has an extra service.
+CALENDAR_DATES = (
+    "service_id,date,exception_type\nWD,20261208,2\nSAT,20261208,1\nEXTRA,20261209,1\n"
+)
+
+
+@pytest.fixture
+def seasonal_feed(tmp_path):
+    trips = [
+        ("R1", "WD", "wd1"),
+        ("R1", "WD", "wd2"),
+        ("R1", "SAT", "sat"),
+        ("R1", "SUMMER", "sum"),
+        ("R1", "EXTRA", "extra"),
+    ]
+    departures = {
+        "wd1": "07:00:00",
+        "wd2": "08:30:00",
+        "sat": "10:00:00",
+        "sum": "07:30:00",
+        "extra": "12:00:00",
+    }
+    stop_times = []
+    for trip, dep in departures.items():
+        arrival = _gtfs.seconds_to_gtfs_time(_gtfs.gtfs_time_to_seconds(dep) + 300)
+        stop_times += [(trip, dep, dep, "A", 1), (trip, arrival, arrival, "B", 2)]
+    return _write_feed(
+        tmp_path / "seasonal.zip",
+        [("R1", "1", 3)],
+        trips,
+        stop_times,
+        extra={"calendar.txt": CALENDAR, "calendar_dates.txt": CALENDAR_DATES},
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-11-25", "20261125", pd.Timestamp("2026-11-25 10:00").to_pydatetime()],
+)
+def test_parse_service_date(value):
+    import datetime
+
+    assert _gtfs.parse_service_date(value) == datetime.date(2026, 11, 25)
+
+
+@pytest.mark.parametrize("value", ["25/11/2026", "2026-13-01", "tomorrow"])
+def test_parse_service_date_rejects_other_formats(value):
+    with pytest.raises(ValueError, match="gtfs_service_date"):
+        _gtfs.parse_service_date(value)
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [
+        ("2026-11-25", {"WD"}),  # a Wednesday
+        ("2026-11-28", {"SAT"}),  # a Saturday
+        ("2026-11-29", set()),  # a Sunday
+        ("2026-07-15", {"WD", "SUMMER"}),
+        ("2026-12-08", {"SAT"}),  # holiday: WD removed, SAT added
+        ("2026-12-09", {"WD", "EXTRA"}),
+        ("2027-01-13", set()),  # after the calendar ends
+    ],
+)
+def test_active_service_ids(day, expected):
+    calendar = pd.read_csv(pd.io.common.StringIO(CALENDAR), dtype=str)
+    calendar_dates = pd.read_csv(pd.io.common.StringIO(CALENDAR_DATES), dtype=str)
+    date = _gtfs.parse_service_date(day)
+    assert _gtfs.active_service_ids(calendar, calendar_dates, date) == expected
+
+
+def test_without_a_service_date_every_trip_counts(seasonal_feed):
+    edge = _edges(seasonal_feed).loc[("A", "B", "R1")]
+    assert edge["trip_count"] == 5
+    assert edge["trip_count_weekday"] == 4  # wd1, wd2, sum and extra
+    assert edge["trip_count_weekend"] == 1
+
+
+@pytest.mark.parametrize(
+    ("day", "trips", "weekday", "weekend"),
+    [
+        ("2026-11-25", 2, 2, None),
+        ("2026-07-15", 3, 3, None),
+        ("2026-11-28", 1, None, 1),
+        ("2026-12-08", 1, 1, None),  # a Tuesday, with the Saturday service
+    ],
+)
+def test_a_service_date_counts_the_trips_of_that_day(
+    seasonal_feed, day, trips, weekday, weekend
+):
+    edge = _edges(seasonal_feed, service_date=_gtfs.parse_service_date(day)).loc[
+        ("A", "B", "R1")
+    ]
+    assert edge["trip_count"] == trips
+    assert edge["trip_count_weekday"] == weekday or (
+        weekday is None and pd.isna(edge["trip_count_weekday"])
+    )
+    assert edge["trip_count_weekend"] == weekend or (
+        weekend is None and pd.isna(edge["trip_count_weekend"])
+    )
+
+
+def test_a_service_date_filters_the_schedule(seasonal_feed):
+    _, _, schedule = _gtfs.normalize_gtfs_feed(
+        seasonal_feed,
+        dataset_name="ds",
+        layer_id="ds",
+        service_date=_gtfs.parse_service_date("2026-07-15"),
+    )
+    assert sorted(schedule["trip_id"]) == ["sum", "wd1", "wd2"]
+
+
+def test_a_service_date_applies_to_frequency_trips(tmp_path):
+    feed = _frequency_feed(tmp_path, ["tf,07:00:00,08:00:00,1200"])
+    sunday = _gtfs.parse_service_date("2026-11-29")
+    wednesday = _gtfs.parse_service_date("2026-11-25")
+    assert _edges(feed, service_date=wednesday).loc[("A", "B", "R1"), "trip_count"] == 4
+    assert _edges(feed, service_date=sunday).empty
+
+
+def test_download_gtfs_reports_feeds_without_service_that_day(
+    tmp_path, monkeypatch, seasonal_feed
+):
+    import geopandas as gpd
+
+    monkeypatch.setattr(
+        _gtfs, "download_gtfs_nap_zips", lambda *a, **k: [seasonal_feed]
+    )
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        report=report,
+        service_date="2027-01-13",
+    )
+    assert results == {}
+    assert report[0]["status"] == "no_service_on_date"
+    assert report[0]["error"] == (
+        "no trips on 2027-01-13; its calendar runs from 2026-01-01 to 2026-12-31"
+    )
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        service_date="2026-11-25",
+    )
+    assert results["seasonal"]["edges"]["trip_count"].tolist() == [2]

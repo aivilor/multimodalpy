@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `gtfs_service_date` in `download_network()` (`--gtfs-service-date` on the
+  command line) and `service_date` in `download_gtfs()`: count only the GTFS
+  trips that run on that day, as `calendar.txt` and `calendar_dates.txt` say.
+  By default every trip of a feed counts once, whatever days it runs, so a feed
+  with several timetables (winter and summer, Monday–Thursday and Friday) adds
+  them up and `trips` is not a daily frequency; with a date, `trips` and the
+  per-period columns are that day's, the schedule holds that day's trips and
+  the weekday/weekend columns are filled for the day's type only. A feed with
+  no trip that day is not written: `gtfs_report` says `no_service_on_date`,
+  with the dates its calendar covers, and a `UserWarning` names it. The
+  manifest records `gtfs_service_date`.
+
 ### Fixed
 - Trips defined in `frequencies.txt` (a template trip that leaves "every 10
   minutes from 07:00 to 21:00") counted as a single trip: the number of

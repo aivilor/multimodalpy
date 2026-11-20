@@ -293,6 +293,7 @@ paths and is much faster.
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
 | `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
+| `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
 
 `download_network()` writes the files and returns a manifest (a dictionary
 listing them).

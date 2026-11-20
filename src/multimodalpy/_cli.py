@@ -110,6 +110,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Filter GTFS trips by hour window, e.g. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
+        "--gtfs-service-date",
+        metavar="YYYY-MM-DD",
+        help="Count only the GTFS trips that run on this day.",
+    )
+    parser.add_argument(
         "--write-schedule",
         action="store_true",
         help="Also write the detailed schedule table for each GTFS feed.",
@@ -141,6 +146,7 @@ def main(argv: list[str] | None = None) -> None:
         osm_timeout=args.osm_timeout,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
+        gtfs_service_date=args.gtfs_service_date,
         write_schedule=args.write_schedule,
         keep_gtfs_zips=args.keep_gtfs_zips,
     )

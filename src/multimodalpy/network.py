@@ -24,6 +24,7 @@ Spain's National Access Point (NAP), which needs a free API key.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import shutil
 import warnings
@@ -168,6 +169,7 @@ def download_network(
     gtfs_hour_band_size: int = 1,
     gtfs_hour_range: tuple[int, int] | None = None,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
+    gtfs_service_date: str | datetime.date | None = None,
     write_schedule: bool = False,
     keep_gtfs_zips: bool = False,
     province: int | str | None = None,
@@ -233,6 +235,17 @@ def download_network(
         code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
         ``p1``, ``p2``... if the first three letters clash), listed in the
         manifest's ``gtfs_period_codes``.
+    gtfs_service_date : str | datetime.date, optional
+        Count the GTFS trips of this day only (``"2026-11-25"``,
+        ``"20261125"`` or a ``datetime.date``): the trips whose service runs
+        that day, as the feed's ``calendar.txt`` and ``calendar_dates.txt``
+        say. Then ``trips`` and the per-period columns are that day's
+        frequencies, and the weekday/weekend columns are filled for its type
+        of day only. By default every trip of the feed counts once, whatever
+        days it runs, so a feed with several timetables (winter and summer,
+        Monday-Thursday and Friday) adds them up. A feed with no trip that
+        day is not written (``no_service_on_date`` in ``gtfs_report``, with
+        the dates its calendar covers) and raises a ``UserWarning``.
     write_schedule : bool
         Also write the trip-by-trip schedule table for each GTFS feed.
         Disabled by default, since it's by far the heaviest part of a
@@ -290,7 +303,8 @@ def download_network(
         (with its ``routes``, ``stops`` and ``edges`` in the area),
         ``nothing_in_area``, ``skipped_mode``, ``not_requested_type`` (its
         declared ``transport_types`` are not among the modes asked for),
-        ``failed`` (download) or ``failed_processing``, with the ``error``.
+        ``no_service_on_date`` (with ``gtfs_service_date``), ``failed``
+        (download) or ``failed_processing``, with the ``error``.
         A dataset that could not be used at all raises a ``UserWarning``.
 
         A GTFS feed whose routes are of a mode that wasn't requested
@@ -330,6 +344,12 @@ def download_network(
             output_formats.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
+    # A malformed date fails before anything is downloaded.
+    service_date = (
+        None
+        if gtfs_service_date is None
+        else _gtfs.parse_service_date(gtfs_service_date)
+    )
 
     # Check the NAP key before downloading anything: otherwise a missing
     # key only shows up after the OSM step, which can take minutes.
@@ -424,6 +444,7 @@ def download_network(
                 buffer_m=buffer_m,
                 skipped=skipped_datasets,
                 report=gtfs_report,
+                service_date=service_date,
             )
         except Exception as exc:  # noqa: BLE001 - logged and execution continues
             gtfs_error = f"{type(exc).__name__}: {exc}"
@@ -607,6 +628,8 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
+    if service_date is not None and nap_modes:
+        manifest["gtfs_service_date"] = service_date.isoformat()
     if gtfs_results:
         # Code of each period in the short column names (tts_m_pam, tm_mor_wd).
         manifest["gtfs_period_codes"] = _gtfs.period_codes(gtfs_peak_periods)
@@ -618,6 +641,20 @@ def download_network(
                 f"{len(unusable)} GTFS dataset(s) could not be used: "
                 + "; ".join(unusable)
                 + ". See manifest['gtfs_report'] or gtfs_report.csv.",
+                UserWarning,
+                stacklevel=2,
+            )
+        no_service = [
+            f"{row['dataset']} ({row['error']})"
+            for row in gtfs_report_rows
+            if row["status"] == "no_service_on_date"
+        ]
+        if no_service:
+            warnings.warn(
+                f"{len(no_service)} GTFS dataset(s) have no trips on "
+                f"{manifest['gtfs_service_date']} and were not written: "
+                + "; ".join(no_service)
+                + ".",
                 UserWarning,
                 stacklevel=2,
             )

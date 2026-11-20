@@ -85,7 +85,7 @@ NAP dataset of the area's provinces and what happened to it, one row per file
 | `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP) |
 | `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
 | `file_id`, `file_name` | NAP file |
-| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `failed` (download) or `failed_processing` |
+| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `failed` (download) or `failed_processing` |
 | `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
 | `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
 | `error` | Why it failed |
@@ -102,6 +102,7 @@ each province: an operator missing from the report is not on the NAP.
 | `formats` | `"geojson"` | A format or a list of formats. With a list, download and normalisation run once and only the writing step repeats. |
 | `crs` | `"EPSG:4326"` | CRS of every output layer. |
 | `connect_parts` | `True` | Add the roads joining the parts of a multi-part municipality (see "Municipalities in several parts"). |
+| `gtfs_service_date` | `None` | Count only the GTFS trips that run on this day (see [Which trips count](#which-trips-count)). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
 | `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP. Off by default: they are only the raw input and can be downloaded again. |
 
@@ -260,6 +261,24 @@ One edge per pair of consecutive stops of a route, with travel time statistics
 aggregated over every trip that runs it. Columns are listed with their former,
 long name.
 
+### Which trips count
+
+By default every trip of the feed counts once, whatever days it runs: `trips`
+is the number of different trips in the feed's whole calendar. A feed with
+several timetables (winter and summer, Monday–Thursday and Friday) adds them
+up, so `trips` is not a daily frequency.
+
+With `gtfs_service_date` (`"2026-11-25"`) only the trips that run that day
+count, as the GTFS reference defines it: the services of `calendar.txt` whose
+date range holds the day and that run on its day of the week, plus the ones
+`calendar_dates.txt` adds that day, minus the ones it removes. `trips` and the
+per-period columns are then that day's frequencies, the schedule holds that
+day's trips, and the [type of day](#by-type-of-day) columns are filled for the
+day's type only (a Wednesday fills `*_wd` and leaves `*_we` empty). A feed with
+no trip that day (an expired timetable, say) is not written: it appears in the
+report as `no_service_on_date`, with the dates its calendar covers, and raises
+a `UserWarning`. The manifest records the date as `gtfs_service_date`.
+
 A trip defined in `frequencies.txt` ("every 10 minutes from 07:00 to 21:00") is
 counted once per departure: each departure from `start_time` up to, but not
 including, `end_time` is a trip of its own, with the template trip's times
@@ -315,6 +334,10 @@ periods. The manifest's `gtfs_period_codes` gives each period's code, e.g.
 | `trips_rod` | `trip_count_rest_of_day` | Trips, rest of day |
 
 ### By type of day
+
+A trip counts as weekday if its service runs on any day from Monday to Friday,
+and as weekend if on Saturday or Sunday; a daily service counts in both. With
+`gtfs_service_date`, only the day's own type is filled.
 
 | Column | Former name | Meaning |
 |---|---|---|
