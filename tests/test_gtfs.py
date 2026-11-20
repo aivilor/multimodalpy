@@ -31,13 +31,16 @@ STOPS = {
 }
 
 
-def _write_feed(path, routes, trips, stop_times):
+def _write_feed(path, routes, trips, stop_times, extra=None):
     """Write a minimal GTFS zip.
 
     ``routes``: list of (route_id, short_name, route_type)
     ``trips``: list of (route_id, service_id, trip_id)
     ``stop_times``: list of (trip_id, arrival, departure, stop_id, seq)
+    ``extra``: other files, ``{file name: content}``, replacing the default
+    ones (e.g. ``calendar.txt``)
     """
+    extra = dict(extra or {})
     stops = "\n".join(
         f"{sid},Stop {sid},{lat},{lon}" for sid, (lat, lon) in STOPS.items()
     )
@@ -57,9 +60,12 @@ def _write_feed(path, routes, trips, stop_times):
         )
         zf.writestr(
             "calendar.txt",
-            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
-            "sunday,start_date,end_date\n"
-            "WD,1,1,1,1,1,0,0,20260101,20261231\n",
+            extra.pop(
+                "calendar.txt",
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
+                "sunday,start_date,end_date\n"
+                "WD,1,1,1,1,1,0,0,20260101,20261231\n",
+            ),
         )
         zf.writestr(
             "stop_times.txt",
@@ -67,6 +73,8 @@ def _write_feed(path, routes, trips, stop_times):
             + "\n".join(",".join(map(str, st)) for st in stop_times)
             + "\n",
         )
+        for name, content in extra.items():
+            zf.writestr(name, content)
     return path
 
 
@@ -740,3 +748,404 @@ def test_download_gtfs_completes_the_report(tmp_path, monkeypatch):
     assert rows["broken"]["error"]
     assert len(report) == 4  # completed in place, not appended
     assert set(results) == {"bus", "far"}
+
+
+# ---------------------------------------------------------------------------
+# Trips defined by frequencies.txt
+# ---------------------------------------------------------------------------
+def _frequency_feed(tmp_path, frequencies, template_start="06:00:00"):
+    """Route R1: one template trip A -> B (5 min) -> C (4 min), plus t2."""
+    start = _gtfs.gtfs_time_to_seconds(template_start)
+    times = [_gtfs.seconds_to_gtfs_time(start + d) for d in (0, 300, 540)]
+    stop_times = [
+        ("tf", times[0], times[0], "A", 1),
+        ("tf", times[1], times[1], "B", 2),
+        ("tf", times[2], times[2], "C", 3),
+        ("t2", "12:00:00", "12:00:00", "A", 1),
+        ("t2", "12:05:00", "12:05:00", "B", 2),
+    ]
+    return _write_feed(
+        tmp_path / "freq.zip",
+        [("R1", "1", 3)],
+        [("R1", "WD", "tf"), ("R1", "WD", "t2")],
+        stop_times,
+        extra={
+            "frequencies.txt": "trip_id,start_time,end_time,headway_secs\n"
+            + "".join(f"{row}\n" for row in frequencies)
+        },
+    )
+
+
+def test_frequency_trips_count_every_departure(tmp_path):
+    feed = _frequency_feed(tmp_path, ["tf,07:00:00,08:00:00,1200"])
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+    )
+    ab = edges.set_index(["from_node", "to_node"]).loc[("A", "B")]
+    # 07:00, 07:20 and 07:40 (08:00 is the end, not a departure), plus t2.
+    assert ab["trip_count"] == 4
+    assert ab["trip_count_peak_am"] == 3
+    assert ab["trip_count_rest_of_day"] == 1
+    assert ab["travel_time_seconds_mean"] == 300
+    rows = schedule[(schedule["from_node"] == "A") & (schedule["to_node"] == "B")]
+    assert sorted(rows["trip_id"]) == [
+        "t2",
+        "tf@07:00:00",
+        "tf@07:20:00",
+        "tf@07:40:00",
+    ]
+    by_trip = rows.set_index("trip_id")
+    assert by_trip.loc["tf@07:20:00", "departure_time"] == "07:20:00"
+    assert by_trip.loc["tf@07:20:00", "travel_time_seconds"] == 300
+
+
+def test_frequency_trips_keep_the_template_times_between_stops(tmp_path):
+    # The template starts at 00:00; several windows; one past midnight.
+    feed = _frequency_feed(
+        tmp_path,
+        ["tf,08:00:00,08:30:00,900", "tf,23:50:00,24:10:00,1200"],
+        template_start="00:00:00",
+    )
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds"
+    )
+    bc = schedule[(schedule["from_node"] == "B") & (schedule["to_node"] == "C")]
+    # 08:00 and 08:15; 23:50 (24:10 is the end), all leaving B 5 min later.
+    assert sorted(bc["departure_time"]) == ["08:05:00", "08:20:00", "23:55:00"]
+    assert set(bc["travel_time_seconds"]) == {240}
+
+
+def test_unusable_frequency_rows_leave_the_template_as_a_trip(tmp_path):
+    feed = _frequency_feed(
+        tmp_path, ["tf,07:00:00,08:00:00,0", "tf,09:00:00,08:00:00,600"]
+    )
+    edges = _edges(feed)
+    assert edges.loc[("A", "B", "R1"), "trip_count"] == 2  # tf and t2
+
+
+def test_seconds_to_gtfs_time():
+    assert _gtfs.seconds_to_gtfs_time(0) == "00:00:00"
+    assert _gtfs.seconds_to_gtfs_time(25 * 3600 + 61) == "25:01:01"
+    assert _gtfs.seconds_to_gtfs_time(float("nan")) is None
+
+
+# ---------------------------------------------------------------------------
+# Service date: the trips that run on one day
+# ---------------------------------------------------------------------------
+CALENDAR = (
+    "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+    "start_date,end_date\n"
+    "WD,1,1,1,1,1,0,0,20260101,20261231\n"
+    "SAT,0,0,0,0,0,1,0,20260101,20261231\n"
+    "SUMMER,1,1,1,1,1,0,0,20260701,20260831\n"
+)
+# 8 December 2026 (a Tuesday) is a holiday: the weekday service doesn't run
+# and the Saturday one does; 9 December has an extra service.
+CALENDAR_DATES = (
+    "service_id,date,exception_type\nWD,20261208,2\nSAT,20261208,1\nEXTRA,20261209,1\n"
+)
+
+
+@pytest.fixture
+def seasonal_feed(tmp_path):
+    trips = [
+        ("R1", "WD", "wd1"),
+        ("R1", "WD", "wd2"),
+        ("R1", "SAT", "sat"),
+        ("R1", "SUMMER", "sum"),
+        ("R1", "EXTRA", "extra"),
+    ]
+    departures = {
+        "wd1": "07:00:00",
+        "wd2": "08:30:00",
+        "sat": "10:00:00",
+        "sum": "07:30:00",
+        "extra": "12:00:00",
+    }
+    stop_times = []
+    for trip, dep in departures.items():
+        arrival = _gtfs.seconds_to_gtfs_time(_gtfs.gtfs_time_to_seconds(dep) + 300)
+        stop_times += [(trip, dep, dep, "A", 1), (trip, arrival, arrival, "B", 2)]
+    return _write_feed(
+        tmp_path / "seasonal.zip",
+        [("R1", "1", 3)],
+        trips,
+        stop_times,
+        extra={"calendar.txt": CALENDAR, "calendar_dates.txt": CALENDAR_DATES},
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-11-25", "20261125", pd.Timestamp("2026-11-25 10:00").to_pydatetime()],
+)
+def test_parse_service_date(value):
+    import datetime
+
+    assert _gtfs.parse_service_date(value) == datetime.date(2026, 11, 25)
+
+
+@pytest.mark.parametrize("value", ["25/11/2026", "2026-13-01", "tomorrow"])
+def test_parse_service_date_rejects_other_formats(value):
+    with pytest.raises(ValueError, match="gtfs_service_date"):
+        _gtfs.parse_service_date(value)
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [
+        ("2026-11-25", {"WD"}),  # a Wednesday
+        ("2026-11-28", {"SAT"}),  # a Saturday
+        ("2026-11-29", set()),  # a Sunday
+        ("2026-07-15", {"WD", "SUMMER"}),
+        ("2026-12-08", {"SAT"}),  # holiday: WD removed, SAT added
+        ("2026-12-09", {"WD", "EXTRA"}),
+        ("2027-01-13", set()),  # after the calendar ends
+    ],
+)
+def test_active_service_ids(day, expected):
+    calendar = pd.read_csv(pd.io.common.StringIO(CALENDAR), dtype=str)
+    calendar_dates = pd.read_csv(pd.io.common.StringIO(CALENDAR_DATES), dtype=str)
+    date = _gtfs.parse_service_date(day)
+    assert _gtfs.active_service_ids(calendar, calendar_dates, date) == expected
+
+
+def test_without_a_service_date_every_trip_counts(seasonal_feed):
+    edge = _edges(seasonal_feed).loc[("A", "B", "R1")]
+    assert edge["trip_count"] == 5
+    assert edge["trip_count_weekday"] == 4  # wd1, wd2, sum and extra
+    assert edge["trip_count_weekend"] == 1
+
+
+@pytest.mark.parametrize(
+    ("day", "trips", "weekday", "weekend"),
+    [
+        ("2026-11-25", 2, 2, None),
+        ("2026-07-15", 3, 3, None),
+        ("2026-11-28", 1, None, 1),
+        ("2026-12-08", 1, 1, None),  # a Tuesday, with the Saturday service
+    ],
+)
+def test_a_service_date_counts_the_trips_of_that_day(
+    seasonal_feed, day, trips, weekday, weekend
+):
+    edge = _edges(seasonal_feed, service_date=_gtfs.parse_service_date(day)).loc[
+        ("A", "B", "R1")
+    ]
+    assert edge["trip_count"] == trips
+    assert edge["trip_count_weekday"] == weekday or (
+        weekday is None and pd.isna(edge["trip_count_weekday"])
+    )
+    assert edge["trip_count_weekend"] == weekend or (
+        weekend is None and pd.isna(edge["trip_count_weekend"])
+    )
+
+
+def test_a_service_date_filters_the_schedule(seasonal_feed):
+    _, _, schedule = _gtfs.normalize_gtfs_feed(
+        seasonal_feed,
+        dataset_name="ds",
+        layer_id="ds",
+        service_date=_gtfs.parse_service_date("2026-07-15"),
+    )
+    assert sorted(schedule["trip_id"]) == ["sum", "wd1", "wd2"]
+
+
+def test_a_service_date_applies_to_frequency_trips(tmp_path):
+    feed = _frequency_feed(tmp_path, ["tf,07:00:00,08:00:00,1200"])
+    sunday = _gtfs.parse_service_date("2026-11-29")
+    wednesday = _gtfs.parse_service_date("2026-11-25")
+    assert _edges(feed, service_date=wednesday).loc[("A", "B", "R1"), "trip_count"] == 4
+    assert _edges(feed, service_date=sunday).empty
+
+
+def test_download_gtfs_reports_feeds_without_service_that_day(
+    tmp_path, monkeypatch, seasonal_feed
+):
+    import geopandas as gpd
+
+    monkeypatch.setattr(
+        _gtfs, "download_gtfs_nap_zips", lambda *a, **k: [seasonal_feed]
+    )
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        report=report,
+        service_date="2027-01-13",
+    )
+    assert results == {}
+    assert report[0]["status"] == "no_service_on_date"
+    assert report[0]["error"] == (
+        "no trips on 2027-01-13; its calendar runs from 2026-01-01 to 2026-12-31"
+    )
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        service_date="2026-11-25",
+    )
+    assert results["seasonal"]["edges"]["trip_count"].tolist() == [2]
+
+
+# ---------------------------------------------------------------------------
+# Feeds from outside the NAP (gtfs_feeds)
+# ---------------------------------------------------------------------------
+def _simple_feed(path):
+    trips = [("R1", "WD", "t1")]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    return _write_feed(path, [("R1", "1", 3)], trips, stop_times)
+
+
+def test_user_feed_sources_accepts_every_form(tmp_path):
+    local = _simple_feed(tmp_path / "local.zip")
+    url = "https://gvinterbus.gva.es/estatico/gtfs.zip"
+    assert _gtfs.user_feed_sources(None) == []
+    assert _gtfs.user_feed_sources({"metrobus": url}) == [("metrobus", url)]
+    assert _gtfs.user_feed_sources([url, local, ("mine", local)]) == [
+        (None, url),
+        (None, str(local)),
+        ("mine", str(local)),
+    ]
+    assert _gtfs.user_feed_sources(url) == [(None, url)]
+    assert _gtfs.user_feed_sources(tmp_path) == [(None, str(tmp_path))]  # a folder
+
+
+@pytest.mark.parametrize(
+    ("feeds", "error", "match"),
+    [
+        (["missing.zip"], FileNotFoundError, "missing.zip"),
+        (["ftp://example.org/gtfs.zip"], ValueError, "http"),
+        ([""], ValueError, "empty source"),
+        ({"": "https://example.org/gtfs.zip"}, ValueError, "name must be text"),
+    ],
+)
+def test_user_feed_sources_rejects_mistakes(feeds, error, match):
+    with pytest.raises(error, match=match):
+        _gtfs.user_feed_sources(feeds)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("https://gvinterbus.gva.es/estatico/gtfs.zip", "gtfs.zip"),
+        ("https://example.org/feeds/metro.zip?key=1", "metro.zip"),
+        ("https://example.org/", "gtfs"),
+        ("/data/feeds/emt", "emt"),
+    ],
+)
+def test_feed_file_name(source, expected):
+    assert _gtfs._feed_file_name(source) == expected
+
+
+class _Response:
+    def __init__(self, content=b"", status=200):
+        self.content = content
+        self.status_code = status
+
+    def raise_for_status(self):
+        import requests
+
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Client Error: Not Found")
+
+
+@pytest.fixture
+def user_feeds(tmp_path, monkeypatch):
+    """A local feed, one served at an address, and an address that fails."""
+    import requests
+
+    served = _simple_feed(tmp_path / "served.zip").read_bytes()
+    asked: list[str] = []
+
+    def fake_get(url, **kwargs):
+        asked.append(url)
+        if url.endswith("/gtfs.zip"):
+            return _Response(served)
+        return _Response(status=404)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    (tmp_path / "local").mkdir()
+    return {
+        "local": _simple_feed(tmp_path / "local" / "emt.zip"),
+        "url": "https://gvinterbus.gva.es/estatico/gtfs.zip",
+        "broken": "https://example.org/gone.zip",
+        "asked": asked,
+    }
+
+
+def test_download_gtfs_with_user_feeds_only(tmp_path, monkeypatch, user_feeds):
+    import geopandas as gpd
+
+    def no_nap(*args, **kwargs):
+        raise AssertionError("the NAP must not be asked")
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", no_nap)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        report=report,
+        use_nap=False,
+        feeds=[
+            ("MetroBus", user_feeds["url"]),
+            user_feeds["local"],
+            user_feeds["broken"],
+        ],
+    )
+    assert set(results) == {"metrobus", "emt"}
+    assert results["metrobus"]["edges"]["edge_id"].tolist() == ["metrobus_R1_A_B"]
+    assert (tmp_path / "zips" / "metrobus.zip").is_file()
+    assert user_feeds["local"].is_file()  # used where it is, not copied
+    rows = {row["dataset_name"]: row for row in report}
+    assert {row["source"] for row in report} == {"user"}
+    assert rows["MetroBus"]["status"] == "written"
+    assert rows["MetroBus"]["file_name"] == "gtfs.zip"
+    assert rows["emt.zip"]["status"] == "written"
+    assert rows["gone.zip"]["status"] == "failed"
+    assert "404" in rows["gone.zip"]["error"]
+
+
+def test_user_feeds_come_after_the_nap_and_never_take_its_names(
+    tmp_path, monkeypatch, user_feeds
+):
+    import geopandas as gpd
+
+    nap_feed = _simple_feed(tmp_path / "20261119_030028_EMT.zip")
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        report.append(
+            {"dataset_id": 965, "status": "downloaded", "path": str(nap_feed)}
+        )
+        return [nap_feed]
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        report=report,
+        feeds=[user_feeds["local"], user_feeds["url"]],
+    )
+    assert list(results) == ["emt", "emt_2", "gtfs"]
+    assert [(row["source"], row["dataset"]) for row in report] == [
+        ("nap", "emt"),
+        ("user", "emt_2"),
+        ("user", "gtfs"),
+    ]
