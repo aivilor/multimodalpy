@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- CI runs the tests on macOS with the oldest and newest supported Python (3.11
+  and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,
+  and a job waiting for one could fail the whole run.
+
 ## [0.5.1] - 2026-11-19
 
 ### Added
