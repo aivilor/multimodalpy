@@ -992,3 +992,160 @@ def test_download_gtfs_reports_feeds_without_service_that_day(
         service_date="2026-11-25",
     )
     assert results["seasonal"]["edges"]["trip_count"].tolist() == [2]
+
+
+# ---------------------------------------------------------------------------
+# Feeds from outside the NAP (gtfs_feeds)
+# ---------------------------------------------------------------------------
+def _simple_feed(path):
+    trips = [("R1", "WD", "t1")]
+    stop_times = [
+        ("t1", "07:00:00", "07:00:00", "A", 1),
+        ("t1", "07:05:00", "07:05:00", "B", 2),
+    ]
+    return _write_feed(path, [("R1", "1", 3)], trips, stop_times)
+
+
+def test_user_feed_sources_accepts_every_form(tmp_path):
+    local = _simple_feed(tmp_path / "local.zip")
+    url = "https://gvinterbus.gva.es/estatico/gtfs.zip"
+    assert _gtfs.user_feed_sources(None) == []
+    assert _gtfs.user_feed_sources({"metrobus": url}) == [("metrobus", url)]
+    assert _gtfs.user_feed_sources([url, local, ("mine", local)]) == [
+        (None, url),
+        (None, str(local)),
+        ("mine", str(local)),
+    ]
+    assert _gtfs.user_feed_sources(url) == [(None, url)]
+    assert _gtfs.user_feed_sources(tmp_path) == [(None, str(tmp_path))]  # a folder
+
+
+@pytest.mark.parametrize(
+    ("feeds", "error", "match"),
+    [
+        (["missing.zip"], FileNotFoundError, "missing.zip"),
+        (["ftp://example.org/gtfs.zip"], ValueError, "http"),
+        ([""], ValueError, "empty source"),
+        ({"": "https://example.org/gtfs.zip"}, ValueError, "name must be text"),
+    ],
+)
+def test_user_feed_sources_rejects_mistakes(feeds, error, match):
+    with pytest.raises(error, match=match):
+        _gtfs.user_feed_sources(feeds)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("https://gvinterbus.gva.es/estatico/gtfs.zip", "gtfs.zip"),
+        ("https://example.org/feeds/metro.zip?key=1", "metro.zip"),
+        ("https://example.org/", "gtfs"),
+        ("/data/feeds/emt", "emt"),
+    ],
+)
+def test_feed_file_name(source, expected):
+    assert _gtfs._feed_file_name(source) == expected
+
+
+class _Response:
+    def __init__(self, content=b"", status=200):
+        self.content = content
+        self.status_code = status
+
+    def raise_for_status(self):
+        import requests
+
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Client Error: Not Found")
+
+
+@pytest.fixture
+def user_feeds(tmp_path, monkeypatch):
+    """A local feed, one served at an address, and an address that fails."""
+    import requests
+
+    served = _simple_feed(tmp_path / "served.zip").read_bytes()
+    asked: list[str] = []
+
+    def fake_get(url, **kwargs):
+        asked.append(url)
+        if url.endswith("/gtfs.zip"):
+            return _Response(served)
+        return _Response(status=404)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    (tmp_path / "local").mkdir()
+    return {
+        "local": _simple_feed(tmp_path / "local" / "emt.zip"),
+        "url": "https://gvinterbus.gva.es/estatico/gtfs.zip",
+        "broken": "https://example.org/gone.zip",
+        "asked": asked,
+    }
+
+
+def test_download_gtfs_with_user_feeds_only(tmp_path, monkeypatch, user_feeds):
+    import geopandas as gpd
+
+    def no_nap(*args, **kwargs):
+        raise AssertionError("the NAP must not be asked")
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", no_nap)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        report=report,
+        use_nap=False,
+        feeds=[
+            ("MetroBus", user_feeds["url"]),
+            user_feeds["local"],
+            user_feeds["broken"],
+        ],
+    )
+    assert set(results) == {"metrobus", "emt"}
+    assert results["metrobus"]["edges"]["edge_id"].tolist() == ["metrobus_R1_A_B"]
+    assert (tmp_path / "zips" / "metrobus.zip").is_file()
+    assert user_feeds["local"].is_file()  # used where it is, not copied
+    rows = {row["dataset_name"]: row for row in report}
+    assert {row["source"] for row in report} == {"user"}
+    assert rows["MetroBus"]["status"] == "written"
+    assert rows["MetroBus"]["file_name"] == "gtfs.zip"
+    assert rows["emt.zip"]["status"] == "written"
+    assert rows["gone.zip"]["status"] == "failed"
+    assert "404" in rows["gone.zip"]["error"]
+
+
+def test_user_feeds_come_after_the_nap_and_never_take_its_names(
+    tmp_path, monkeypatch, user_feeds
+):
+    import geopandas as gpd
+
+    nap_feed = _simple_feed(tmp_path / "20261119_030028_EMT.zip")
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        report.append(
+            {"dataset_id": 965, "status": "downloaded", "path": str(nap_feed)}
+        )
+        return [nap_feed]
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        report=report,
+        feeds=[user_feeds["local"], user_feeds["url"]],
+    )
+    assert list(results) == ["emt", "emt_2", "gtfs"]
+    assert [(row["source"], row["dataset"]) for row in report] == [
+        ("nap", "emt"),
+        ("user", "emt_2"),
+        ("user", "gtfs"),
+    ]

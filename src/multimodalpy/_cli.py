@@ -11,6 +11,8 @@ Private module.
 
 from __future__ import annotations
 
+import re
+
 from . import network
 from .network import FORMATS
 
@@ -110,6 +112,16 @@ def main(argv: list[str] | None = None) -> None:
         help="Filter GTFS trips by hour window, e.g. --gtfs-hour-range 7 9",
     )
     parser.add_argument(
+        "--gtfs-feed",
+        action="append",
+        metavar="[NAME=]SOURCE",
+        help=(
+            "A GTFS feed from outside the NAP: an http(s) address or a local zip "
+            "or folder, optionally named (metrobus=https://.../gtfs.zip). "
+            "Repeat it for several feeds."
+        ),
+    )
+    parser.add_argument(
         "--gtfs-service-date",
         metavar="YYYY-MM-DD",
         help="Count only the GTFS trips that run on this day.",
@@ -130,6 +142,7 @@ def main(argv: list[str] | None = None) -> None:
     if not (args.area or args.area_code or args.boundaries):
         parser.error("give the study area: --area, --area-code or --boundaries")
 
+    gtfs_feeds = [_feed_argument(value) for value in args.gtfs_feed or []]
     network.download_network(
         area_name=args.area,
         modes=args.modes,
@@ -147,6 +160,17 @@ def main(argv: list[str] | None = None) -> None:
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
         gtfs_service_date=args.gtfs_service_date,
+        gtfs_feeds=gtfs_feeds or None,
         write_schedule=args.write_schedule,
         keep_gtfs_zips=args.keep_gtfs_zips,
     )
+
+
+def _feed_argument(value: str) -> str | tuple[str, str]:
+    """``--gtfs-feed`` value: ``SOURCE`` or ``NAME=SOURCE``.
+
+    A name is letters, digits, ``_`` or ``-``, so an address (with ``:``
+    and ``/`` before any ``=``) is never taken for one.
+    """
+    match = re.fullmatch(r"([\w-]+)=(.+)", value)
+    return (match.group(1), match.group(2)) if match else value

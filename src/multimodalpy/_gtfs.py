@@ -27,7 +27,7 @@ import datetime
 import logging
 import re
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zipfile import BadZipFile, ZipFile
@@ -1648,13 +1648,128 @@ def dataset_name_from_file(zip_path: str | Path, taken: set[str] | None = None) 
     stem = Path(zip_path).stem
     rest = _DOWNLOAD_STAMP.sub("", stem)
     name = slugify(rest if rest.strip("_ ") else stem)
-    if taken is None:
-        return name
+    return name if taken is None else _unique_name(name, taken)
+
+
+def _unique_name(name: str, taken: set[str]) -> str:
+    """``name``, or ``name_2``, ``name_3``... if taken; added to ``taken``."""
     unique, number = name, 2
     while unique in taken:
         unique, number = f"{name}_{number}", number + 1
     taken.add(unique)
     return unique
+
+
+# ---------------------------------------------------------------------------
+# GTFS feeds from outside the NAP (gtfs_feeds)
+# ---------------------------------------------------------------------------
+#: What ``gtfs_feeds`` accepts: ``{name: source}``, or a list of sources or
+#: ``(name, source)`` pairs. A source is an http(s) address or a local GTFS
+#: zip or folder.
+GTFSFeeds = Mapping[str, "str | Path"] | Sequence["str | Path | tuple[str, str | Path]"]
+
+
+def _is_url(source: str) -> bool:
+    return source.lower().startswith(("http://", "https://"))
+
+
+def user_feed_sources(feeds: GTFSFeeds | None) -> list[tuple[str | None, str]]:
+    """Check ``gtfs_feeds`` and return it as ``[(name or None, source)]``.
+
+    Raises ``ValueError`` for an empty source, a name that is not text or an
+    address other than http(s), and ``FileNotFoundError`` for a local file or
+    folder that doesn't exist, so a mistake fails before anything is
+    downloaded.
+    """
+    if feeds is None:
+        return []
+    if isinstance(feeds, (str, Path)):
+        feeds = [feeds]
+    items: list[tuple[object, object]] = (
+        list(feeds.items())
+        if isinstance(feeds, Mapping)
+        else [
+            item if isinstance(item, tuple) and len(item) == 2 else (None, item)
+            for item in feeds
+        ]
+    )
+    sources: list[tuple[str | None, str]] = []
+    for name, source in items:
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ValueError(
+                f"gtfs_feeds: a feed name must be text. Received: {name!r}"
+            )
+        text = str(source).strip() if source is not None else ""
+        if not text:
+            raise ValueError(f"gtfs_feeds: empty source for feed {name!r}.")
+        if _is_url(text):
+            sources.append((name, text))
+            continue
+        if "://" in text:
+            raise ValueError(
+                "gtfs_feeds: only http(s) addresses can be downloaded. "
+                f"Received: {text}"
+            )
+        path = Path(text).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"gtfs_feeds: no such GTFS file or folder: {text}")
+        sources.append((name, str(path)))
+    return sources
+
+
+def _feed_file_name(source: str) -> str:
+    """File name of a source: the last part of its address or path."""
+    from urllib.parse import urlparse
+
+    path = urlparse(source).path if _is_url(source) else source
+    return Path(path.rstrip("/")).name or "gtfs"
+
+
+def _fetch_user_feeds(
+    sources: list[tuple[str | None, str]],
+    zip_dir: Path,
+    report: list[dict[str, object]],
+) -> list[tuple[Path, str | None, dict[str, object] | None]]:
+    """Download the ``gtfs_feeds`` addresses into ``zip_dir``; keep local paths.
+
+    Returns ``(path, name, report row)`` per feed obtained. Every feed gets a
+    report row with ``source`` ``"user"``; a download that fails is
+    ``failed``, with the error, and is not returned.
+    """
+    import requests
+
+    from ._overpass import user_agent
+
+    fetched: list[tuple[Path, str | None, dict[str, object] | None]] = []
+    files_taken: set[str] = set()
+    for name, source in sources:
+        file_name = _feed_file_name(source)
+        row: dict[str, object] = {
+            "source": "user",
+            "dataset_name": name or file_name,
+            "file_name": file_name,
+        }
+        report.append(row)
+        if not _is_url(source):
+            row.update(status="downloaded", path=source)
+            fetched.append((Path(source), name, row))
+            continue
+        stem = _unique_name(slugify(name or Path(file_name).stem), files_taken)
+        target = Path(zip_dir) / f"{stem}.zip"
+        try:
+            response = requests.get(
+                source, headers={"User-Agent": user_agent()}, timeout=(30, 300)
+            )
+            response.raise_for_status()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(response.content)
+        except Exception as exc:  # noqa: BLE001 - reported, the rest go on
+            logger.warning("Could not download GTFS feed %s: %s", source, exc)
+            row.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            continue
+        row.update(status="downloaded", path=str(target))
+        fetched.append((target, name, row))
+    return fetched
 
 
 def download_gtfs(
@@ -1675,6 +1790,8 @@ def download_gtfs(
     skipped: dict[str, str] | None = None,
     report: list[dict[str, object]] | None = None,
     service_date: datetime.date | str | None = None,
+    feeds: GTFSFeeds | None = None,
+    use_nap: bool = True,
 ) -> dict[str, dict[str, object]]:
     """Download NAP GTFS data and returns normalized layers per dataset.
 
@@ -1713,26 +1830,48 @@ def download_gtfs(
     the trips that run that day (see :func:`normalize_gtfs_feed`). A feed
     with no trip that day is not written: its report row says
     ``no_service_on_date``, with the dates its calendar covers in ``error``.
+
+    ``feeds`` adds GTFS feeds from outside the NAP: ``{name: source}``, or a
+    list of sources or ``(name, source)`` pairs, a source being an http(s)
+    address (downloaded into ``zip_dir``) or a local zip or folder. They are
+    processed like the NAP's, after them; a feed's ``dataset`` is its name
+    (or its file name), numbered if another feed already has it, and its
+    report row has ``source`` ``"user"`` (``"nap"`` for the NAP's). With
+    ``use_nap=False`` the NAP is skipped and only ``feeds`` are used, so no
+    API key is needed.
     """
     day = None if service_date is None else parse_service_date(service_date)
     if province_codes is None and "prov_codes" in getattr(boundary, "columns", []):
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    sources = user_feed_sources(feeds)
     report_rows: list[dict[str, object]] = [] if report is None else report
-    zips = download_gtfs_nap_zips(
-        area_name,
-        zip_dir,
-        modes=modes,
-        api_key=api_key,
-        province_codes=province_codes,
-        report=report_rows,
-    )
+    zips: list[Path] = []
+    if use_nap:
+        zips = list(
+            download_gtfs_nap_zips(
+                area_name,
+                zip_dir,
+                modes=modes,
+                api_key=api_key,
+                province_codes=province_codes,
+                report=report_rows,
+            )
+        )
+        for nap_row in report_rows:
+            nap_row.setdefault("source", "nap")
     by_path = {str(row["path"]): row for row in report_rows if row.get("path")}
+    # (file, name given or None, its report row): the NAP's, then the user's.
+    feed_files: list[tuple[Path, str | None, dict[str, object] | None]] = [
+        (Path(path), None, by_path.get(str(path))) for path in zips
+    ]
+    feed_files += _fetch_user_feeds(sources, Path(zip_dir), report_rows)
 
-    def outcome(zip_path: Path, **fields: object) -> None:
+    def outcome(
+        zip_path: Path, row: dict[str, object] | None, **fields: object
+    ) -> None:
         """Complete the report row of a downloaded file."""
-        row = by_path.get(str(zip_path))
         if row is None:
             row = {"file_name": Path(zip_path).name, "path": str(zip_path)}
             report_rows.append(row)
@@ -1745,8 +1884,12 @@ def download_gtfs(
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     taken: set[str] = set()
-    for zip_path in zips:
-        dataset_name = dataset_name_from_file(zip_path, taken)
+    for zip_path, given_name, row in feed_files:
+        dataset_name = (
+            _unique_name(slugify(given_name), taken)
+            if given_name
+            else dataset_name_from_file(zip_path, taken)
+        )
         # "bus" or "train", from the feed's route_type: decides the output
         # folder, and whether the feed was asked for at all.
         mode = infer_transport_mode(zip_path)
@@ -1758,13 +1901,16 @@ def download_gtfs(
             )
             if skipped is not None:
                 skipped[dataset_name] = mode
-            outcome(zip_path, dataset=dataset_name, mode=mode, status="skipped_mode")
+            outcome(
+                zip_path, row, dataset=dataset_name, mode=mode, status="skipped_mode"
+            )
             continue
         try:
             no_service = "" if day is None else _no_service_message(zip_path, day)
             if no_service:
                 outcome(
                     zip_path,
+                    row,
                     dataset=dataset_name,
                     mode=mode,
                     status="no_service_on_date",
@@ -1787,6 +1933,7 @@ def download_gtfs(
             logger.warning("Could not normalize feed %s: %s", zip_path.name, exc)
             outcome(
                 zip_path,
+                row,
                 dataset=dataset_name,
                 mode=mode,
                 status="failed_processing",
@@ -1795,6 +1942,7 @@ def download_gtfs(
             continue
         outcome(
             zip_path,
+            row,
             dataset=dataset_name,
             mode=mode,
             status="written" if not stop_edges.empty else "nothing_in_area",

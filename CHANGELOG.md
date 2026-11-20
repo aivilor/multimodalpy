@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no trip that day is not written: `gtfs_report` says `no_service_on_date`,
   with the dates its calendar covers, and a `UserWarning` names it. The
   manifest records `gtfs_service_date`.
+- `gtfs_feeds` in `download_network()` (`--gtfs-feed [NAME=]SOURCE` on the
+  command line, repeatable) and `feeds` in `download_gtfs()`: GTFS feeds from
+  outside the NAP, as `{name: source}` or a list of sources, a source being an
+  http(s) address or a local zip or folder. They are processed like the NAP's
+  feeds, written to `bus/<name>/` or `train/<name>/`, and listed in the
+  manifest's `gtfs_feeds`. The first use is València's MetroBus, published on
+  the Generalitat's open data portal and not on the NAP. Without a NAP API key,
+  the NAP is skipped with a warning and only these feeds are used
+  (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
+  not http(s), or `gtfs_feeds` without `bus` or `train` in `modes` fail before
+  anything is downloaded.
+- `gtfs_report` has a `source` column, `nap` or `user`, and lists the feeds of
+  `gtfs_feeds` too; one that cannot be downloaded or processed raises the same
+  `UserWarning` as a NAP dataset.
 
 ### Fixed
 - Trips defined in `frequencies.txt` (a template trip that leaves "every 10
