@@ -239,6 +239,16 @@ def gtfs_time_to_seconds(time_str) -> float:
     return hours * 3600 + minutes * 60 + seconds
 
 
+def seconds_to_gtfs_time(seconds) -> str | None:
+    """Convert seconds since midnight to 'HH:MM:SS' (HH may be >= 24)."""
+    import math
+
+    if seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
+        return None
+    total = int(round(seconds))
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
 def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
     """Group seconds-since-midnight into an hour band like '08-09'."""
     import math
@@ -606,6 +616,107 @@ def _edge_ids(dataset_name: str, frame: pd.DataFrame) -> pd.Series:
     )
 
 
+def _expand_frequencies(
+    stop_times: pd.DataFrame,
+    trips: pd.DataFrame,
+    frequencies: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Turn the trips defined in ``frequencies.txt`` into one trip per departure.
+
+    A frequency-based trip is a template: its ``stop_times`` give the times
+    between stops, and each ``frequencies.txt`` row says it leaves every
+    ``headway_secs`` from ``start_time`` until (not including) ``end_time``.
+    Each departure becomes a trip of its own, ``<trip_id>@<HH:MM:SS>``, with
+    the template's times shifted to it, so it counts in ``trip_count``, its
+    period and its hour band like any other trip. The templates are
+    replaced; a template with no valid row (no headway, no times) is kept
+    as it is.
+    """
+    import numpy as np
+    import pandas as pd
+
+    needed = {"trip_id", "start_time", "end_time", "headway_secs"}
+    if frequencies is None or frequencies.empty or not needed <= set(frequencies):
+        return stop_times, trips
+
+    freq = frequencies.loc[:, ["trip_id", "start_time", "end_time", "headway_secs"]]
+    freq = freq.assign(
+        start=freq["start_time"].map(gtfs_time_to_seconds),
+        end=freq["end_time"].map(gtfs_time_to_seconds),
+        headway=pd.to_numeric(freq["headway_secs"], errors="coerce"),
+    ).dropna(subset=["start", "end", "headway"])
+    freq = freq[(freq["headway"] > 0) & (freq["end"] > freq["start"])]
+    freq = freq[freq["trip_id"].isin(set(stop_times["trip_id"]))]
+    if freq.empty:
+        return stop_times, trips
+
+    template = stop_times[stop_times["trip_id"].isin(set(freq["trip_id"]))].copy()
+    template["_seq"] = pd.to_numeric(template["stop_sequence"], errors="coerce")
+    times = {
+        col: template[col].map(gtfs_time_to_seconds)
+        for col in ("arrival_time", "departure_time")
+        if col in template.columns
+    }
+    # The template's first time: its departure from the first stop (or its
+    # arrival there, if the departure is missing).
+    first = template.assign(**times).sort_values("_seq").groupby("trip_id").first()
+    base = pd.Series(np.nan, index=first.index)
+    for col in ("departure_time", "arrival_time"):
+        if col in first.columns:
+            base = base.fillna(first[col])
+    base = base.dropna()
+    freq = freq[freq["trip_id"].isin(base.index)]
+    if freq.empty:
+        return stop_times, trips
+
+    # One row per departure: start, start + headway, ... before end.
+    departures = freq.assign(
+        departure=[
+            np.arange(start, end, headway)
+            for start, end, headway in freq[["start", "end", "headway"]].itertuples(
+                index=False
+            )
+        ]
+    ).explode("departure")[["trip_id", "departure"]]
+    departures["departure"] = departures["departure"].astype(float)
+    departures = departures.drop_duplicates()
+    departures["new_trip_id"] = (
+        departures["trip_id"] + "@" + departures["departure"].map(seconds_to_gtfs_time)
+    )
+    departures["offset"] = departures["departure"] - departures["trip_id"].map(base)
+
+    expanded = template.drop(columns="_seq").merge(
+        departures[["trip_id", "new_trip_id", "offset"]], on="trip_id"
+    )
+    for col in times:
+        expanded[col] = (
+            expanded[col].map(gtfs_time_to_seconds) + expanded["offset"]
+        ).map(seconds_to_gtfs_time)
+    expanded = expanded.drop(columns=["trip_id", "offset"]).rename(
+        columns={"new_trip_id": "trip_id"}
+    )
+
+    expanded_trips = trips.merge(
+        departures[["trip_id", "new_trip_id"]].drop_duplicates(), on="trip_id"
+    )
+    expanded_trips = expanded_trips.drop(columns="trip_id").rename(
+        columns={"new_trip_id": "trip_id"}
+    )[list(trips.columns)]
+
+    replaced = set(departures["trip_id"])
+    stop_times = pd.concat(
+        [
+            stop_times[~stop_times["trip_id"].isin(replaced)],
+            expanded[stop_times.columns],
+        ],
+        ignore_index=True,
+    )
+    trips = pd.concat(
+        [trips[~trips["trip_id"].isin(replaced)], expanded_trips], ignore_index=True
+    )
+    return stop_times, trips
+
+
 def _build_stop_to_stop_trip_records(
     stop_times: pd.DataFrame,
     stops: pd.DataFrame,
@@ -629,6 +740,7 @@ def _build_stop_to_stop_trip_records(
     """
     import pandas as pd
 
+    stop_times, trips = _expand_frequencies(stop_times, trips, frequencies)
     work = stop_times.copy()
     work["stop_sequence"] = pd.to_numeric(work["stop_sequence"], errors="coerce")
     work = work.dropna(subset=["trip_id", "stop_id", "stop_sequence"]).sort_values(
@@ -704,23 +816,6 @@ def _build_stop_to_stop_trip_records(
 
     trips_work = _attach_service_days(trips, calendar, calendar_dates)
 
-    if (
-        frequencies is not None
-        and not frequencies.empty
-        and "trip_id" in frequencies.columns
-    ):
-        freq = frequencies.copy()
-        freq["headway_secs"] = pd.to_numeric(freq["headway_secs"], errors="coerce")
-        freq["start_seconds"] = freq["start_time"].apply(gtfs_time_to_seconds)
-        freq["end_seconds"] = freq["end_time"].apply(gtfs_time_to_seconds)
-        freq["trips_per_window"] = (
-            (freq["end_seconds"] - freq["start_seconds"]) / freq["headway_secs"]
-        ).clip(lower=0)
-        freq_trip_counts = freq.groupby("trip_id")["trips_per_window"].sum()
-        trips_work["frequency_trip_count"] = trips_work["trip_id"].map(freq_trip_counts)
-    else:
-        trips_work["frequency_trip_count"] = pd.NA
-
     trip_cols = _existing_columns(
         trips_work,
         [
@@ -734,7 +829,6 @@ def _build_stop_to_stop_trip_records(
             "runs_weekday",
             "runs_weekend",
             "day_type",
-            "frequency_trip_count",
         ],
     )
     route_cols = _existing_columns(

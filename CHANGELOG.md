@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Trips defined in `frequencies.txt` (a template trip that leaves "every 10
+  minutes from 07:00 to 21:00") counted as a single trip: the number of
+  departures was computed but never used. Each departure is now a trip of its
+  own, `<trip_id>@<HH:MM:SS>`, with the template's times shifted to it, so it
+  counts in `trips`, its period, its type of day, its hour band and the
+  schedule.
+
 ### Changed
 - CI runs the tests on macOS with the oldest and newest supported Python (3.11
   and 3.14) only; Ubuntu still runs all four. GitHub's macOS runners are scarce,

@@ -260,6 +260,11 @@ One edge per pair of consecutive stops of a route, with travel time statistics
 aggregated over every trip that runs it. Columns are listed with their former,
 long name.
 
+A trip defined in `frequencies.txt` ("every 10 minutes from 07:00 to 21:00") is
+counted once per departure: each departure from `start_time` up to, but not
+including, `end_time` is a trip of its own, with the template trip's times
+between stops.
+
 A segment that takes more than 3 hours between two consecutive stops is an error
 in the feed (a time typed on the wrong hour or day): its travel time is left
 empty, so it counts in `trips` but not in the travel times, and a `UserWarning`
@@ -351,7 +356,9 @@ any other way. `tm_` is mean travel time and `trp_` is number of trips.
 Written only with `write_schedule=True`: one row per trip and edge, with no geometry.
 It is clipped like the [edges](#gtfs-edges): it holds the segments of the trips
 that touch the study area, so every row has its edge. Join it to the edges by
-`edge_id`: each row matches exactly one edge, the one of its route.
+`edge_id`: each row matches exactly one edge, the one of its route. Each
+departure of a trip defined in `frequencies.txt` is a row of its own, with
+`trip_id` `<trip_id>@<departure time>` (`L1_template@07:20:00`).
 
 ## NetworkX graphs (`graph.json`)
 

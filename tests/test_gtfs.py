@@ -31,13 +31,16 @@ STOPS = {
 }
 
 
-def _write_feed(path, routes, trips, stop_times):
+def _write_feed(path, routes, trips, stop_times, extra=None):
     """Write a minimal GTFS zip.
 
     ``routes``: list of (route_id, short_name, route_type)
     ``trips``: list of (route_id, service_id, trip_id)
     ``stop_times``: list of (trip_id, arrival, departure, stop_id, seq)
+    ``extra``: other files, ``{file name: content}``, replacing the default
+    ones (e.g. ``calendar.txt``)
     """
+    extra = dict(extra or {})
     stops = "\n".join(
         f"{sid},Stop {sid},{lat},{lon}" for sid, (lat, lon) in STOPS.items()
     )
@@ -57,9 +60,12 @@ def _write_feed(path, routes, trips, stop_times):
         )
         zf.writestr(
             "calendar.txt",
-            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
-            "sunday,start_date,end_date\n"
-            "WD,1,1,1,1,1,0,0,20260101,20261231\n",
+            extra.pop(
+                "calendar.txt",
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,"
+                "sunday,start_date,end_date\n"
+                "WD,1,1,1,1,1,0,0,20260101,20261231\n",
+            ),
         )
         zf.writestr(
             "stop_times.txt",
@@ -67,6 +73,8 @@ def _write_feed(path, routes, trips, stop_times):
             + "\n".join(",".join(map(str, st)) for st in stop_times)
             + "\n",
         )
+        for name, content in extra.items():
+            zf.writestr(name, content)
     return path
 
 
@@ -740,3 +748,82 @@ def test_download_gtfs_completes_the_report(tmp_path, monkeypatch):
     assert rows["broken"]["error"]
     assert len(report) == 4  # completed in place, not appended
     assert set(results) == {"bus", "far"}
+
+
+# ---------------------------------------------------------------------------
+# Trips defined by frequencies.txt
+# ---------------------------------------------------------------------------
+def _frequency_feed(tmp_path, frequencies, template_start="06:00:00"):
+    """Route R1: one template trip A -> B (5 min) -> C (4 min), plus t2."""
+    start = _gtfs.gtfs_time_to_seconds(template_start)
+    times = [_gtfs.seconds_to_gtfs_time(start + d) for d in (0, 300, 540)]
+    stop_times = [
+        ("tf", times[0], times[0], "A", 1),
+        ("tf", times[1], times[1], "B", 2),
+        ("tf", times[2], times[2], "C", 3),
+        ("t2", "12:00:00", "12:00:00", "A", 1),
+        ("t2", "12:05:00", "12:05:00", "B", 2),
+    ]
+    return _write_feed(
+        tmp_path / "freq.zip",
+        [("R1", "1", 3)],
+        [("R1", "WD", "tf"), ("R1", "WD", "t2")],
+        stop_times,
+        extra={
+            "frequencies.txt": "trip_id,start_time,end_time,headway_secs\n"
+            + "".join(f"{row}\n" for row in frequencies)
+        },
+    )
+
+
+def test_frequency_trips_count_every_departure(tmp_path):
+    feed = _frequency_feed(tmp_path, ["tf,07:00:00,08:00:00,1200"])
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
+    )
+    ab = edges.set_index(["from_node", "to_node"]).loc[("A", "B")]
+    # 07:00, 07:20 and 07:40 (08:00 is the end, not a departure), plus t2.
+    assert ab["trip_count"] == 4
+    assert ab["trip_count_peak_am"] == 3
+    assert ab["trip_count_rest_of_day"] == 1
+    assert ab["travel_time_seconds_mean"] == 300
+    rows = schedule[(schedule["from_node"] == "A") & (schedule["to_node"] == "B")]
+    assert sorted(rows["trip_id"]) == [
+        "t2",
+        "tf@07:00:00",
+        "tf@07:20:00",
+        "tf@07:40:00",
+    ]
+    by_trip = rows.set_index("trip_id")
+    assert by_trip.loc["tf@07:20:00", "departure_time"] == "07:20:00"
+    assert by_trip.loc["tf@07:20:00", "travel_time_seconds"] == 300
+
+
+def test_frequency_trips_keep_the_template_times_between_stops(tmp_path):
+    # The template starts at 00:00; several windows; one past midnight.
+    feed = _frequency_feed(
+        tmp_path,
+        ["tf,08:00:00,08:30:00,900", "tf,23:50:00,24:10:00,1200"],
+        template_start="00:00:00",
+    )
+    _, edges, schedule = _gtfs.normalize_gtfs_feed(
+        feed, dataset_name="ds", layer_id="ds"
+    )
+    bc = schedule[(schedule["from_node"] == "B") & (schedule["to_node"] == "C")]
+    # 08:00 and 08:15; 23:50 (24:10 is the end), all leaving B 5 min later.
+    assert sorted(bc["departure_time"]) == ["08:05:00", "08:20:00", "23:55:00"]
+    assert set(bc["travel_time_seconds"]) == {240}
+
+
+def test_unusable_frequency_rows_leave_the_template_as_a_trip(tmp_path):
+    feed = _frequency_feed(
+        tmp_path, ["tf,07:00:00,08:00:00,0", "tf,09:00:00,08:00:00,600"]
+    )
+    edges = _edges(feed)
+    assert edges.loc[("A", "B", "R1"), "trip_count"] == 2  # tf and t2
+
+
+def test_seconds_to_gtfs_time():
+    assert _gtfs.seconds_to_gtfs_time(0) == "00:00:00"
+    assert _gtfs.seconds_to_gtfs_time(25 * 3600 + 61) == "25:01:01"
+    assert _gtfs.seconds_to_gtfs_time(float("nan")) is None
