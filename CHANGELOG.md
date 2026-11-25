@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as `nothing_in_area`), a band size of 0 made every feed fail after
   the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
   periods went to the first one.
+- The trip counts of the GTFS edges (`trips` and its per-period and
+  weekday/weekend versions) are always whole numbers, empty where no trip runs;
+  a period without service used to make a column float (`1.0`) or text.
+- `stops` in `gtfs_report` counts the stops in the study area, as documented;
+  it also counted the stops just outside that end an edge crossing the boundary.
+- `isochrones()` and `shortest_path()` with thousands of points given as node
+  ids and coordinates mixed no longer slow down with the square of their number.
 - Files downloaded from the NAP are saved under a safe name: only the last part
   of the server's file name (so nothing is written outside `gtfs_zips/`), with
   unusual characters replaced and `.zip` at the end. Two files of one download

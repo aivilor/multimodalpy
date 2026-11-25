@@ -173,8 +173,9 @@ def snap_points(
     ids = pd.Index(matrix.nodes["node_id"])
 
     coordinates = [i for i, item in enumerate(items) if is_coordinate(item)]
+    is_point = set(coordinates)  # a set: thousands of points stay fast
     for i, item in enumerate(items):
-        if i in coordinates:
+        if i in is_point:
             continue
         position = ids.get_indexer([item])[0]
         if position < 0:

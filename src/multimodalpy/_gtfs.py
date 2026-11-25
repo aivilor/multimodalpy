@@ -1550,6 +1550,10 @@ def build_gtfs_stop_to_stop_edges_gdf(
         gdf["route_type"] = pd.to_numeric(gdf["route_type"], errors="coerce").astype(
             "Int64"
         )
+    # Trip counts are whole numbers, empty where no trip runs (a period
+    # without service used to make the column float, 1.0, or text).
+    for column in [col for col in gdf.columns if str(col).startswith("trip_count")]:
+        gdf[column] = pd.to_numeric(gdf[column], errors="coerce").astype("Int64")
     return gdf
 
 
@@ -2189,7 +2193,7 @@ def download_gtfs(
                 if "route_id" in stop_edges.columns
                 else None
             ),
-            stops=int(len(stops)),
+            stops=int(stops["in_area"].sum()) if "in_area" in stops else len(stops),
             edges=int(len(stop_edges)),
         )
         results[dataset_name] = {

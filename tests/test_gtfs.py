@@ -1491,3 +1491,30 @@ def test_stops_keep_their_station(tmp_path):
     assert "ST1" not in station.index  # the station itself is no stop of an edge
     plain, _, _ = _gtfs.normalize_gtfs_feed(path, dataset_name="ds", layer_id="ds")
     assert plain["station_id"].isna().all()  # no parent_station column at all
+
+
+def test_trip_counts_are_whole_numbers(feed):
+    edges = _edges(feed)
+    counts = [col for col in edges.columns if col.startswith("trip_count")]
+    assert len(counts) > 10
+    assert {str(edges[col].dtype) for col in counts} == {"Int64"}
+    assert pd.isna(edges.loc[("B", "C", "R2"), "trip_count_peak_am"])
+
+
+def test_the_report_counts_the_stops_in_the_area(tmp_path, feed):
+    import geopandas as gpd
+
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        report=report,
+        use_nap=False,
+        feeds={"ds": feed},
+    )
+    nodes = results["ds"]["nodes"]
+    assert not nodes["in_area"].all()  # an edge ends at a stop outside the area
+    assert report[0]["stops"] == int(nodes["in_area"].sum())

@@ -668,6 +668,13 @@ downloaded once.
 - In the **matrix** export, the routes between the same two stops are merged
   into one GTFS edge with the fastest time, and waiting times, frequencies and
   transfers are not modelled: a GTFS matrix gives in-vehicle travel times only.
+- With `gtfs_service_date`, the trips counted are those of that day's services,
+  including their times past midnight (`25:10:00` is 01:10 the next morning).
+  The trips of the previous day's services that run after midnight are not
+  counted on the date, as most GTFS tools do.
+- The OSM edges are one row per OSM way (see [OSM edges](#osm-edges)): an edge
+  merged from several ways is written once per way, so adding up `length`
+  counts it more than once.
 
 ## Abbreviations
 
