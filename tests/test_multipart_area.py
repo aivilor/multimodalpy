@@ -256,7 +256,7 @@ def test_download_network_connects_by_default_and_reports_unconnected_parts(
 def test_cli_connect_parts_flag(monkeypatch, argv, expected):
     captured = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
     _cli.main(["--area", "Donostia", *argv])
     assert captured["connect_parts"] is expected

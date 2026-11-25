@@ -45,11 +45,13 @@ from ._osm import OSM_NETWORK_TYPES, download_osm
 from ._overpass import OSMDownloadError
 from ._text import slugify
 from ._writers import (
+    MANIFEST_FILE,
     _gtfs_to_graph_json,
     _osm_layers_to_graph_json,
     _write_layers,
     _write_matrices,
     _write_schedule_tables,
+    write_manifest,
 )
 
 __all__ = [
@@ -223,12 +225,19 @@ def download_network(
         seconds) is computed automatically based on the mode (free-flow
         speed + stop penalty; see "Travel time" in ``DATA_SCHEMA.md``), so
         a constant speed parameter is no longer accepted for OSM.
-    gtfs_hour_band_size : int, optional
-        If set (e.g. 1), GTFS edges are computed per one-hour band (the
-        ``hour_band`` column), instead of a single aggregated weight.
+    gtfs_hour_band_size : int
+        Width in hours of the bands of the GTFS edges' hourly summary
+        (``h_tts`` and ``h_trips``, e.g. ``"07-08:300;08-09:420"``).
+        Defaults to 1; one of 1, 2, 3, 4, 6, 8, 12 or 24, so the bands
+        split the day evenly. It changes only that summary: the other
+        columns and the matrix weights are the same whatever the band size.
     gtfs_hour_range : (int, int), optional
         If set (e.g. (7, 9)), only GTFS trips whose departure falls in that
-        hour window are considered (useful for peak vs off-peak).
+        hour window are considered (useful for peak vs off-peak): from the
+        start hour (0 to 23) up to, not including, the end hour (0 to 24).
+        A range may cross midnight: ``(22, 2)`` keeps the departures from
+        22:00 to 01:59. Times past midnight in the feed (``25:10:00``)
+        count as that hour of the day (01).
     gtfs_peak_periods : dict, optional
         Peak periods for the per-column breakdown of the GTFS edges layer
         (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
@@ -236,7 +245,9 @@ def download_network(
         ``{"morning": (6, 9), "evening": (18, 21)}``, get a three-letter
         code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
         ``p1``, ``p2``... if the first three letters clash), listed in the
-        manifest's ``gtfs_period_codes``.
+        manifest's ``gtfs_period_codes``. Hours as in ``gtfs_hour_range``
+        (a period may cross midnight, ``{"night": (22, 6)}``); periods
+        cannot overlap.
     gtfs_service_date : str | datetime.date, optional
         Count the GTFS trips of this day only (``"2026-11-25"``,
         ``"20261125"`` or a ``datetime.date``): the trips whose service runs
@@ -254,7 +265,8 @@ def download_network(
         output folder, ``bus/<name>/``), or a list of sources, named after
         their files. A source is an http(s) address, downloaded into
         ``gtfs_zips/``, or a local GTFS zip or folder, e.g.
-        ``{"metrobus": "https://gvinterbus.gva.es/estatico/gtfs.zip"}``.
+        ``{"my_operator": "https://example.org/gtfs.zip"}``. Check that a
+        feed is not on the NAP already, or its routes appear twice.
         Without a NAP API key, the NAP is skipped with a ``UserWarning`` and
         only these feeds are used. Each one has a row in ``gtfs_report``
         with ``source="user"``.
@@ -309,7 +321,9 @@ def download_network(
     -------
     dict
         Manifest with the area (with its ``provinces`` and
-        ``municipalities``), the modes, the folder and the files written.
+        ``municipalities``), the modes, the folder and the files written,
+        also saved as ``manifest.json`` in ``output_dir`` (its
+        ``manifest_file``), with the ``multimodalpy_version`` that wrote it.
 
         ``gtfs_report`` (also written as ``gtfs_report.csv``) says what
         happened to every NAP dataset of the area's provinces and to every
@@ -360,7 +374,9 @@ def download_network(
             output_formats.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
-    # A malformed date fails before anything is downloaded.
+    # Wrong hour options fail before anything is downloaded.
+    _gtfs.check_hour_options(gtfs_hour_range, gtfs_hour_band_size, gtfs_peak_periods)
+    # So does a malformed date.
     service_date = (
         None
         if gtfs_service_date is None
@@ -495,7 +511,13 @@ def download_network(
         GTFS_EDGES_COLUMNS = _gtfs.gtfs_edge_columns(gtfs_peak_periods)
         gtfs_rename = _gtfs.gtfs_edge_rename(gtfs_peak_periods)
 
-        GTFS_NODES_COLUMNS = ["node_id", "stop_name", "in_area", "geometry"]
+        GTFS_NODES_COLUMNS = [
+            "node_id",
+            "stop_name",
+            "station_id",
+            "in_area",
+            "geometry",
+        ]
 
         for dataset, gtfs_out in gtfs_results.items():
             nodes_gdf = gtfs_out["nodes"]
@@ -548,8 +570,7 @@ def download_network(
     for file_type in output_formats:
         if file_type == "networkx":
             files_here: list[str] = []
-            # The boundary and the GTFS shapes layers are saved as
-            # supporting GeoJSON.
+            # The boundary is saved as supporting GeoJSON.
             boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )
@@ -594,6 +615,7 @@ def download_network(
                     area_name=area_name,
                     gtfs_peak_periods=gtfs_peak_periods,
                     gtfs_hour_range=gtfs_hour_range,
+                    gtfs_service_date=service_date,
                 )
             )
             files_here.extend(
@@ -626,7 +648,10 @@ def download_network(
         written.extend(files_here)
 
     area_row = boundary.iloc[0]
+    from . import __version__
+
     manifest: dict[str, Any] = {
+        "multimodalpy_version": __version__,
         "area_name": area_name,
         "boundaries_path": None if boundaries_path is None else str(boundaries_path),
         "provinces": [
@@ -685,6 +710,18 @@ def download_network(
                 UserWarning,
                 stacklevel=2,
             )
+        duplicates = [
+            f"{row['dataset']} ({row['error']})"
+            for row in gtfs_report_rows
+            if row["status"] == "duplicate"
+        ]
+        if duplicates:
+            warnings.warn(
+                f"{len(duplicates)} GTFS feed(s) repeat another one and were not "
+                "written: " + "; ".join(duplicates) + ".",
+                UserWarning,
+                stacklevel=2,
+            )
         no_service = [
             f"{row['dataset']} ({row['error']})"
             for row in gtfs_report_rows
@@ -728,4 +765,8 @@ def download_network(
                 UserWarning,
                 stacklevel=2,
             )
+    # Saved next to the data, so what the call did is still there after it
+    # (from the command line there is no returned dict to look at).
+    manifest["manifest_file"] = MANIFEST_FILE
+    write_manifest(manifest, output_dir)
     return manifest

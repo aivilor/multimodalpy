@@ -108,8 +108,8 @@ also written and a warning explains why there is no bus or train data
 
 ### Bus and train feeds from outside the NAP
 
-Some operators publish their GTFS elsewhere: València's MetroBus, for example,
-is on the Generalitat's open data portal, not on the NAP. Add such feeds with
+Some operators publish their GTFS somewhere other than the NAP, e.g. on their
+own website or on a regional open data portal. Add such feeds with
 `gtfs_feeds`, as addresses or local zips (or folders), named after their output
 folder:
 
@@ -117,15 +117,22 @@ folder:
 manifest = mmp.download_network(
     boundaries_path="pateval.geojson",
     modes=["bus"],
-    gtfs_feeds={"metrobus": "https://gvinterbus.gva.es/estatico/gtfs.zip"},
+    gtfs_feeds={"my_operator": "https://example.org/gtfs.zip"},
 )
 ```
 
-They are processed like the NAP's feeds (`bus/metrobus/`) and listed in
+They are processed like the NAP's feeds (`bus/my_operator/`) and listed in
 `gtfs_report.csv` with `source = user`. A list of sources works too, each named
 after its file. Without a NAP key, only these feeds are used. In the command
-line: `--gtfs-feed metrobus=https://gvinterbus.gva.es/estatico/gtfs.zip`
-(repeat it for several).
+line: `--gtfs-feed my_operator=https://example.org/gtfs.zip` (repeat it for
+several).
+
+Check first that the feed is not already on the NAP: the Generalitat
+Valenciana's interurban bus GTFS on `gvinterbus.gva.es`, for example, is the
+same as the NAP's dataset 1325 (`genvalenciana_interurbano`). A feed of
+`gtfs_feeds` with the same routes between the same stops in the area as one
+already written is not written again: `gtfs_report.csv` lists it as
+`duplicate`, naming the feed it repeats, and a warning says so.
 
 ### Your own study area
 
@@ -162,8 +169,18 @@ multimodalpy --area Valencia --modes walking bus \
 multimodalpy --boundaries pateval.geojson --modes walking bus
 ```
 
-Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
-same way.
+It prints where the networks were written and what could not be, for
+instance:
+
+```text
+Written to output/ (details in manifest.json)
+  streets: walking
+  bus/train: 2 feed(s): emt_valencia, metrovalencia
+```
+
+Periods of your own for the GTFS columns are given with `--gtfs-peak-period
+morning=7-10` (repeat it for several). Run `multimodalpy --help` for every
+option. `python -m multimodalpy` works the same way.
 
 ### Streets: the Overpass server
 
@@ -326,12 +343,13 @@ paths and is much faster.
 | `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
 | `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
-| `gtfs_hour_range` | `None` | Only keep trips in an hour window, e.g. `(7, 9)`. |
+| `gtfs_hour_range` | `None` | Only keep trips leaving in an hour window, e.g. `(7, 9)`; it may cross midnight, `(22, 2)`. |
 | `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: address or local zip}` (see "Bus and train feeds from outside the NAP"). |
 | `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
 
 `download_network()` writes the files and returns a manifest (a dictionary
-listing them).
+listing them and what happened to every network), also saved as
+`manifest.json` in the output folder.
 
 ## The library
 

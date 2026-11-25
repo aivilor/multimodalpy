@@ -2,21 +2,18 @@
 
 Private module: the public entry point is ``multimodalpy.network``.
 
-This module has three parts:
+This module has two parts:
 
 1. Standardization: turns a GTFS feed (zip or folder) into GeoPandas
-   layers -- ``nodes_stops`` (stops as points), ``edges`` (stop-to-stop
-   edges with travel time and an hour-band breakdown),
-   ``edges_shapes_reference`` (route geometry from shapes.txt), and
-   ``schedule`` (a flat, non-spatial table with one record per trip and
-   segment, for anyone who needs the full schedule detail without losing
-   granularity).
-2. Bus + train cleanup: snapping stops onto the route geometry and
-   splitting the route lines into segments between consecutive stops, to
-   get a coherent stop-segment-stop topology.
-3. Download: ``download_gtfs`` fetches the feeds of a study area
-   from the NAP (see ``_nap``) and standardizes each one. The short column
-   names of the edge layer (``GTFS_EDGE_RENAME``) are also defined here.
+   layers -- ``nodes`` (the stops the edges use, as points), ``edges``
+   (straight stop-to-stop edges, one per route and pair of consecutive
+   stops, with travel times and trip counts overall, per period and per
+   hour band) and ``schedule`` (a flat, non-spatial table with one record
+   per trip and edge, for anyone who needs the full schedule detail).
+2. Download: ``download_gtfs`` fetches the feeds of a study area
+   from the NAP (see ``_nap``) and the ``gtfs_feeds`` of the user, and
+   standardizes each one. The short column names of the edge layer
+   (``GTFS_EDGE_RENAME``) are also defined here.
 
 No file is written here; that's done by ``_writers``.
 """
@@ -25,11 +22,12 @@ from __future__ import annotations
 
 import datetime
 import logging
+import numbers
 import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zipfile import BadZipFile, ZipFile
 
 if TYPE_CHECKING:
@@ -250,6 +248,111 @@ def seconds_to_gtfs_time(seconds) -> str | None:
     return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
 
 
+#: Band sizes that split the day into equal bands (``gtfs_hour_band_size``).
+HOUR_BAND_SIZES = (1, 2, 3, 4, 6, 8, 12, 24)
+
+
+def hour_in_range(hour, start: int, end: int):
+    """Whether ``hour`` (0-23, a number or a Series) is in ``[start, end)``.
+
+    A range that crosses midnight, such as ``(22, 2)``, holds 22, 23, 0 and
+    1. ``end`` may be 24 (the end of the day), and ``0`` means the same.
+    """
+    if start < end:
+        return (hour >= start) & (hour < end)
+    return (hour >= start) | (hour < end)
+
+
+def _check_hours(value: object, what: str) -> tuple[int, int]:
+    """Return ``value`` as ``(start, end)`` hours, or raise a clear ``ValueError``."""
+    start: Any
+    end: Any
+    try:
+        start, end = value  # type: ignore[misc]
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{what} must be two hours (start, end), e.g. (7, 9). Received: {value!r}"
+        ) from None
+    for hour in (start, end):
+        if isinstance(hour, bool) or not isinstance(hour, numbers.Integral):
+            raise ValueError(
+                f"{what}: hours must be whole numbers. Received: {value!r}"
+            )
+    if not 0 <= start <= 23 or not 0 <= end <= 24:
+        raise ValueError(
+            f"{what}: the start must be an hour from 0 to 23 and the end from 0 "
+            f"to 24. Received: {value!r}"
+        )
+    if start == end % 24:
+        raise ValueError(
+            f"{what}: start and end are the same hour, so the range is empty "
+            f"or the whole day (for the whole day, leave it out). "
+            f"Received: {value!r}"
+        )
+    return int(start), int(end)
+
+
+def check_hour_options(
+    hour_range: object = None,
+    hour_band_size: object = 1,
+    peak_periods: object = None,
+) -> None:
+    """Check the GTFS hour options before anything is downloaded.
+
+    - ``hour_range``: ``None`` or ``(start, end)`` whole hours, the start
+      from 0 to 23 and the end from 0 to 24; it may cross midnight
+      (``(22, 2)``).
+    - ``hour_band_size``: hours per band of the hourly summary, one of
+      ``HOUR_BAND_SIZES`` so the bands split the day evenly.
+    - ``peak_periods``: ``None`` or ``{name: (start, end)}`` with the same
+      hours as ``hour_range`` (a period may cross midnight too), names that
+      are text and not ``rest_of_day``, and no hour in two periods.
+
+    Raises ``ValueError`` saying what is wrong.
+    """
+    if hour_range is not None:
+        _check_hours(hour_range, "gtfs_hour_range")
+    if (
+        isinstance(hour_band_size, bool)
+        or not isinstance(hour_band_size, numbers.Integral)
+        or hour_band_size not in HOUR_BAND_SIZES
+    ):
+        sizes = ", ".join(map(str, HOUR_BAND_SIZES))
+        raise ValueError(
+            "gtfs_hour_band_size must split the day into equal bands: one of "
+            f"{sizes} hours. Received: {hour_band_size!r}"
+        )
+    if peak_periods is None:
+        return
+    if not isinstance(peak_periods, Mapping) or not peak_periods:
+        raise ValueError(
+            "gtfs_peak_periods must be a dict {name: (start, end)}, e.g. "
+            f"{{'morning': (7, 9)}}. Received: {peak_periods!r}"
+        )
+    owner: dict[int, str] = {}
+    for name, hours in peak_periods.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                f"gtfs_peak_periods: names must be text. Received: {name!r}"
+            )
+        if name == "rest_of_day":
+            raise ValueError(
+                "gtfs_peak_periods: 'rest_of_day' is the name of the hours outside "
+                "every period; choose another name."
+            )
+        start, end = _check_hours(hours, f"gtfs_peak_periods[{name!r}]")
+        for hour in range(24):
+            if not hour_in_range(hour, start, end):
+                continue
+            if hour in owner:
+                raise ValueError(
+                    f"gtfs_peak_periods: {owner[hour]!r} and {name!r} both "
+                    f"include the hour {hour:02d}-{hour + 1:02d}; periods "
+                    "cannot overlap."
+                )
+            owner[hour] = name
+
+
 def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
     """Group seconds-since-midnight into an hour band like '08-09'."""
     import math
@@ -278,7 +381,7 @@ def classify_period(
     peak_periods = peak_periods or DEFAULT_PEAK_PERIODS
     hour = int((seconds // 3600) % 24)
     for name, (start, end) in peak_periods.items():
-        if start <= hour < end:
+        if hour_in_range(hour, start, end):
             return name
     return "rest_of_day"
 
@@ -400,6 +503,14 @@ def build_gtfs_stops_gdf(
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["node_id"] = gdf["stop_id"]
+    # The station a stop (a platform, say) belongs to, for transfers
+    # between the stops of one station; empty when it has none.
+    station = (
+        gdf["parent_station"]
+        if "parent_station" in gdf.columns
+        else pd.Series(pd.NA, index=gdf.index, dtype=object)
+    )
+    gdf["station_id"] = station.where(station.notna() & (station != ""), None)
     gdf["source_name"] = dataset_name
     gdf["node_type"] = "stop"
     return gdf
@@ -441,6 +552,97 @@ def _gtfs_dates(values: pd.Series) -> pd.Series:
     import pandas as pd
 
     return pd.to_datetime(values, format="%Y%m%d", errors="coerce").dt.date
+
+
+def service_date_counts(
+    calendar: pd.DataFrame | None,
+    calendar_dates: pd.DataFrame | None,
+) -> pd.Series:
+    """Count the dates each service runs on, indexed by ``service_id``.
+
+    As the GTFS reference defines the dates of a service: the days of the
+    week ``calendar.txt`` marks between its ``start_date`` and
+    ``end_date``, plus the dates ``calendar_dates.txt`` adds
+    (``exception_type`` 1), minus the ones it removes (2). A date added
+    that was already in the pattern, or removed that wasn't, changes
+    nothing. Services with no date are left out. Counted without listing
+    the dates, so a feed with thousands of services takes no time.
+    """
+    import numpy as np
+    import pandas as pd
+
+    weekdays = list(_WEEKDAY_COLUMNS)
+    needed = {"service_id", "start_date", "end_date", *weekdays}
+    if calendar is not None and needed <= set(calendar.columns):
+        cal = calendar.drop_duplicates("service_id").assign(
+            _start=pd.to_datetime(
+                calendar["start_date"], format="%Y%m%d", errors="coerce"
+            ),
+            _end=pd.to_datetime(calendar["end_date"], format="%Y%m%d", errors="coerce"),
+        )
+        cal = cal[cal["_start"].notna() & (cal["_end"] >= cal["_start"])]
+        flags = cal[weekdays].apply(pd.to_numeric, errors="coerce").to_numpy() == 1
+        # Dates of each day of the week in [start, end]: one per full week,
+        # plus one if it falls in the days left over after them.
+        days = (cal["_end"] - cal["_start"]).dt.days.to_numpy() + 1
+        first = cal["_start"].dt.day_of_week.to_numpy()
+        offset = (np.arange(7)[None, :] - first[:, None]) % 7
+        per_day = days[:, None] // 7 + (offset < (days % 7)[:, None])
+        pattern = pd.Series((per_day * flags).sum(axis=1), index=cal["service_id"])
+    else:
+        cal = pd.DataFrame(columns=["service_id", "_start", "_end", *weekdays])
+        flags = np.zeros((0, 7), dtype=bool)
+        pattern = pd.Series(dtype="int64")
+    counts = pattern.astype("int64")
+
+    if calendar_dates is not None and {"service_id", "date", "exception_type"} <= set(
+        calendar_dates.columns
+    ):
+        exceptions = calendar_dates.assign(
+            _date=pd.to_datetime(
+                calendar_dates["date"], format="%Y%m%d", errors="coerce"
+            ),
+            _kind=pd.to_numeric(calendar_dates["exception_type"], errors="coerce"),
+        )
+        exceptions = exceptions[
+            exceptions["_date"].notna() & exceptions["_kind"].isin([1, 2])
+        ]
+        # One row per service and date: added, removed (removing wins if a
+        # feed does both, as when the dates are listed and then dropped).
+        exceptions = (
+            exceptions.assign(
+                _added=exceptions["_kind"] == 1, _removed=exceptions["_kind"] == 2
+            )
+            .groupby(["service_id", "_date"], as_index=False)[["_added", "_removed"]]
+            .any()
+        )
+        # Whether each exception's date is already in its service's pattern.
+        ranges = pd.DataFrame(
+            {
+                "service_id": cal["service_id"],
+                "_start": cal["_start"],
+                "_end": cal["_end"],
+            }
+        ).reset_index(drop=True)
+        ranges["_row"] = np.arange(len(ranges))
+        found = exceptions.merge(ranges, on="service_id", how="left")
+        weekday = found["_date"].dt.day_of_week.to_numpy()
+        row = found["_row"].to_numpy(dtype=float)
+        has_row = ~np.isnan(row)
+        in_pattern = np.zeros(len(found), dtype=bool)
+        rows = row[has_row].astype(int)
+        date = found["_date"].to_numpy()[has_row]
+        in_pattern[has_row] = (
+            flags[rows, weekday[has_row]]
+            & (date >= found["_start"].to_numpy()[has_row])
+            & (date <= found["_end"].to_numpy()[has_row])
+        )
+        runs = (in_pattern | found["_added"].to_numpy()) & ~found["_removed"].to_numpy()
+        change = runs.astype(int) - in_pattern.astype(int)
+        delta = pd.Series(change, index=found["service_id"]).groupby(level=0).sum()
+        counts = counts.add(delta, fill_value=0).astype("int64")
+    counts.index.name = "service_id"
+    return counts[counts > 0]
 
 
 def active_service_ids(
@@ -541,7 +743,8 @@ def _attach_service_days(
 ) -> pd.DataFrame:
     """Add columns to ``trips`` describing which days the service runs.
 
-    - ``days_active``: number of days/week with service (a count, as before).
+    - ``days_active``: number of dates the service runs on, from
+      :func:`service_date_counts`.
     - ``active_days_of_week``: text like ``"friday|monday|thursday"`` with
       the specific days of the week the service is active on.
     - ``runs_weekday`` / ``runs_weekend``: booleans, ``True`` if the service
@@ -572,7 +775,6 @@ def _attach_service_days(
     trips = trips.copy()
 
     # --- Info declared in calendar.txt (if it exists) ---
-    cal_days_active = pd.Series(dtype="float64")
     cal_dow = pd.Series(dtype="object")
     cal_runs_weekday = pd.Series(dtype="boolean")
     cal_runs_weekend = pd.Series(dtype="boolean")
@@ -581,14 +783,12 @@ def _attach_service_days(
         cal = calendar.copy()
         for col in all_day_cols:
             cal[col] = pd.to_numeric(cal[col], errors="coerce").fillna(0)
-        cal["days_active"] = cal[all_day_cols].sum(axis=1)
         cal["active_days_of_week"] = cal[all_day_cols].apply(
             lambda row: "|".join(day for day in _WEEKDAY_ORDER if row[day] == 1), axis=1
         )
         cal["runs_weekday"] = cal[weekday_cols].sum(axis=1) > 0
         cal["runs_weekend"] = cal[weekend_cols].sum(axis=1) > 0
         cal = cal.drop_duplicates(subset=["service_id"]).set_index("service_id")
-        cal_days_active = cal["days_active"]
         cal_dow = cal["active_days_of_week"]
         cal_runs_weekday = cal["runs_weekday"].astype("boolean")
         cal_runs_weekend = cal["runs_weekend"].astype("boolean")
@@ -604,8 +804,6 @@ def _attach_service_days(
         ].index
     )
 
-    added_counts = pd.Series(dtype="float64")
-    removed_counts = pd.Series(dtype="float64")
     inferred_dow = pd.Series(dtype="object")
     inferred_runs_weekday = pd.Series(dtype="boolean")
     inferred_runs_weekend = pd.Series(dtype="boolean")
@@ -613,8 +811,6 @@ def _attach_service_days(
     if calendar_dates is not None and "exception_type" in calendar_dates.columns:
         cd = calendar_dates.copy()
         cd["exception_type"] = pd.to_numeric(cd["exception_type"], errors="coerce")
-        added_counts = cd[cd["exception_type"] == 1].groupby("service_id").size()
-        removed_counts = cd[cd["exception_type"] == 2].groupby("service_id").size()
 
         # Days of the week inferred from the added dates
         # (exception_type == 1). Used for "weak" services: those absent
@@ -644,16 +840,8 @@ def _attach_service_days(
                     .astype("boolean")
                 )
 
-    # ``days_active``: count declared in calendar.txt, plus the dates
-    # added and minus the dates removed in calendar_dates.txt (if a
-    # service is "weak" in calendar.txt, cal_days_active is 0 and the
-    # result ends up as the plain count of dates from calendar_dates.txt).
-    service_days = cal_days_active.add(added_counts, fill_value=0).sub(
-        removed_counts, fill_value=0
-    )
-    service_days = (
-        service_days.clip(lower=0) if not service_days.empty else service_days
-    )
+    # ``days_active``: how many dates the service runs on.
+    service_days = service_date_counts(calendar, calendar_dates)
 
     # ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend``: for
     # "strong" services (a real weekly pattern in calendar.txt) that
@@ -909,7 +1097,7 @@ def _build_stop_to_stop_trip_records(
     if hour_range is not None:
         start_h, end_h = hour_range
         hour_of_day = (work["departure_seconds"] // 3600) % 24
-        work = work[(hour_of_day >= start_h) & (hour_of_day < end_h)].copy()
+        work = work[hour_in_range(hour_of_day, start_h, end_h)].copy()
 
     stop_lookup = stops[["stop_id", "stop_name", "stop_lat", "stop_lon"]].copy()
     stop_lookup["stop_lat"] = pd.to_numeric(stop_lookup["stop_lat"], errors="coerce")
@@ -1080,20 +1268,19 @@ def _period_pivot_columns(
         aggregations["travel_time_seconds_median"] = ("travel_time_seconds", "median")
     period_rows = rows.dropna(subset=["period"])
     if not period_rows.empty:
-        period_grouped = (
-            period_rows.groupby(group_cols + ["period"], dropna=False)
-            .agg(**aggregations)
-            .reset_index()
-        )
-        pivoted = period_grouped.pivot_table(
-            index=group_cols,
-            columns="period",
-            values=metrics,
-        )
-        pivoted.columns = [
-            f"{metric}_{period}{suffix}" for metric, period in pivoted.columns
+        # Pivot on a number per group, not on the grouping columns:
+        # ``pivot_table`` drops every group with an empty key, so the edges
+        # of a route without ``route_short_name`` (GTFS only asks for a
+        # short or a long name) lost all their per-period columns.
+        group = period_rows.groupby(group_cols, dropna=False, sort=False).ngroup()
+        period_rows = period_rows.assign(_group=group)
+        period_grouped = period_rows.groupby(["_group", "period"]).agg(**aggregations)
+        values = period_grouped[metrics].unstack("period")
+        values.columns = [
+            f"{metric}_{period}{suffix}" for metric, period in values.columns
         ]
-        pivoted = pivoted.reset_index()
+        keys = period_rows.drop_duplicates("_group").set_index("_group")[group_cols]
+        pivoted = keys.join(values).reset_index(drop=True)
     else:
         pivoted = pd.DataFrame(columns=group_cols)
 
@@ -1357,6 +1544,16 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["edge_id"] = _edge_ids(dataset_name, gdf)
+    if "route_type" in gdf.columns:
+        # A number, as in the GTFS reference (3 bus, 1 metro, 109 suburban
+        # rail...): a feed can mix modes, and each edge keeps its own.
+        gdf["route_type"] = pd.to_numeric(gdf["route_type"], errors="coerce").astype(
+            "Int64"
+        )
+    # Trip counts are whole numbers, empty where no trip runs (a period
+    # without service used to make the column float, 1.0, or text).
+    for column in [col for col in gdf.columns if str(col).startswith("trip_count")]:
+        gdf[column] = pd.to_numeric(gdf[column], errors="coerce").astype("Int64")
     return gdf
 
 
@@ -1602,6 +1799,7 @@ def gtfs_edge_columns(
         "route_id",
         "route_short_name",
         "route_long_name",
+        "route_type",
         "trip_count",
         "travel_time_seconds_mean",
         "travel_time_seconds_median",
@@ -1725,23 +1923,39 @@ def _feed_file_name(source: str) -> str:
     return Path(path.rstrip("/")).name or "gtfs"
 
 
+def edge_network_key(edges: pd.DataFrame) -> frozenset[tuple[str, str, str]]:
+    """Return the network an edges layer describes: its ``(route_id, from, to)``.
+
+    Two feeds with the same key give the same routes between the same
+    stops in the area, whatever their file, dates covered or trips: one
+    repeats the other. Empty for a layer without edges.
+    """
+    if edges.empty or not {"route_id", "from_node", "to_node"} <= set(edges.columns):
+        return frozenset()
+    rows = edges[["route_id", "from_node", "to_node"]].astype(str)
+    return frozenset(rows.itertuples(index=False, name=None))
+
+
 def _fetch_user_feeds(
     sources: list[tuple[str | None, str]],
     zip_dir: Path,
     report: list[dict[str, object]],
+    taken: Iterable[str] = (),
 ) -> list[tuple[Path, str | None, dict[str, object] | None]]:
     """Download the ``gtfs_feeds`` addresses into ``zip_dir``; keep local paths.
 
     Returns ``(path, name, report row)`` per feed obtained. Every feed gets a
     report row with ``source`` ``"user"``; a download that fails is
-    ``failed``, with the error, and is not returned.
+    ``failed``, with the error, and is not returned. ``taken`` are the file
+    stems already in use (the NAP's zips of this download), which a feed is
+    numbered to avoid rather than overwrite.
     """
     import requests
 
     from ._overpass import user_agent
 
     fetched: list[tuple[Path, str | None, dict[str, object] | None]] = []
-    files_taken: set[str] = set()
+    files_taken: set[str] = set(taken)
     for name, source in sources:
         file_name = _feed_file_name(source)
         row: dict[str, object] = {
@@ -1793,10 +2007,10 @@ def download_gtfs(
     feeds: GTFSFeeds | None = None,
     use_nap: bool = True,
 ) -> dict[str, dict[str, object]]:
-    """Download NAP GTFS data and returns normalized layers per dataset.
+    """Download NAP GTFS data and return normalized layers per dataset.
 
-    Returns ``{dataset: {"nodes_stops": gdf, "edges": gdf,
-    "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
+    Returns ``{dataset: {"nodes": gdf, "edges": gdf, "schedule": DataFrame
+    | None, "mode": "bus" | "train"}}`` (see :func:`normalize_gtfs_feed`).
 
     ``province_codes`` are the INE codes of the provinces whose feeds are
     downloaded; if not given, they're taken from the ``boundary``'s
@@ -1845,6 +2059,7 @@ def download_gtfs(
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    check_hour_options(hour_range, hour_band_size, peak_periods)
     sources = user_feed_sources(feeds)
     report_rows: list[dict[str, object]] = [] if report is None else report
     zips: list[Path] = []
@@ -1866,7 +2081,9 @@ def download_gtfs(
     feed_files: list[tuple[Path, str | None, dict[str, object] | None]] = [
         (Path(path), None, by_path.get(str(path))) for path in zips
     ]
-    feed_files += _fetch_user_feeds(sources, Path(zip_dir), report_rows)
+    feed_files += _fetch_user_feeds(
+        sources, Path(zip_dir), report_rows, taken={path.stem for path in zips}
+    )
 
     def outcome(
         zip_path: Path, row: dict[str, object] | None, **fields: object
@@ -1884,6 +2101,9 @@ def download_gtfs(
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     taken: set[str] = set()
+    # The network of each feed written so far, to spot a feed that repeats
+    # one (e.g. a gtfs_feeds address that serves a NAP dataset).
+    networks: dict[frozenset[tuple[str, str, str]], str] = {}
     for zip_path, given_name, row in feed_files:
         dataset_name = (
             _unique_name(slugify(given_name), taken)
@@ -1940,6 +2160,28 @@ def download_gtfs(
                 error=f"{type(exc).__name__}: {exc}",
             )
             continue
+        # Only a feed of gtfs_feeds is skipped: the NAP's are what the NAP
+        # lists, and come first.
+        network_key = edge_network_key(stop_edges)
+        from_user = row is not None and row.get("source") == "user"
+        if from_user and network_key and network_key in networks:
+            same = networks[network_key]
+            logger.warning(
+                "Skipping feed %s: it has the same routes and stops in the area as %s.",
+                zip_path.name,
+                same,
+            )
+            outcome(
+                zip_path,
+                row,
+                dataset=dataset_name,
+                mode=mode,
+                status="duplicate",
+                error=f"same routes and stops in the area as {same}",
+            )
+            continue
+        if network_key:
+            networks[network_key] = dataset_name
         outcome(
             zip_path,
             row,
@@ -1951,7 +2193,7 @@ def download_gtfs(
                 if "route_id" in stop_edges.columns
                 else None
             ),
-            stops=int(len(stops)),
+            stops=int(stops["in_area"].sum()) if "in_area" in stops else len(stops),
             edges=int(len(stop_edges)),
         )
         results[dataset_name] = {

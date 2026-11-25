@@ -548,6 +548,26 @@ def test_download_network_rejects_unknown_mode(tmp_path):
         network.download_network("Valencia", modes=["helicopter"], output_dir=tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("option", "match"),
+    [
+        ({"gtfs_hour_range": (9, 9)}, "same hour"),
+        ({"gtfs_hour_range": (7, 25)}, "from 0 to 24"),
+        ({"gtfs_hour_band_size": 0}, "equal bands"),
+        ({"gtfs_hour_band_size": 5}, "equal bands"),
+        ({"gtfs_peak_periods": {"a": (7, 10), "b": (9, 11)}}, "cannot overlap"),
+    ],
+)
+def test_download_network_checks_the_hour_options_first(
+    backends, tmp_path, option, match
+):
+    with pytest.raises(ValueError, match=match):
+        network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path, **option
+        )
+    assert backends["osm"] == [] and backends["gtfs"] == []
+
+
 # ---------------------------------------------------------------------------
 # main(): OSM only
 # ---------------------------------------------------------------------------
@@ -968,7 +988,7 @@ def test_download_network_matrix_skips_networks_without_edges(tmp_path, backends
 def test_cli_accepts_the_matrix_format(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia", "--formats", "matrix"])
@@ -1207,7 +1227,7 @@ def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
 def test_cli_forwards_arguments_to_main(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(
@@ -1238,7 +1258,7 @@ def test_cli_forwards_arguments_to_main(monkeypatch):
 def test_cli_defaults(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia"])
@@ -1453,7 +1473,7 @@ def test_download_network_passes_the_overpass_options(tmp_path, backends):
 def test_cli_forwards_the_overpass_options(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
     _cli.main(
         [
@@ -1472,7 +1492,7 @@ def test_cli_forwards_the_overpass_options(monkeypatch):
 def test_cli_accepts_a_boundaries_file_without_area(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
     _cli.main(["--boundaries", "pateval.geojson", "--modes", "bus"])
     assert captured["area_name"] is None
@@ -1643,6 +1663,76 @@ def test_nap_downloads_every_province_once_per_file(tmp_path, nap_two_provinces)
     assert report["province_code"].tolist() == [46, 46, 12]
 
 
+@pytest.mark.parametrize(
+    ("name", "taken", "expected"),
+    [
+        ("20261119_030028_EMT.zip", set(), "20261119_030028_EMT.zip"),
+        ("../../etc/feed.zip", set(), "feed.zip"),
+        ("C:\\data\\feed.zip", set(), "feed.zip"),
+        ("Metro València (GTFS).zip", set(), "Metro_València__GTFS_.zip"),
+        ("google_transit", set(), "google_transit.zip"),
+        ("google_transit.ZIP", set(), "google_transit.zip"),
+        ("", set(), "nap_gtfs_77.zip"),
+        (None, set(), "nap_gtfs_77.zip"),
+        ("...", set(), "nap_gtfs_77.zip"),
+        ("gtfs.zip", {"gtfs.zip"}, "gtfs_77.zip"),
+        ("gtfs.zip", {"gtfs.zip", "gtfs_77.zip"}, "gtfs_77_2.zip"),
+    ],
+)
+def test_nap_file_names_are_safe_and_unique(name, taken, expected):
+    taken = set(taken)
+    assert _nap.local_file_name(name, 77, taken) == expected
+    assert expected in taken
+
+
+def test_nap_files_with_the_same_name_do_not_overwrite_each_other(
+    tmp_path, monkeypatch
+):
+    import requests
+
+    datasets = [
+        {
+            "id": 1,
+            "nombre": "A",
+            "tiposTransporte": [{"id": 1}],
+            "ficheros": [{"id": 10}],
+        },
+        {
+            "id": 2,
+            "nombre": "B",
+            "tiposTransporte": [{"id": 1}],
+            "ficheros": [{"id": 20}],
+        },
+    ]
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/conjunto-dato/region/" in url:
+            return _Response(payload={"data": datasets})
+        if "/fichero/" in url:
+            file_id = url.split("/fichero/")[1].split("/")[0]
+            return _Response(
+                payload={
+                    "data": {
+                        "enlaceDescarga": f"https://files.example/{file_id}",
+                        "nombreFichero": "../google_transit.zip",
+                    }
+                }
+            )
+        response = _Response()
+        response.content = url.encode()  # each file its own content
+        return response
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    zips = _nap.download_gtfs_nap_zips("X", tmp_path, modes=[1], province_codes=[46])
+    assert [path.name for path in zips] == [
+        "google_transit.zip",
+        "google_transit_20.zip",
+    ]
+    assert all(path.parent == tmp_path for path in zips)
+    assert zips[0].read_bytes() != zips[1].read_bytes()
+    assert not (tmp_path.parent / "google_transit.zip").exists()
+
+
 def test_nap_province_without_datasets_is_skipped(tmp_path, nap_two_provinces):
     zips = _nap.download_gtfs_nap_zips(
         "AMV", tmp_path, modes=[1], province_codes=[1, 46, 46]
@@ -1747,7 +1837,7 @@ def test_download_network_without_key_warns_before_downloading_and_skips_gtfs(
 def test_cli_forwards_api_key(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia", "--api-key", "secret"])
@@ -1826,7 +1916,7 @@ def test_feeds_without_service_that_day_raise_a_warning(tmp_path, backends):
 def test_cli_passes_the_service_date(monkeypatch):
     received = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: received.update(kwargs)
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
     )
     _cli.main(
         ["--area", "Valencia", "--modes", "bus", "--gtfs-service-date", "2026-11-25"]
@@ -1949,7 +2039,167 @@ def test_a_user_feed_that_fails_raises_a_warning(tmp_path, backends):
 def test_cli_passes_the_gtfs_feeds(monkeypatch, args, expected):
     received = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: received.update(kwargs)
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
     )
     _cli.main(["--area", "Valencia", "--modes", "bus", *args])
     assert received["gtfs_feeds"] == expected
+
+
+# ---------------------------------------------------------------------------
+# manifest.json and the command-line summary
+# ---------------------------------------------------------------------------
+def test_manifest_is_saved_next_to_the_data(tmp_path, backends):
+    import json
+
+    import numpy as np
+
+    from multimodalpy import __version__
+
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt", mode="bus", routes=np.int64(3)),
+        _row(964, "failed", error="404", routes=float("nan")),
+    ]
+    with pytest.warns(UserWarning, match="could not be used"):
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path, api_key="k"
+        )
+    assert manifest["manifest_file"] == "manifest.json"
+    assert manifest["multimodalpy_version"] == __version__
+    saved = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert saved["multimodalpy_version"] == __version__
+    assert saved["gtfs_datasets"] == ["emt"]
+    assert saved["gtfs_report"][0]["routes"] == 3  # a number, not "3"
+    assert saved["gtfs_report"][1]["routes"] is None  # NaN is null
+    assert saved["files"] == manifest["files"]
+    assert "manifest.json" not in manifest["files"]  # only the data files
+
+
+def test_json_ready_keeps_only_json_values():
+    import datetime
+    from pathlib import Path
+
+    import numpy as np
+
+    from multimodalpy._writers import _json_ready
+
+    value = {
+        "n": np.int64(2),
+        "x": np.float64(1.5),
+        "flag": np.bool_(True),
+        "nan": float("nan"),
+        "na": pd.NA,
+        "day": datetime.date(2026, 11, 25),
+        "path": Path("out") / "a.zip",
+        "items": (1, "a"),
+        3: "key",
+    }
+    assert _json_ready(value) == {
+        "n": 2,
+        "x": 1.5,
+        "flag": True,
+        "nan": None,
+        "na": None,
+        "day": "2026-11-25",
+        "path": str(Path("out") / "a.zip"),
+        "items": [1, "a"],
+        "3": "key",
+    }
+
+
+def test_cli_prints_what_was_written(monkeypatch, capsys):
+    manifest = {
+        "output_dir": "out",
+        "manifest_file": "manifest.json",
+        "osm_modes": ["walking", "coche"],
+        "failed_modes": {"driving": "HTTP 406"},
+        "gtfs_datasets": ["emt", "metro"],
+        "gtfs_report": [
+            {"status": "written", "dataset": "emt"},
+            {"status": "failed", "dataset_name": "NAP 964"},
+            {"status": "no_service_on_date", "dataset": "ouigo"},
+        ],
+    }
+    monkeypatch.setattr(network, "download_network", lambda **kwargs: manifest)
+    _cli.main(["--area", "Valencia"])
+    printed = capsys.readouterr().out
+    assert "Written to out/ (details in manifest.json)" in printed
+    assert "streets: walking\n" in printed
+    assert "bus/train: 2 feed(s): emt, metro" in printed
+    assert "not written: driving" in printed
+    assert "GTFS not used: NAP 964, ouigo" in printed
+
+
+def test_cli_passes_the_peak_periods(monkeypatch):
+    received: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
+    )
+    _cli.main(
+        [
+            "--area", "Valencia",
+            "--gtfs-peak-period", "morning=7-10",
+            "--gtfs-peak-period", "night=22-6",
+        ]
+    )  # fmt: skip
+    assert received["gtfs_peak_periods"] == {"morning": (7, 10), "night": (22, 6)}
+    _cli.main(["--area", "Valencia"])
+    assert received["gtfs_peak_periods"] is None
+
+
+@pytest.mark.parametrize(
+    "values",
+    [["morning"], ["morning=7"], ["morning=7-9", "morning=8-10"], ["=7-9"]],
+)
+def test_cli_rejects_badly_written_peak_periods(monkeypatch, capsys, values):
+    monkeypatch.setattr(network, "download_network", lambda **kwargs: {})
+    args = ["--area", "Valencia"]
+    for value in values:
+        args += ["--gtfs-peak-period", value]
+    with pytest.raises(SystemExit):
+        _cli.main(args)
+    assert "--gtfs-peak-period" in capsys.readouterr().err
+
+
+def test_a_repeated_feed_is_reported_with_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"genvalenciana": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(1325, "written", dataset="genvalenciana", mode="bus"),
+        {
+            "source": "user",
+            "dataset_name": "interurbano",
+            "file_name": "gtfs.zip",
+            "status": "duplicate",
+            "dataset": "interurbano",
+            "mode": "bus",
+            "error": "same routes and stops in the area as genvalenciana",
+        },
+    ]
+    with pytest.warns(UserWarning, match="1 GTFS feed\\(s\\) repeat another one"):
+        manifest = network.download_network(
+            "Valencia", modes=["bus"], output_dir=tmp_path, api_key="k"
+        )
+    assert manifest["gtfs_datasets"] == ["genvalenciana"]
+    assert manifest["gtfs_report"][1]["status"] == "duplicate"
+
+
+def test_gtfs_layers_keep_route_type_station_and_service_date(tmp_path, backends):
+    result = make_gtfs_result("bus")
+    result["nodes"]["station_id"] = ["ST1", None]
+    result["edges"]["route_type"] = pd.array([3], dtype="Int64")
+    backends["gtfs_result"] = {"emt": result}
+    network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="k",
+        formats=["geojson", "shapefile", "matrix"],
+        gtfs_service_date="2026-11-25",
+    )
+    for suffix in ("geojson", "shp"):
+        nodes = gpd.read_file(tmp_path / "bus" / "emt" / f"nodes.{suffix}")
+        edges = gpd.read_file(tmp_path / "bus" / "emt" / f"edges.{suffix}")
+        assert nodes["station_id"].tolist()[0] == "ST1"
+        assert edges["route_type"].tolist() == [3]
+    matrix = multimodalpy.read_matrix(tmp_path / "bus" / "emt")
+    assert matrix.meta["gtfs_service_date"] == "2026-11-25"
