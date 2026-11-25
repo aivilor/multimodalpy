@@ -546,6 +546,97 @@ def _gtfs_dates(values: pd.Series) -> pd.Series:
     return pd.to_datetime(values, format="%Y%m%d", errors="coerce").dt.date
 
 
+def service_date_counts(
+    calendar: pd.DataFrame | None,
+    calendar_dates: pd.DataFrame | None,
+) -> pd.Series:
+    """Count the dates each service runs on, indexed by ``service_id``.
+
+    As the GTFS reference defines the dates of a service: the days of the
+    week ``calendar.txt`` marks between its ``start_date`` and
+    ``end_date``, plus the dates ``calendar_dates.txt`` adds
+    (``exception_type`` 1), minus the ones it removes (2). A date added
+    that was already in the pattern, or removed that wasn't, changes
+    nothing. Services with no date are left out. Counted without listing
+    the dates, so a feed with thousands of services takes no time.
+    """
+    import numpy as np
+    import pandas as pd
+
+    weekdays = list(_WEEKDAY_COLUMNS)
+    needed = {"service_id", "start_date", "end_date", *weekdays}
+    if calendar is not None and needed <= set(calendar.columns):
+        cal = calendar.drop_duplicates("service_id").assign(
+            _start=pd.to_datetime(
+                calendar["start_date"], format="%Y%m%d", errors="coerce"
+            ),
+            _end=pd.to_datetime(calendar["end_date"], format="%Y%m%d", errors="coerce"),
+        )
+        cal = cal[cal["_start"].notna() & (cal["_end"] >= cal["_start"])]
+        flags = cal[weekdays].apply(pd.to_numeric, errors="coerce").to_numpy() == 1
+        # Dates of each day of the week in [start, end]: one per full week,
+        # plus one if it falls in the days left over after them.
+        days = (cal["_end"] - cal["_start"]).dt.days.to_numpy() + 1
+        first = cal["_start"].dt.day_of_week.to_numpy()
+        offset = (np.arange(7)[None, :] - first[:, None]) % 7
+        per_day = days[:, None] // 7 + (offset < (days % 7)[:, None])
+        pattern = pd.Series((per_day * flags).sum(axis=1), index=cal["service_id"])
+    else:
+        cal = pd.DataFrame(columns=["service_id", "_start", "_end", *weekdays])
+        flags = np.zeros((0, 7), dtype=bool)
+        pattern = pd.Series(dtype="int64")
+    counts = pattern.astype("int64")
+
+    if calendar_dates is not None and {"service_id", "date", "exception_type"} <= set(
+        calendar_dates.columns
+    ):
+        exceptions = calendar_dates.assign(
+            _date=pd.to_datetime(
+                calendar_dates["date"], format="%Y%m%d", errors="coerce"
+            ),
+            _kind=pd.to_numeric(calendar_dates["exception_type"], errors="coerce"),
+        )
+        exceptions = exceptions[
+            exceptions["_date"].notna() & exceptions["_kind"].isin([1, 2])
+        ]
+        # One row per service and date: added, removed (removing wins if a
+        # feed does both, as when the dates are listed and then dropped).
+        exceptions = (
+            exceptions.assign(
+                _added=exceptions["_kind"] == 1, _removed=exceptions["_kind"] == 2
+            )
+            .groupby(["service_id", "_date"], as_index=False)[["_added", "_removed"]]
+            .any()
+        )
+        # Whether each exception's date is already in its service's pattern.
+        ranges = pd.DataFrame(
+            {
+                "service_id": cal["service_id"],
+                "_start": cal["_start"],
+                "_end": cal["_end"],
+            }
+        ).reset_index(drop=True)
+        ranges["_row"] = np.arange(len(ranges))
+        found = exceptions.merge(ranges, on="service_id", how="left")
+        weekday = found["_date"].dt.day_of_week.to_numpy()
+        row = found["_row"].to_numpy(dtype=float)
+        has_row = ~np.isnan(row)
+        in_pattern = np.zeros(len(found), dtype=bool)
+        rows = row[has_row].astype(int)
+        date = found["_date"].to_numpy()[has_row]
+        in_pattern[has_row] = (
+            flags[rows, weekday[has_row]]
+            & (date >= found["_start"].to_numpy()[has_row])
+            & (date <= found["_end"].to_numpy()[has_row])
+        )
+        runs = (in_pattern | found["_added"].to_numpy()) & ~found["_removed"].to_numpy()
+        change = runs.astype(int) - in_pattern.astype(int)
+        delta = pd.Series(change, index=found["service_id"]).groupby(level=0).sum()
+        counts = counts.add(delta, fill_value=0).astype("int64")
+    counts.index.name = "service_id"
+    return counts[counts > 0]
+
+
 def active_service_ids(
     calendar: pd.DataFrame | None,
     calendar_dates: pd.DataFrame | None,
@@ -644,7 +735,8 @@ def _attach_service_days(
 ) -> pd.DataFrame:
     """Add columns to ``trips`` describing which days the service runs.
 
-    - ``days_active``: number of days/week with service (a count, as before).
+    - ``days_active``: number of dates the service runs on, from
+      :func:`service_date_counts`.
     - ``active_days_of_week``: text like ``"friday|monday|thursday"`` with
       the specific days of the week the service is active on.
     - ``runs_weekday`` / ``runs_weekend``: booleans, ``True`` if the service
@@ -675,7 +767,6 @@ def _attach_service_days(
     trips = trips.copy()
 
     # --- Info declared in calendar.txt (if it exists) ---
-    cal_days_active = pd.Series(dtype="float64")
     cal_dow = pd.Series(dtype="object")
     cal_runs_weekday = pd.Series(dtype="boolean")
     cal_runs_weekend = pd.Series(dtype="boolean")
@@ -684,14 +775,12 @@ def _attach_service_days(
         cal = calendar.copy()
         for col in all_day_cols:
             cal[col] = pd.to_numeric(cal[col], errors="coerce").fillna(0)
-        cal["days_active"] = cal[all_day_cols].sum(axis=1)
         cal["active_days_of_week"] = cal[all_day_cols].apply(
             lambda row: "|".join(day for day in _WEEKDAY_ORDER if row[day] == 1), axis=1
         )
         cal["runs_weekday"] = cal[weekday_cols].sum(axis=1) > 0
         cal["runs_weekend"] = cal[weekend_cols].sum(axis=1) > 0
         cal = cal.drop_duplicates(subset=["service_id"]).set_index("service_id")
-        cal_days_active = cal["days_active"]
         cal_dow = cal["active_days_of_week"]
         cal_runs_weekday = cal["runs_weekday"].astype("boolean")
         cal_runs_weekend = cal["runs_weekend"].astype("boolean")
@@ -707,8 +796,6 @@ def _attach_service_days(
         ].index
     )
 
-    added_counts = pd.Series(dtype="float64")
-    removed_counts = pd.Series(dtype="float64")
     inferred_dow = pd.Series(dtype="object")
     inferred_runs_weekday = pd.Series(dtype="boolean")
     inferred_runs_weekend = pd.Series(dtype="boolean")
@@ -716,8 +803,6 @@ def _attach_service_days(
     if calendar_dates is not None and "exception_type" in calendar_dates.columns:
         cd = calendar_dates.copy()
         cd["exception_type"] = pd.to_numeric(cd["exception_type"], errors="coerce")
-        added_counts = cd[cd["exception_type"] == 1].groupby("service_id").size()
-        removed_counts = cd[cd["exception_type"] == 2].groupby("service_id").size()
 
         # Days of the week inferred from the added dates
         # (exception_type == 1). Used for "weak" services: those absent
@@ -747,16 +832,8 @@ def _attach_service_days(
                     .astype("boolean")
                 )
 
-    # ``days_active``: count declared in calendar.txt, plus the dates
-    # added and minus the dates removed in calendar_dates.txt (if a
-    # service is "weak" in calendar.txt, cal_days_active is 0 and the
-    # result ends up as the plain count of dates from calendar_dates.txt).
-    service_days = cal_days_active.add(added_counts, fill_value=0).sub(
-        removed_counts, fill_value=0
-    )
-    service_days = (
-        service_days.clip(lower=0) if not service_days.empty else service_days
-    )
+    # ``days_active``: how many dates the service runs on.
+    service_days = service_date_counts(calendar, calendar_dates)
 
     # ``active_days_of_week`` / ``runs_weekday`` / ``runs_weekend``: for
     # "strong" services (a real weekly pattern in calendar.txt) that

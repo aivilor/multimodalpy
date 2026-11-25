@@ -394,6 +394,12 @@ that touch the study area, so every row has its edge. Join it to the edges by
 departure of a trip defined in `frequencies.txt` is a row of its own, with
 `trip_id` `<trip_id>@<departure time>` (`L1_template@07:20:00`).
 
+`days_active` is the number of dates the trip's service runs on, as the GTFS
+reference defines them: the days of the week `calendar.txt` marks between its
+start and end dates, plus the dates `calendar_dates.txt` adds, minus the ones it
+removes. `active_days_of_week`, `runs_weekday`, `runs_weekend` and `day_type`
+describe which days of the week those are.
+
 ## NetworkX graphs (`graph.json`)
 
 With `formats="networkx"` each network is written as one

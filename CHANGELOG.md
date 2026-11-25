@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as `nothing_in_area`), a band size of 0 made every feed fail after
   the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
   periods went to the first one.
+- `days_active` in the GTFS schedule is now the number of dates the service
+  runs on. It used to add the days of the week marked in `calendar.txt` to the
+  dates `calendar_dates.txt` adds and removes over the whole calendar, so a
+  Monday-to-Friday service with three holidays and one extra Saturday gave 3.
 
 ### Fixed
 - A refusal from the Overpass server (HTTP 406 Not Acceptable or 403

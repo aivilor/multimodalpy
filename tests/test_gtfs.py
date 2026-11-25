@@ -1019,6 +1019,60 @@ def test_parse_service_date_rejects_other_formats(value):
         _gtfs.parse_service_date(value)
 
 
+def _calendar(*rows):
+    """calendar.txt rows: (service_id, "1111100", start, end)."""
+    return pd.DataFrame(
+        [
+            {
+                "service_id": sid,
+                **dict(zip(_gtfs._WEEKDAY_COLUMNS, days, strict=True)),
+                "start_date": start,
+                "end_date": end,
+            }
+            for sid, days, start, end in rows
+        ]
+    ).astype(str)
+
+
+def _calendar_dates(*rows):
+    """calendar_dates.txt rows: (service_id, date, exception_type)."""
+    return pd.DataFrame(rows, columns=["service_id", "date", "exception_type"]).astype(
+        str
+    )
+
+
+def test_service_date_counts_follow_the_gtfs_reference():
+    calendar = _calendar(
+        ("WD", "1111100", "20260105", "20260111"),  # Mon 5 - Sun 11 January
+        ("SAT", "0000010", "20260101", "20260131"),
+        ("STUB", "0000000", "20260101", "20261231"),  # dates only in calendar_dates
+        ("BAD", "1111111", "2026-01-01", "20260131"),  # unreadable start: no dates
+    )
+    calendar_dates = _calendar_dates(
+        ("WD", "20260106", 2),  # holiday removed
+        ("WD", "20260110", 1),  # a Saturday added
+        ("WD", "20260107", 1),  # already in the pattern: counts once
+        ("WD", "20260201", 2),  # removed but never in the pattern: no effect
+        ("STUB", "20260301", 1),
+        ("STUB", "20260302", 1),
+        ("ONLY", "20260401", 1),  # not in calendar.txt at all
+    )
+    counts = _gtfs.service_date_counts(calendar, calendar_dates).to_dict()
+    assert counts == {"WD": 5, "SAT": 5, "STUB": 2, "ONLY": 1}
+
+
+def test_service_date_counts_without_calendar_files():
+    assert _gtfs.service_date_counts(None, None).empty
+    only_dates = _calendar_dates(("X", "20260101", 1), ("X", "20260102", 1))
+    assert _gtfs.service_date_counts(None, only_dates).to_dict() == {"X": 2}
+
+
+def test_days_active_is_the_number_of_service_dates(feed):
+    _, _, schedule = _gtfs.normalize_gtfs_feed(feed, dataset_name="ds", layer_id="ds")
+    # WD runs Monday to Friday through 2026: 261 dates, not 5 days a week.
+    assert set(schedule["days_active"]) == {261}
+
+
 @pytest.mark.parametrize(
     ("day", "expected"),
     [
