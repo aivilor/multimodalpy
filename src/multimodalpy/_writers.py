@@ -314,6 +314,7 @@ def _write_matrices(
     area_name: str,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None,
     gtfs_hour_range: tuple[int, int] | None,
+    gtfs_service_date: Any = None,
 ) -> list[str]:
     """Write one ``matrix.npz`` per OSM mode and per GTFS dataset.
 
@@ -359,6 +360,11 @@ def _write_matrices(
                 "area": area_name,
                 "gtfs_hour_range": (
                     list(gtfs_hour_range) if gtfs_hour_range is not None else None
+                ),
+                # The day the trip counts are of, or None (the whole
+                # calendar): waiting times can only come from a day's.
+                "gtfs_service_date": (
+                    None if gtfs_service_date is None else gtfs_service_date.isoformat()
                 ),
             },
         )

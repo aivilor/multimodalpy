@@ -256,6 +256,7 @@ the node has no known tag but is an `intersection`, the generic penalty applies.
 |---|---|---|
 | `node_id` | text | `stop_id` in the GTFS feed |
 | `stop_name` | text | Stop name |
+| `station_id` | text | `stop_id` of the station the stop belongs to (`parent_station`, e.g. the station of a platform), empty if none. Stops with the same `station_id` are the platforms of one station |
 | `in_area` | boolean | Whether the stop is inside the study area |
 | `geometry` | Point | Stop position |
 
@@ -309,6 +310,7 @@ says how many there were in the study area.
 | `route_id` | — | Route identifier |
 | `route_sh` | `route_short_name` | Short route name (e.g. `"L1"`) |
 | `route_ln` | `route_long_name` | Long route name |
+| `route_type` | — | GTFS `route_type` of the route, a number: 3 bus, 1 metro, 0 tram, 2 rail, or an extended code (e.g. 109 suburban railway). A feed can mix modes; each edge keeps its own |
 | `geometry` | — | Edge geometry |
 
 ### Whole day
@@ -550,6 +552,7 @@ A GTFS matrix only has the weights present in its edge layer.
 | `gtfs_periods` | GTFS only: start and end hour of each peak period behind `pam` / `ppm`, e.g. `{"peak_am": [7, 9], "peak_pm": [17, 20]}`. `rod` is every other hour. |
 | `gtfs_period_codes` | GTFS only: code of each period in the weight names, e.g. `{"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}`. |
 | `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `download_network()`, or `null`. |
+| `gtfs_service_date` | GTFS only: the `gtfs_service_date` the trip counts are of (`"2026-11-25"`), or `null` when they cover the feed's whole calendar. |
 | `multimodalpy_version` | Version that wrote the file. |
 
 A newer `format_version` is rejected when reading instead of being misread.

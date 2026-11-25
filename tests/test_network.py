@@ -2181,3 +2181,25 @@ def test_a_repeated_feed_is_reported_with_a_warning(tmp_path, backends):
         )
     assert manifest["gtfs_datasets"] == ["genvalenciana"]
     assert manifest["gtfs_report"][1]["status"] == "duplicate"
+
+
+def test_gtfs_layers_keep_route_type_station_and_service_date(tmp_path, backends):
+    result = make_gtfs_result("bus")
+    result["nodes"]["station_id"] = ["ST1", None]
+    result["edges"]["route_type"] = pd.array([3], dtype="Int64")
+    backends["gtfs_result"] = {"emt": result}
+    network.download_network(
+        "Valencia",
+        modes=["bus"],
+        output_dir=tmp_path,
+        api_key="k",
+        formats=["geojson", "shapefile", "matrix"],
+        gtfs_service_date="2026-11-25",
+    )
+    for suffix in ("geojson", "shp"):
+        nodes = gpd.read_file(tmp_path / "bus" / "emt" / f"nodes.{suffix}")
+        edges = gpd.read_file(tmp_path / "bus" / "emt" / f"edges.{suffix}")
+        assert nodes["station_id"].tolist()[0] == "ST1"
+        assert edges["route_type"].tolist() == [3]
+    matrix = multimodalpy.read_matrix(tmp_path / "bus" / "emt")
+    assert matrix.meta["gtfs_service_date"] == "2026-11-25"

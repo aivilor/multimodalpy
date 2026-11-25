@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not written twice: `gtfs_report` gives it the status `duplicate`, with the
   feed it repeats in `error`, and a `UserWarning` names it. NAP datasets are
   never skipped this way.
+- What the multimodal network will need from the GTFS layers: the edges keep
+  their `route_type` (a feed can mix modes, e.g. metro and tram), the stops
+  their station as `station_id` (`parent_station`), and the matrix records the
+  `gtfs_service_date` its trip counts are of in `meta`.
 - `--gtfs-peak-period NAME=START-END` on the command line (repeatable), the
   `gtfs_peak_periods` of `download_network()`.
 

@@ -488,10 +488,10 @@ def test_short_names_fit_the_shapefile_and_are_unique(periods):
 
 
 def test_default_columns_are_unchanged():
-    """The columns kept with the default periods, as before custom periods."""
+    """The columns kept with the default periods (route_type since 0.7.0)."""
     expected = [
         "edge_id", "from_node", "to_node", "route_id", "route_short_name",
-        "route_long_name", "trip_count", "travel_time_seconds_mean",
+        "route_long_name", "route_type", "trip_count", "travel_time_seconds_mean",
         "travel_time_seconds_median", "travel_time_seconds_min",
         "travel_time_seconds_max",
         "travel_time_seconds_mean_peak_am", "travel_time_seconds_mean_peak_pm",
@@ -1435,3 +1435,57 @@ def test_edge_network_key():
     assert _gtfs.edge_network_key(edges) == {("R1", "A", "B"), ("R1", "B", "C")}
     assert _gtfs.edge_network_key(edges.iloc[::-1]) == _gtfs.edge_network_key(edges)
     assert _gtfs.edge_network_key(edges.iloc[:0]) == frozenset()
+
+
+def test_edges_keep_their_route_type(tmp_path):
+    """A feed that mixes modes (metro and bus here) keeps each edge's type."""
+    path = _write_feed(
+        tmp_path / "mixed.zip",
+        [("M1", "M1", 1), ("B1", "B1", 3)],
+        [("M1", "WD", "m"), ("B1", "WD", "b")],
+        [
+            ("m", "07:00:00", "07:00:00", "A", 1),
+            ("m", "07:03:00", "07:03:00", "B", 2),
+            ("b", "08:00:00", "08:00:00", "B", 1),
+            ("b", "08:06:00", "08:06:00", "C", 2),
+        ],
+    )
+    edges = _edges(path)
+    assert str(edges["route_type"].dtype) == "Int64"
+    assert edges.loc[("A", "B", "M1"), "route_type"] == 1
+    assert edges.loc[("B", "C", "B1"), "route_type"] == 3
+
+
+def test_stops_keep_their_station(tmp_path):
+    path = _write_feed(
+        tmp_path / "feed.zip",
+        [("R1", "1", 1)],
+        [("R1", "WD", "t1")],
+        [
+            ("t1", "07:00:00", "07:00:00", "A", 1),
+            ("t1", "07:05:00", "07:05:00", "B", 2),
+        ],
+    )
+    with_station = tmp_path / "with_station.zip"
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(with_station, "w") as dst:
+        for name in src.namelist():
+            content = src.read(name).decode()
+            if name == "stops.txt":
+                lines = content.strip().split("\n")
+                lines[0] += ",parent_station,location_type"
+                lines = [lines[0]] + [
+                    line + (",ST1,0" if line.startswith("A,") else ",,0")
+                    for line in lines[1:]
+                ]
+                lines.append("ST1,Central,39.5,-0.4,,1")
+                content = "\n".join(lines) + "\n"
+            dst.writestr(name, content)
+    nodes, _, _ = _gtfs.normalize_gtfs_feed(
+        with_station, dataset_name="ds", layer_id="ds"
+    )
+    station = nodes.set_index("node_id")["station_id"]
+    assert station["A"] == "ST1"
+    assert pd.isna(station["B"])
+    assert "ST1" not in station.index  # the station itself is no stop of an edge
+    plain, _, _ = _gtfs.normalize_gtfs_feed(path, dataset_name="ds", layer_id="ds")
+    assert plain["station_id"].isna().all()  # no parent_station column at all

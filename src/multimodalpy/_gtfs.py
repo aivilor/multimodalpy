@@ -503,6 +503,14 @@ def build_gtfs_stops_gdf(
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["node_id"] = gdf["stop_id"]
+    # The station a stop (a platform, say) belongs to, for transfers
+    # between the stops of one station; empty when it has none.
+    station = (
+        gdf["parent_station"]
+        if "parent_station" in gdf.columns
+        else pd.Series(pd.NA, index=gdf.index, dtype=object)
+    )
+    gdf["station_id"] = station.where(station.notna() & (station != ""), None)
     gdf["source_name"] = dataset_name
     gdf["node_type"] = "stop"
     return gdf
@@ -1536,6 +1544,12 @@ def build_gtfs_stop_to_stop_edges_gdf(
     gdf["dataset_name"] = dataset_name
     gdf["layer_id"] = layer_id
     gdf["edge_id"] = _edge_ids(dataset_name, gdf)
+    if "route_type" in gdf.columns:
+        # A number, as in the GTFS reference (3 bus, 1 metro, 109 suburban
+        # rail...): a feed can mix modes, and each edge keeps its own.
+        gdf["route_type"] = pd.to_numeric(gdf["route_type"], errors="coerce").astype(
+            "Int64"
+        )
     return gdf
 
 
@@ -1781,6 +1795,7 @@ def gtfs_edge_columns(
         "route_id",
         "route_short_name",
         "route_long_name",
+        "route_type",
         "trip_count",
         "travel_time_seconds_mean",
         "travel_time_seconds_median",
