@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no slot information straight away, and lets a failed request reach the
   retries. This also halves the requests: one `/status` per query instead of
   two, and none for an answer already in the cache.
+- GTFS edges of a route without `route_short_name` (GTFS asks only for a short
+  or a long name), or that start or end at a stop without a name, had every
+  per-period column empty (`tts_m_<period>`, `tts_md_<period>`,
+  `trips_<period>` and their weekday/weekend versions), so the matrix had
+  `inf` for those weights. The other columns were right.
 - The `gtfs_feeds` example in the README and the docstrings presented
   `gvinterbus.gva.es/estatico/gtfs.zip` as València's MetroBus. It is the
   Generalitat Valenciana's interurban bus feed, the same as the NAP's dataset

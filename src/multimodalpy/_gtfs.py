@@ -1077,20 +1077,19 @@ def _period_pivot_columns(
         aggregations["travel_time_seconds_median"] = ("travel_time_seconds", "median")
     period_rows = rows.dropna(subset=["period"])
     if not period_rows.empty:
-        period_grouped = (
-            period_rows.groupby(group_cols + ["period"], dropna=False)
-            .agg(**aggregations)
-            .reset_index()
-        )
-        pivoted = period_grouped.pivot_table(
-            index=group_cols,
-            columns="period",
-            values=metrics,
-        )
-        pivoted.columns = [
-            f"{metric}_{period}{suffix}" for metric, period in pivoted.columns
+        # Pivot on a number per group, not on the grouping columns:
+        # ``pivot_table`` drops every group with an empty key, so the edges
+        # of a route without ``route_short_name`` (GTFS only asks for a
+        # short or a long name) lost all their per-period columns.
+        group = period_rows.groupby(group_cols, dropna=False, sort=False).ngroup()
+        period_rows = period_rows.assign(_group=group)
+        period_grouped = period_rows.groupby(["_group", "period"]).agg(**aggregations)
+        values = period_grouped[metrics].unstack("period")
+        values.columns = [
+            f"{metric}_{period}{suffix}" for metric, period in values.columns
         ]
-        pivoted = pivoted.reset_index()
+        keys = period_rows.drop_duplicates("_group").set_index("_group")[group_cols]
+        pivoted = keys.join(values).reset_index(drop=True)
     else:
         pivoted = pd.DataFrame(columns=group_cols)
 

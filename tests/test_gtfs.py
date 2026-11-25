@@ -158,6 +158,41 @@ def test_hourly_summary_kept_when_route_has_no_short_name(feed):
     assert row["hourly_travel_times"] == "17-18:240"
 
 
+def test_period_columns_kept_when_route_has_no_short_name(feed):
+    """The trip at 17:30 is in peak_pm, whatever the route is called."""
+    row = _edges(feed).loc[("B", "C", "R2")]
+    assert pd.isna(row["route_short_name"])
+    assert row["trip_count_peak_pm"] == 1
+    assert row["travel_time_seconds_mean_peak_pm"] == 240
+    assert row["travel_time_seconds_median_peak_pm"] == 240
+    assert row["trip_count_peak_pm_weekday"] == 1
+    assert row["travel_time_seconds_mean_peak_pm_weekday"] == 240
+    assert pd.isna(row["trip_count_peak_am"])
+
+
+def test_period_columns_kept_when_a_stop_has_no_name(tmp_path):
+    path = _write_feed(
+        tmp_path / "feed.zip",
+        [("R1", "1", 3)],
+        [("R1", "WD", "t1")],
+        [
+            ("t1", "07:00:00", "07:00:00", "A", 1),
+            ("t1", "07:05:00", "07:05:00", "B", 2),
+        ],
+    )
+    unnamed = tmp_path / "unnamed.zip"
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(unnamed, "w") as dst:
+        for name in src.namelist():
+            content = src.read(name).decode()
+            if name == "stops.txt":
+                content = content.replace("A,Stop A,", "A,,")
+            dst.writestr(name, content)
+    row = _edges(unnamed).loc[("A", "B", "R1")]
+    assert pd.isna(row["from_stop_name"])
+    assert row["trip_count_peak_am"] == 1
+    assert row["travel_time_seconds_mean_peak_am"] == 300
+
+
 # ---------------------------------------------------------------------------
 # Clipping to the study area before aggregating
 # ---------------------------------------------------------------------------
