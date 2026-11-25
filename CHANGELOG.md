@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as `nothing_in_area`), a band size of 0 made every feed fail after
   the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
   periods went to the first one.
+- Files downloaded from the NAP are saved under a safe name: only the last part
+  of the server's file name (so nothing is written outside `gtfs_zips/`), with
+  unusual characters replaced and `.zip` at the end. Two files of one download
+  with the same name no longer overwrite each other (the second gets
+  `_<file id>`), and a feed of `gtfs_feeds` no longer overwrites a NAP zip of
+  the same name: both used to leave one file processed twice.
 - `days_active` in the GTFS schedule is now the number of dates the service
   runs on. It used to add the days of the week marked in `calendar.txt` to the
   dates `calendar_dates.txt` adds and removes over the whole calendar, so a

@@ -1663,6 +1663,76 @@ def test_nap_downloads_every_province_once_per_file(tmp_path, nap_two_provinces)
     assert report["province_code"].tolist() == [46, 46, 12]
 
 
+@pytest.mark.parametrize(
+    ("name", "taken", "expected"),
+    [
+        ("20261119_030028_EMT.zip", set(), "20261119_030028_EMT.zip"),
+        ("../../etc/feed.zip", set(), "feed.zip"),
+        ("C:\\data\\feed.zip", set(), "feed.zip"),
+        ("Metro València (GTFS).zip", set(), "Metro_València__GTFS_.zip"),
+        ("google_transit", set(), "google_transit.zip"),
+        ("google_transit.ZIP", set(), "google_transit.zip"),
+        ("", set(), "nap_gtfs_77.zip"),
+        (None, set(), "nap_gtfs_77.zip"),
+        ("...", set(), "nap_gtfs_77.zip"),
+        ("gtfs.zip", {"gtfs.zip"}, "gtfs_77.zip"),
+        ("gtfs.zip", {"gtfs.zip", "gtfs_77.zip"}, "gtfs_77_2.zip"),
+    ],
+)
+def test_nap_file_names_are_safe_and_unique(name, taken, expected):
+    taken = set(taken)
+    assert _nap.local_file_name(name, 77, taken) == expected
+    assert expected in taken
+
+
+def test_nap_files_with_the_same_name_do_not_overwrite_each_other(
+    tmp_path, monkeypatch
+):
+    import requests
+
+    datasets = [
+        {
+            "id": 1,
+            "nombre": "A",
+            "tiposTransporte": [{"id": 1}],
+            "ficheros": [{"id": 10}],
+        },
+        {
+            "id": 2,
+            "nombre": "B",
+            "tiposTransporte": [{"id": 1}],
+            "ficheros": [{"id": 20}],
+        },
+    ]
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/conjunto-dato/region/" in url:
+            return _Response(payload={"data": datasets})
+        if "/fichero/" in url:
+            file_id = url.split("/fichero/")[1].split("/")[0]
+            return _Response(
+                payload={
+                    "data": {
+                        "enlaceDescarga": f"https://files.example/{file_id}",
+                        "nombreFichero": "../google_transit.zip",
+                    }
+                }
+            )
+        response = _Response()
+        response.content = url.encode()  # each file its own content
+        return response
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    zips = _nap.download_gtfs_nap_zips("X", tmp_path, modes=[1], province_codes=[46])
+    assert [path.name for path in zips] == [
+        "google_transit.zip",
+        "google_transit_20.zip",
+    ]
+    assert all(path.parent == tmp_path for path in zips)
+    assert zips[0].read_bytes() != zips[1].read_bytes()
+    assert not (tmp_path.parent / "google_transit.zip").exists()
+
+
 def test_nap_province_without_datasets_is_skipped(tmp_path, nap_two_provinces):
     zips = _nap.download_gtfs_nap_zips(
         "AMV", tmp_path, modes=[1], province_codes=[1, 46, 46]

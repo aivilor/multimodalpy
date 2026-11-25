@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import logging
 import os
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -216,6 +217,31 @@ def _province_datasets(region_id: int, base_url: str, headers: dict) -> list[dic
     return list(datasets_response.json().get("data", []))
 
 
+def local_file_name(name: object, file_id: object, taken: set[str]) -> str:
+    """Name to save a NAP file under: safe, a ``.zip``, and not used yet.
+
+    The NAP's ``nombreFichero`` is the server's text: only its last part is
+    kept (no folders, so nothing is written outside ``gtfs_zips/``), with
+    any character other than letters, digits, ``.``, ``_`` and ``-``
+    replaced by ``_``. Empty, it becomes ``nap_gtfs_<file_id>.zip``. A name
+    already in ``taken`` (two files of one download with the same name)
+    gets ``_<file_id>``, then ``_2``, ``_3``... before ``.zip``, so neither
+    overwrites the other. The name is added to ``taken``.
+    """
+    text = str(name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    text = re.sub(r"[^\w.-]", "_", text).lstrip(".")
+    if not text:
+        text = f"nap_gtfs_{file_id}.zip"
+    stem = text[:-4] if text.lower().endswith(".zip") else text
+    candidate, number = f"{stem}.zip", 2
+    if candidate in taken:
+        candidate = f"{stem}_{file_id}.zip"
+    while candidate in taken:
+        candidate, number = f"{stem}_{file_id}_{number}.zip", number + 1
+    taken.add(candidate)
+    return candidate
+
+
 def download_gtfs_nap_zips(
     area_name: str,
     output_dir: str | Path,
@@ -280,6 +306,7 @@ def download_gtfs_nap_zips(
     mode_set = {int(mode) for mode in modes}
 
     downloaded: list[Path] = []
+    names_taken: set[str] = set()  # file names used in this download
     report_rows: list[dict[str, object]] = []
     seen_files: set[object] = set()
 
@@ -354,7 +381,7 @@ def download_gtfs_nap_zips(
 
                     zip_response = requests.get(download_url, timeout=120)
                     zip_response.raise_for_status()
-                    path = output_dir / file_name
+                    path = output_dir / local_file_name(file_name, file_id, names_taken)
                     path.write_bytes(zip_response.content)
                     downloaded.append(path)
                     row["status"] = "downloaded"

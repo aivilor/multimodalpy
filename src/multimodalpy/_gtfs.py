@@ -1908,19 +1908,22 @@ def _fetch_user_feeds(
     sources: list[tuple[str | None, str]],
     zip_dir: Path,
     report: list[dict[str, object]],
+    taken: Iterable[str] = (),
 ) -> list[tuple[Path, str | None, dict[str, object] | None]]:
     """Download the ``gtfs_feeds`` addresses into ``zip_dir``; keep local paths.
 
     Returns ``(path, name, report row)`` per feed obtained. Every feed gets a
     report row with ``source`` ``"user"``; a download that fails is
-    ``failed``, with the error, and is not returned.
+    ``failed``, with the error, and is not returned. ``taken`` are the file
+    stems already in use (the NAP's zips of this download), which a feed is
+    numbered to avoid rather than overwrite.
     """
     import requests
 
     from ._overpass import user_agent
 
     fetched: list[tuple[Path, str | None, dict[str, object] | None]] = []
-    files_taken: set[str] = set()
+    files_taken: set[str] = set(taken)
     for name, source in sources:
         file_name = _feed_file_name(source)
         row: dict[str, object] = {
@@ -2046,7 +2049,9 @@ def download_gtfs(
     feed_files: list[tuple[Path, str | None, dict[str, object] | None]] = [
         (Path(path), None, by_path.get(str(path))) for path in zips
     ]
-    feed_files += _fetch_user_feeds(sources, Path(zip_dir), report_rows)
+    feed_files += _fetch_user_feeds(
+        sources, Path(zip_dir), report_rows, taken={path.stem for path in zips}
+    )
 
     def outcome(
         zip_path: Path, row: dict[str, object] | None, **fields: object

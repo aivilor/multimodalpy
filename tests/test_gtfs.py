@@ -1331,3 +1331,22 @@ def test_user_feeds_come_after_the_nap_and_never_take_its_names(
         ("user", "emt_2"),
         ("user", "gtfs"),
     ]
+
+
+def test_a_user_feed_does_not_overwrite_a_nap_zip(tmp_path, monkeypatch):
+    import requests
+
+    class Answer:
+        content = b"user feed"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Answer())
+    nap_zip = tmp_path / "emt.zip"
+    nap_zip.write_bytes(b"nap feed")
+    fetched = _gtfs._fetch_user_feeds(
+        [("emt", "https://example.org/gtfs.zip")], tmp_path, [], taken={"emt"}
+    )
+    assert [path.name for path, _, _ in fetched] == ["emt_2.zip"]
+    assert nap_zip.read_bytes() == b"nap feed"
