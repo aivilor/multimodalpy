@@ -115,6 +115,16 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--gtfs-peak-period",
+        action="append",
+        metavar="NAME=START-END",
+        help=(
+            "A period of the day for the GTFS per-period columns, e.g. "
+            "morning=7-9 (it may cross midnight: night=22-6). Repeat it for "
+            "several; they replace the default peak_am 7-9 and peak_pm 17-20."
+        ),
+    )
+    parser.add_argument(
         "--gtfs-feed",
         action="append",
         metavar="[NAME=]SOURCE",
@@ -146,7 +156,11 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("give the study area: --area, --area-code or --boundaries")
 
     gtfs_feeds = [_feed_argument(value) for value in args.gtfs_feed or []]
-    network.download_network(
+    try:
+        peak_periods = _peak_periods_argument(args.gtfs_peak_period)
+    except ValueError as exc:
+        parser.error(str(exc))
+    manifest = network.download_network(
         area_name=args.area,
         modes=args.modes,
         output_dir=args.output_dir,
@@ -162,11 +176,13 @@ def main(argv: list[str] | None = None) -> None:
         osm_timeout=args.osm_timeout,
         gtfs_hour_band_size=args.gtfs_hour_band_size,
         gtfs_hour_range=tuple(args.gtfs_hour_range) if args.gtfs_hour_range else None,
+        gtfs_peak_periods=peak_periods,
         gtfs_service_date=args.gtfs_service_date,
         gtfs_feeds=gtfs_feeds or None,
         write_schedule=args.write_schedule,
         keep_gtfs_zips=args.keep_gtfs_zips,
     )
+    print(summary(manifest))
 
 
 def _feed_argument(value: str) -> str | tuple[str, str]:
@@ -177,3 +193,56 @@ def _feed_argument(value: str) -> str | tuple[str, str]:
     """
     match = re.fullmatch(r"([\w-]+)=(.+)", value)
     return (match.group(1), match.group(2)) if match else value
+
+
+def _peak_periods_argument(
+    values: list[str] | None,
+) -> dict[str, tuple[int, int]] | None:
+    """``--gtfs-peak-period`` values (``NAME=START-END``) as a dict, or ``None``."""
+    if not values:
+        return None
+    periods: dict[str, tuple[int, int]] = {}
+    for value in values:
+        match = re.fullmatch(r"([\w-]+)=(\d{1,2})-(\d{1,2})", value.strip())
+        if not match:
+            raise ValueError(
+                f"--gtfs-peak-period: expected NAME=START-END, e.g. morning=7-9; "
+                f"got {value!r}"
+            )
+        name, start, end = match.groups()
+        if name in periods:
+            raise ValueError(f"--gtfs-peak-period: {name!r} is given twice")
+        periods[name] = (int(start), int(end))
+    return periods
+
+
+def summary(manifest: dict) -> str:
+    """Summarize in a few lines what :func:`download_network` wrote."""
+    from ._osm import _network_type
+
+    out = manifest.get("output_dir", ".")
+    details = manifest.get("manifest_file", "manifest.json")
+    lines = [f"Written to {out}/ (details in {details})"]
+    failed = manifest.get("failed_modes", {})
+    streets = []
+    for mode in manifest.get("osm_modes", []):
+        label = _network_type(mode)[1]
+        if label not in failed and label not in streets:
+            streets.append(label)
+    if streets:
+        lines.append(f"  streets: {', '.join(streets)}")
+    datasets = manifest.get("gtfs_datasets") or []
+    if datasets:
+        lines.append(f"  bus/train: {len(datasets)} feed(s): {', '.join(datasets)}")
+    for mode in failed:
+        lines.append(f"  not written: {mode} (see failed_modes)")
+    if manifest.get("gtfs_status"):
+        lines.append(f"  no bus/train: {manifest['gtfs_status']}")
+    unused = [
+        str(row.get("dataset") or row.get("dataset_name"))
+        for row in manifest.get("gtfs_report", [])
+        if row.get("status") in {"failed", "failed_processing", "no_service_on_date"}
+    ]
+    if unused:
+        lines.append(f"  GTFS not used: {', '.join(unused)} (see gtfs_report.csv)")
+    return "\n".join(lines)

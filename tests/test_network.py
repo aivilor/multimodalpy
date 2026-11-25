@@ -988,7 +988,7 @@ def test_download_network_matrix_skips_networks_without_edges(tmp_path, backends
 def test_cli_accepts_the_matrix_format(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia", "--formats", "matrix"])
@@ -1227,7 +1227,7 @@ def test_missing_nap_key_still_raises_a_clear_error(no_env_key, sent_keys):
 def test_cli_forwards_arguments_to_main(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(
@@ -1258,7 +1258,7 @@ def test_cli_forwards_arguments_to_main(monkeypatch):
 def test_cli_defaults(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia"])
@@ -1473,7 +1473,7 @@ def test_download_network_passes_the_overpass_options(tmp_path, backends):
 def test_cli_forwards_the_overpass_options(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
     _cli.main(
         [
@@ -1492,7 +1492,7 @@ def test_cli_forwards_the_overpass_options(monkeypatch):
 def test_cli_accepts_a_boundaries_file_without_area(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
     _cli.main(["--boundaries", "pateval.geojson", "--modes", "bus"])
     assert captured["area_name"] is None
@@ -1767,7 +1767,7 @@ def test_download_network_without_key_warns_before_downloading_and_skips_gtfs(
 def test_cli_forwards_api_key(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: captured.update(kwargs)
+        network, "download_network", lambda **kwargs: captured.update(kwargs) or {}
     )
 
     _cli.main(["--area", "Valencia", "--api-key", "secret"])
@@ -1846,7 +1846,7 @@ def test_feeds_without_service_that_day_raise_a_warning(tmp_path, backends):
 def test_cli_passes_the_service_date(monkeypatch):
     received = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: received.update(kwargs)
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
     )
     _cli.main(
         ["--area", "Valencia", "--modes", "bus", "--gtfs-service-date", "2026-11-25"]
@@ -1969,7 +1969,123 @@ def test_a_user_feed_that_fails_raises_a_warning(tmp_path, backends):
 def test_cli_passes_the_gtfs_feeds(monkeypatch, args, expected):
     received = {}
     monkeypatch.setattr(
-        network, "download_network", lambda **kwargs: received.update(kwargs)
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
     )
     _cli.main(["--area", "Valencia", "--modes", "bus", *args])
     assert received["gtfs_feeds"] == expected
+
+
+# ---------------------------------------------------------------------------
+# manifest.json and the command-line summary
+# ---------------------------------------------------------------------------
+def test_manifest_is_saved_next_to_the_data(tmp_path, backends):
+    import json
+
+    import numpy as np
+
+    from multimodalpy import __version__
+
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt", mode="bus", routes=np.int64(3)),
+        _row(964, "failed", error="404", routes=float("nan")),
+    ]
+    with pytest.warns(UserWarning, match="could not be used"):
+        manifest = network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path, api_key="k"
+        )
+    assert manifest["manifest_file"] == "manifest.json"
+    assert manifest["multimodalpy_version"] == __version__
+    saved = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert saved["multimodalpy_version"] == __version__
+    assert saved["gtfs_datasets"] == ["emt"]
+    assert saved["gtfs_report"][0]["routes"] == 3  # a number, not "3"
+    assert saved["gtfs_report"][1]["routes"] is None  # NaN is null
+    assert saved["files"] == manifest["files"]
+    assert "manifest.json" not in manifest["files"]  # only the data files
+
+
+def test_json_ready_keeps_only_json_values():
+    import datetime
+    from pathlib import Path
+
+    import numpy as np
+
+    from multimodalpy._writers import _json_ready
+
+    value = {
+        "n": np.int64(2),
+        "x": np.float64(1.5),
+        "flag": np.bool_(True),
+        "nan": float("nan"),
+        "na": pd.NA,
+        "day": datetime.date(2026, 11, 25),
+        "path": Path("out") / "a.zip",
+        "items": (1, "a"),
+        3: "key",
+    }
+    assert _json_ready(value) == {
+        "n": 2,
+        "x": 1.5,
+        "flag": True,
+        "nan": None,
+        "na": None,
+        "day": "2026-11-25",
+        "path": str(Path("out") / "a.zip"),
+        "items": [1, "a"],
+        "3": "key",
+    }
+
+
+def test_cli_prints_what_was_written(monkeypatch, capsys):
+    manifest = {
+        "output_dir": "out",
+        "manifest_file": "manifest.json",
+        "osm_modes": ["walking", "coche"],
+        "failed_modes": {"driving": "HTTP 406"},
+        "gtfs_datasets": ["emt", "metro"],
+        "gtfs_report": [
+            {"status": "written", "dataset": "emt"},
+            {"status": "failed", "dataset_name": "NAP 964"},
+            {"status": "no_service_on_date", "dataset": "ouigo"},
+        ],
+    }
+    monkeypatch.setattr(network, "download_network", lambda **kwargs: manifest)
+    _cli.main(["--area", "Valencia"])
+    printed = capsys.readouterr().out
+    assert "Written to out/ (details in manifest.json)" in printed
+    assert "streets: walking\n" in printed
+    assert "bus/train: 2 feed(s): emt, metro" in printed
+    assert "not written: driving" in printed
+    assert "GTFS not used: NAP 964, ouigo" in printed
+
+
+def test_cli_passes_the_peak_periods(monkeypatch):
+    received: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
+    )
+    _cli.main(
+        [
+            "--area", "Valencia",
+            "--gtfs-peak-period", "morning=7-10",
+            "--gtfs-peak-period", "night=22-6",
+        ]
+    )  # fmt: skip
+    assert received["gtfs_peak_periods"] == {"morning": (7, 10), "night": (22, 6)}
+    _cli.main(["--area", "Valencia"])
+    assert received["gtfs_peak_periods"] is None
+
+
+@pytest.mark.parametrize(
+    "values",
+    [["morning"], ["morning=7"], ["morning=7-9", "morning=8-10"], ["=7-9"]],
+)
+def test_cli_rejects_badly_written_peak_periods(monkeypatch, capsys, values):
+    monkeypatch.setattr(network, "download_network", lambda **kwargs: {})
+    args = ["--area", "Valencia"]
+    for value in values:
+        args += ["--gtfs-peak-period", value]
+    with pytest.raises(SystemExit):
+        _cli.main(args)
+    assert "--gtfs-peak-period" in capsys.readouterr().err

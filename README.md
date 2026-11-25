@@ -167,8 +167,18 @@ multimodalpy --area Valencia --modes walking bus \
 multimodalpy --boundaries pateval.geojson --modes walking bus
 ```
 
-Run `multimodalpy --help` for every option. `python -m multimodalpy` works the
-same way.
+It prints where the networks were written and what could not be, for
+instance:
+
+```text
+Written to output/ (details in manifest.json)
+  streets: walking
+  bus/train: 2 feed(s): emt_valencia, metrovalencia
+```
+
+Periods of your own for the GTFS columns are given with `--gtfs-peak-period
+morning=7-10` (repeat it for several). Run `multimodalpy --help` for every
+option. `python -m multimodalpy` works the same way.
 
 ### Streets: the Overpass server
 
@@ -336,7 +346,8 @@ paths and is much faster.
 | `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
 
 `download_network()` writes the files and returns a manifest (a dictionary
-listing them).
+listing them and what happened to every network), also saved as
+`manifest.json` in the output folder.
 
 ## The library
 

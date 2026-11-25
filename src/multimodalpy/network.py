@@ -45,11 +45,13 @@ from ._osm import OSM_NETWORK_TYPES, download_osm
 from ._overpass import OSMDownloadError
 from ._text import slugify
 from ._writers import (
+    MANIFEST_FILE,
     _gtfs_to_graph_json,
     _osm_layers_to_graph_json,
     _write_layers,
     _write_matrices,
     _write_schedule_tables,
+    write_manifest,
 )
 
 __all__ = [
@@ -319,7 +321,9 @@ def download_network(
     -------
     dict
         Manifest with the area (with its ``provinces`` and
-        ``municipalities``), the modes, the folder and the files written.
+        ``municipalities``), the modes, the folder and the files written,
+        also saved as ``manifest.json`` in ``output_dir`` (its
+        ``manifest_file``), with the ``multimodalpy_version`` that wrote it.
 
         ``gtfs_report`` (also written as ``gtfs_report.csv``) says what
         happened to every NAP dataset of the area's provinces and to every
@@ -637,7 +641,10 @@ def download_network(
         written.extend(files_here)
 
     area_row = boundary.iloc[0]
+    from . import __version__
+
     manifest: dict[str, Any] = {
+        "multimodalpy_version": __version__,
         "area_name": area_name,
         "boundaries_path": None if boundaries_path is None else str(boundaries_path),
         "provinces": [
@@ -739,4 +746,8 @@ def download_network(
                 UserWarning,
                 stacklevel=2,
             )
+    # Saved next to the data, so what the call did is still there after it
+    # (from the command line there is no returned dict to look at).
+    manifest["manifest_file"] = MANIFEST_FILE
+    write_manifest(manifest, output_dir)
     return manifest

@@ -13,6 +13,7 @@ output_dir/
 ├── bike/                    nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
+├── manifest.json            what download_network() did (the returned manifest)
 ├── gtfs_report.csv          with bus or train: what happened to each GTFS dataset
 ├── gtfs_zips/               only with keep_gtfs_zips=True
 └── <area>.gpkg              only with formats="geopackage"
@@ -111,7 +112,9 @@ each province: an operator missing from the report is not on the NAP.
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
 | `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`. Off by default: they are only the raw input and can be downloaded again. Local feeds are never deleted. |
 
-`download_network()` prints nothing. It returns a manifest with the area
+`download_network()` prints nothing (the command line prints a short summary).
+It returns a manifest, also saved as `manifest.json` in the output folder
+(`manifest_file`), with the `multimodalpy_version` that wrote it, the area
 (`area_name`, `boundaries_path`, and its `provinces` and `municipalities` as
 `{"code", "name"}` lists), the files written
 (`files`, and `files_by_format` when several formats were asked for) and, when a

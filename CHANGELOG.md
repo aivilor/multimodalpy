@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `gtfs_hour_range` and the periods of `gtfs_peak_periods` may cross midnight:
   `(22, 2)` keeps the departures from 22:00 to 01:59.
+- The manifest is saved as `manifest.json` in the output folder, with the
+  `multimodalpy_version` that wrote it, so what a download did (failed modes,
+  GTFS report, period codes...) is kept with the data. The command line now
+  prints a short summary of what was written and what was not.
+- `--gtfs-peak-period NAME=START-END` on the command line (repeatable), the
+  `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
 - The GTFS hour options are checked before anything is downloaded, with a
