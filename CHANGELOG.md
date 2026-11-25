@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no slot information straight away, and lets a failed request reach the
   retries. This also halves the requests: one `/status` per query instead of
   two, and none for an answer already in the cache.
+- The `gtfs_feeds` example in the README and the docstrings presented
+  `gvinterbus.gva.es/estatico/gtfs.zip` as València's MetroBus. It is the
+  Generalitat Valenciana's interurban bus feed, the same as the NAP's dataset
+  1325, so adding it gave every route twice. The example is now generic, with
+  a note to check a feed is not on the NAP already. Outdated docstrings were
+  corrected too: `download_gtfs()` returns `nodes`, `edges`, `schedule` and
+  `mode` (there was never an `edges_shapes_reference` layer), and
+  `gtfs_hour_band_size` only sets the bands of `h_tts` and `h_trips`.
 
 ## [0.6.0] - 2026-11-20
 
@@ -43,10 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside the NAP, as `{name: source}` or a list of sources, a source being an
   http(s) address or a local zip or folder. They are processed like the NAP's
   feeds, written to `bus/<name>/` or `train/<name>/`, and listed in the
-  manifest's `gtfs_feeds`. The first use is València's MetroBus, published on
-  the Generalitat's open data portal and not on the NAP. Without a NAP API key,
-  the NAP is skipped with a warning and only these feeds are used
-  (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
+  manifest's `gtfs_feeds`. Without a NAP API key, the NAP is skipped with a
+  warning and only these feeds are used (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
   not http(s), or `gtfs_feeds` without `bus` or `train` in `modes` fail before
   anything is downloaded.
 - `gtfs_report` has a `source` column, `nap` or `user`, and lists the feeds of

@@ -223,9 +223,11 @@ def download_network(
         seconds) is computed automatically based on the mode (free-flow
         speed + stop penalty; see "Travel time" in ``DATA_SCHEMA.md``), so
         a constant speed parameter is no longer accepted for OSM.
-    gtfs_hour_band_size : int, optional
-        If set (e.g. 1), GTFS edges are computed per one-hour band (the
-        ``hour_band`` column), instead of a single aggregated weight.
+    gtfs_hour_band_size : int
+        Width in hours of the bands of the GTFS edges' hourly summary
+        (``h_tts`` and ``h_trips``, e.g. ``"07-08:300;08-09:420"``).
+        Defaults to 1. It changes only that summary: the other columns and
+        the matrix weights are the same whatever the band size.
     gtfs_hour_range : (int, int), optional
         If set (e.g. (7, 9)), only GTFS trips whose departure falls in that
         hour window are considered (useful for peak vs off-peak).
@@ -254,7 +256,8 @@ def download_network(
         output folder, ``bus/<name>/``), or a list of sources, named after
         their files. A source is an http(s) address, downloaded into
         ``gtfs_zips/``, or a local GTFS zip or folder, e.g.
-        ``{"metrobus": "https://gvinterbus.gva.es/estatico/gtfs.zip"}``.
+        ``{"my_operator": "https://example.org/gtfs.zip"}``. Check that a
+        feed is not on the NAP already, or its routes appear twice.
         Without a NAP API key, the NAP is skipped with a ``UserWarning`` and
         only these feeds are used. Each one has a row in ``gtfs_report``
         with ``source="user"``.
@@ -548,8 +551,7 @@ def download_network(
     for file_type in output_formats:
         if file_type == "networkx":
             files_here: list[str] = []
-            # The boundary and the GTFS shapes layers are saved as
-            # supporting GeoJSON.
+            # The boundary is saved as supporting GeoJSON.
             boundary_layer.to_file(
                 output_dir / "study_area_boundary.geojson", driver="GeoJSON"
             )

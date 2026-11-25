@@ -59,7 +59,7 @@ Shapefile.
 file downloaded from the NAP, normalised and without the timestamp the NAP puts
 in front of it (`20261119_050013_RENFE_CERCA.zip` gives `renfe_cerca`), so it is
 the same on every download. A feed of `gtfs_feeds` takes the name given to it
-(`{"metrobus": ...}` gives `metrobus`), or its file name. Two feeds that end up
+(`{"my_operator": ...}` gives `my_operator`), or its file name. Two feeds that end up
 with the same name get `_2`, `_3`… in the order they were processed: the NAP's
 first, then those of `gtfs_feeds` in the order given.
 

@@ -2,21 +2,18 @@
 
 Private module: the public entry point is ``multimodalpy.network``.
 
-This module has three parts:
+This module has two parts:
 
 1. Standardization: turns a GTFS feed (zip or folder) into GeoPandas
-   layers -- ``nodes_stops`` (stops as points), ``edges`` (stop-to-stop
-   edges with travel time and an hour-band breakdown),
-   ``edges_shapes_reference`` (route geometry from shapes.txt), and
-   ``schedule`` (a flat, non-spatial table with one record per trip and
-   segment, for anyone who needs the full schedule detail without losing
-   granularity).
-2. Bus + train cleanup: snapping stops onto the route geometry and
-   splitting the route lines into segments between consecutive stops, to
-   get a coherent stop-segment-stop topology.
-3. Download: ``download_gtfs`` fetches the feeds of a study area
-   from the NAP (see ``_nap``) and standardizes each one. The short column
-   names of the edge layer (``GTFS_EDGE_RENAME``) are also defined here.
+   layers -- ``nodes`` (the stops the edges use, as points), ``edges``
+   (straight stop-to-stop edges, one per route and pair of consecutive
+   stops, with travel times and trip counts overall, per period and per
+   hour band) and ``schedule`` (a flat, non-spatial table with one record
+   per trip and edge, for anyone who needs the full schedule detail).
+2. Download: ``download_gtfs`` fetches the feeds of a study area
+   from the NAP (see ``_nap``) and the ``gtfs_feeds`` of the user, and
+   standardizes each one. The short column names of the edge layer
+   (``GTFS_EDGE_RENAME``) are also defined here.
 
 No file is written here; that's done by ``_writers``.
 """
@@ -1793,10 +1790,10 @@ def download_gtfs(
     feeds: GTFSFeeds | None = None,
     use_nap: bool = True,
 ) -> dict[str, dict[str, object]]:
-    """Download NAP GTFS data and returns normalized layers per dataset.
+    """Download NAP GTFS data and return normalized layers per dataset.
 
-    Returns ``{dataset: {"nodes_stops": gdf, "edges": gdf,
-    "edges_shapes_reference": gdf, "schedule": DataFrame | None}}``.
+    Returns ``{dataset: {"nodes": gdf, "edges": gdf, "schedule": DataFrame
+    | None, "mode": "bus" | "train"}}`` (see :func:`normalize_gtfs_feed`).
 
     ``province_codes`` are the INE codes of the provinces whose feeds are
     downloaded; if not given, they're taken from the ``boundary``'s
