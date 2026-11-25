@@ -703,6 +703,18 @@ def download_network(
                 UserWarning,
                 stacklevel=2,
             )
+        duplicates = [
+            f"{row['dataset']} ({row['error']})"
+            for row in gtfs_report_rows
+            if row["status"] == "duplicate"
+        ]
+        if duplicates:
+            warnings.warn(
+                f"{len(duplicates)} GTFS feed(s) repeat another one and were not "
+                "written: " + "; ".join(duplicates) + ".",
+                UserWarning,
+                stacklevel=2,
+            )
         no_service = [
             f"{row['dataset']} ({row['error']})"
             for row in gtfs_report_rows

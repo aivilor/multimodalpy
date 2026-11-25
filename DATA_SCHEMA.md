@@ -90,10 +90,10 @@ from it):
 | `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP); for a feed of `gtfs_feeds`, only `dataset_name`: the name given, or the file name |
 | `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
 | `file_id`, `file_name` | NAP file; for a feed of `gtfs_feeds`, its file name |
-| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `failed` (download) or `failed_processing` |
+| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `duplicate` (a feed of `gtfs_feeds` with the same routes between the same stops in the area as a feed already written, usually a NAP dataset: not written, and `error` names it); `failed` (download) or `failed_processing` |
 | `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
 | `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
-| `error` | Why it failed |
+| `error` | Why it failed, or which feed it repeats |
 
 A dataset that could not be used at all (every file failed, or processing did)
 raises a `UserWarning` naming it. One that got a file is fine even if the NAP

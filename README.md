@@ -129,8 +129,10 @@ several).
 
 Check first that the feed is not already on the NAP: the Generalitat
 Valenciana's interurban bus GTFS on `gvinterbus.gva.es`, for example, is the
-same as the NAP's dataset 1325 (`genvalenciana_interurbano`), and adding it
-would give the same routes twice.
+same as the NAP's dataset 1325 (`genvalenciana_interurbano`). A feed of
+`gtfs_feeds` with the same routes between the same stops in the area as one
+already written is not written again: `gtfs_report.csv` lists it as
+`duplicate`, naming the feed it repeats, and a warning says so.
 
 ### Your own study area
 

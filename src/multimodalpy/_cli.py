@@ -241,7 +241,8 @@ def summary(manifest: dict) -> str:
     unused = [
         str(row.get("dataset") or row.get("dataset_name"))
         for row in manifest.get("gtfs_report", [])
-        if row.get("status") in {"failed", "failed_processing", "no_service_on_date"}
+        if row.get("status")
+        in {"failed", "failed_processing", "no_service_on_date", "duplicate"}
     ]
     if unused:
         lines.append(f"  GTFS not used: {', '.join(unused)} (see gtfs_report.csv)")

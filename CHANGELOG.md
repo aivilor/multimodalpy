@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `multimodalpy_version` that wrote it, so what a download did (failed modes,
   GTFS report, period codes...) is kept with the data. The command line now
   prints a short summary of what was written and what was not.
+- A feed of `gtfs_feeds` with the same routes between the same stops in the
+  area as a feed already written (usually a NAP dataset served elsewhere too)
+  is not written twice: `gtfs_report` gives it the status `duplicate`, with the
+  feed it repeats in `error`, and a `UserWarning` names it. NAP datasets are
+  never skipped this way.
 - `--gtfs-peak-period NAME=START-END` on the command line (repeatable), the
   `gtfs_peak_periods` of `download_network()`.
 

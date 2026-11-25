@@ -1179,13 +1179,14 @@ def test_download_gtfs_reports_feeds_without_service_that_day(
 # ---------------------------------------------------------------------------
 # Feeds from outside the NAP (gtfs_feeds)
 # ---------------------------------------------------------------------------
-def _simple_feed(path):
-    trips = [("R1", "WD", "t1")]
+def _simple_feed(path, route="R1"):
+    """One trip of ``route`` from A to B; feeds of different routes differ."""
+    trips = [(route, "WD", "t1")]
     stop_times = [
         ("t1", "07:00:00", "07:00:00", "A", 1),
         ("t1", "07:05:00", "07:05:00", "B", 2),
     ]
-    return _write_feed(path, [("R1", "1", 3)], trips, stop_times)
+    return _write_feed(path, [(route, "1", 3)], trips, stop_times)
 
 
 def test_user_feed_sources_accepts_every_form(tmp_path):
@@ -1246,7 +1247,7 @@ def user_feeds(tmp_path, monkeypatch):
     """A local feed, one served at an address, and an address that fails."""
     import requests
 
-    served = _simple_feed(tmp_path / "served.zip").read_bytes()
+    served = _simple_feed(tmp_path / "served.zip", route="R9").read_bytes()
     asked: list[str] = []
 
     def fake_get(url, **kwargs):
@@ -1288,7 +1289,7 @@ def test_download_gtfs_with_user_feeds_only(tmp_path, monkeypatch, user_feeds):
         ],
     )
     assert set(results) == {"metrobus", "emt"}
-    assert results["metrobus"]["edges"]["edge_id"].tolist() == ["metrobus_R1_A_B"]
+    assert results["metrobus"]["edges"]["edge_id"].tolist() == ["metrobus_R9_A_B"]
     assert (tmp_path / "zips" / "metrobus.zip").is_file()
     assert user_feeds["local"].is_file()  # used where it is, not copied
     rows = {row["dataset_name"]: row for row in report}
@@ -1305,7 +1306,7 @@ def test_user_feeds_come_after_the_nap_and_never_take_its_names(
 ):
     import geopandas as gpd
 
-    nap_feed = _simple_feed(tmp_path / "20261119_030028_EMT.zip")
+    nap_feed = _simple_feed(tmp_path / "20261119_030028_EMT.zip", route="R5")
 
     def fake_zips(area_name, output_dir, *, report=None, **kwargs):
         report.append(
@@ -1350,3 +1351,87 @@ def test_a_user_feed_does_not_overwrite_a_nap_zip(tmp_path, monkeypatch):
     )
     assert [path.name for path, _, _ in fetched] == ["emt_2.zip"]
     assert nap_zip.read_bytes() == b"nap feed"
+
+
+def test_a_user_feed_that_repeats_a_nap_dataset_is_skipped(tmp_path, monkeypatch):
+    """The same routes and stops in the area: not written twice."""
+    import geopandas as gpd
+    import requests
+
+    nap_feed = _simple_feed(tmp_path / "20261119_030028_genvalenciana.zip")
+    # The same network, exported another day: other trips, same routes and stops.
+    copy = _write_feed(
+        tmp_path / "copy.zip",
+        [("R1", "1", 3)],
+        [("R1", "WD", "other_trip")],
+        [
+            ("other_trip", "09:00:00", "09:00:00", "A", 1),
+            ("other_trip", "09:06:00", "09:06:00", "B", 2),
+        ],
+    )
+    different = _simple_feed(tmp_path / "different.zip", route="R2")
+
+    class Answer:
+        def __init__(self, content):
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: Answer(copy.read_bytes()))
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        report.append(
+            {"dataset_id": 1325, "status": "downloaded", "path": str(nap_feed)}
+        )
+        return [nap_feed]
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.download_gtfs(
+        "Valencia",
+        boundary,
+        tmp_path / "zips",
+        modes=[1],
+        api_key="k",
+        report=report,
+        feeds={"interurbano": "https://example.org/gtfs.zip", "mine": different},
+    )
+    assert list(results) == ["genvalenciana", "mine"]
+    rows = {row["dataset"]: row for row in report}
+    assert rows["interurbano"]["status"] == "duplicate"
+    assert rows["interurbano"]["error"] == (
+        "same routes and stops in the area as genvalenciana"
+    )
+    assert rows["mine"]["status"] == "written"
+
+
+def test_nap_datasets_are_never_skipped_as_duplicates(tmp_path, monkeypatch):
+    import geopandas as gpd
+
+    first = _simple_feed(tmp_path / "a.zip")
+    second = _simple_feed(tmp_path / "b.zip")
+
+    def fake_zips(area_name, output_dir, *, report=None, **kwargs):
+        for number, path in enumerate([first, second]):
+            report.append(
+                {"dataset_id": number, "status": "downloaded", "path": str(path)}
+            )
+        return [first, second]
+
+    monkeypatch.setattr(_gtfs, "download_gtfs_nap_zips", fake_zips)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    results = _gtfs.download_gtfs(
+        "Valencia", boundary, tmp_path / "zips", modes=[1], api_key="k", report=[]
+    )
+    assert list(results) == ["a", "b"]
+
+
+def test_edge_network_key():
+    edges = pd.DataFrame(
+        {"route_id": ["R1", "R1"], "from_node": ["A", "B"], "to_node": ["B", "C"]}
+    )
+    assert _gtfs.edge_network_key(edges) == {("R1", "A", "B"), ("R1", "B", "C")}
+    assert _gtfs.edge_network_key(edges.iloc[::-1]) == _gtfs.edge_network_key(edges)
+    assert _gtfs.edge_network_key(edges.iloc[:0]) == frozenset()

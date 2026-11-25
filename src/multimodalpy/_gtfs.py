@@ -1904,6 +1904,19 @@ def _feed_file_name(source: str) -> str:
     return Path(path.rstrip("/")).name or "gtfs"
 
 
+def edge_network_key(edges: pd.DataFrame) -> frozenset[tuple[str, str, str]]:
+    """Return the network an edges layer describes: its ``(route_id, from, to)``.
+
+    Two feeds with the same key give the same routes between the same
+    stops in the area, whatever their file, dates covered or trips: one
+    repeats the other. Empty for a layer without edges.
+    """
+    if edges.empty or not {"route_id", "from_node", "to_node"} <= set(edges.columns):
+        return frozenset()
+    rows = edges[["route_id", "from_node", "to_node"]].astype(str)
+    return frozenset(rows.itertuples(index=False, name=None))
+
+
 def _fetch_user_feeds(
     sources: list[tuple[str | None, str]],
     zip_dir: Path,
@@ -2069,6 +2082,9 @@ def download_gtfs(
     wanted = {int(mode) for mode in modes}
     results: dict[str, dict[str, object]] = {}
     taken: set[str] = set()
+    # The network of each feed written so far, to spot a feed that repeats
+    # one (e.g. a gtfs_feeds address that serves a NAP dataset).
+    networks: dict[frozenset[tuple[str, str, str]], str] = {}
     for zip_path, given_name, row in feed_files:
         dataset_name = (
             _unique_name(slugify(given_name), taken)
@@ -2125,6 +2141,28 @@ def download_gtfs(
                 error=f"{type(exc).__name__}: {exc}",
             )
             continue
+        # Only a feed of gtfs_feeds is skipped: the NAP's are what the NAP
+        # lists, and come first.
+        network_key = edge_network_key(stop_edges)
+        from_user = row is not None and row.get("source") == "user"
+        if from_user and network_key and network_key in networks:
+            same = networks[network_key]
+            logger.warning(
+                "Skipping feed %s: it has the same routes and stops in the area as %s.",
+                zip_path.name,
+                same,
+            )
+            outcome(
+                zip_path,
+                row,
+                dataset=dataset_name,
+                mode=mode,
+                status="duplicate",
+                error=f"same routes and stops in the area as {same}",
+            )
+            continue
+        if network_key:
+            networks[network_key] = dataset_name
         outcome(
             zip_path,
             row,

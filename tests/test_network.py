@@ -2159,3 +2159,25 @@ def test_cli_rejects_badly_written_peak_periods(monkeypatch, capsys, values):
     with pytest.raises(SystemExit):
         _cli.main(args)
     assert "--gtfs-peak-period" in capsys.readouterr().err
+
+
+def test_a_repeated_feed_is_reported_with_a_warning(tmp_path, backends):
+    backends["gtfs_result"] = {"genvalenciana": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(1325, "written", dataset="genvalenciana", mode="bus"),
+        {
+            "source": "user",
+            "dataset_name": "interurbano",
+            "file_name": "gtfs.zip",
+            "status": "duplicate",
+            "dataset": "interurbano",
+            "mode": "bus",
+            "error": "same routes and stops in the area as genvalenciana",
+        },
+    ]
+    with pytest.warns(UserWarning, match="1 GTFS feed\\(s\\) repeat another one"):
+        manifest = network.download_network(
+            "Valencia", modes=["bus"], output_dir=tmp_path, api_key="k"
+        )
+    assert manifest["gtfs_datasets"] == ["genvalenciana"]
+    assert manifest["gtfs_report"][1]["status"] == "duplicate"
