@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
+- `pandas>=2.0` and `requests>=2.27` are now declared (they had no lower bound),
+  and CI also runs the tests with the lowest versions `pyproject.toml` allows,
+  on Python 3.11. mypy checks the code for Python 3.11, the oldest supported.
 - The GTFS hour options are checked before anything is downloaded, with a
   message saying what is wrong: `gtfs_hour_range` and each period need whole
   hours (start 0–23, end 0–24, not the same hour), `gtfs_hour_band_size` must

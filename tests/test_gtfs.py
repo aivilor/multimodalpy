@@ -726,7 +726,9 @@ def test_no_warning_without_impossible_times(feed):
     import warnings
 
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        # Only multimodalpy's own warnings: older pandas releases warn about
+        # numpy deprecations of their own.
+        warnings.simplefilter("error", UserWarning)
         _gtfs.normalize_gtfs_feed(
             feed, dataset_name="ds", layer_id="ds", filter_geometry=AREA
         )
