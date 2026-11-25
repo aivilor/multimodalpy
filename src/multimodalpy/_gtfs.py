@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import datetime
 import logging
+import numbers
 import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zipfile import BadZipFile, ZipFile
 
 if TYPE_CHECKING:
@@ -247,6 +248,111 @@ def seconds_to_gtfs_time(seconds) -> str | None:
     return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
 
 
+#: Band sizes that split the day into equal bands (``gtfs_hour_band_size``).
+HOUR_BAND_SIZES = (1, 2, 3, 4, 6, 8, 12, 24)
+
+
+def hour_in_range(hour, start: int, end: int):
+    """Whether ``hour`` (0-23, a number or a Series) is in ``[start, end)``.
+
+    A range that crosses midnight, such as ``(22, 2)``, holds 22, 23, 0 and
+    1. ``end`` may be 24 (the end of the day), and ``0`` means the same.
+    """
+    if start < end:
+        return (hour >= start) & (hour < end)
+    return (hour >= start) | (hour < end)
+
+
+def _check_hours(value: object, what: str) -> tuple[int, int]:
+    """Return ``value`` as ``(start, end)`` hours, or raise a clear ``ValueError``."""
+    start: Any
+    end: Any
+    try:
+        start, end = value  # type: ignore[misc]
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{what} must be two hours (start, end), e.g. (7, 9). Received: {value!r}"
+        ) from None
+    for hour in (start, end):
+        if isinstance(hour, bool) or not isinstance(hour, numbers.Integral):
+            raise ValueError(
+                f"{what}: hours must be whole numbers. Received: {value!r}"
+            )
+    if not 0 <= start <= 23 or not 0 <= end <= 24:
+        raise ValueError(
+            f"{what}: the start must be an hour from 0 to 23 and the end from 0 "
+            f"to 24. Received: {value!r}"
+        )
+    if start == end % 24:
+        raise ValueError(
+            f"{what}: start and end are the same hour, so the range is empty "
+            f"or the whole day (for the whole day, leave it out). "
+            f"Received: {value!r}"
+        )
+    return int(start), int(end)
+
+
+def check_hour_options(
+    hour_range: object = None,
+    hour_band_size: object = 1,
+    peak_periods: object = None,
+) -> None:
+    """Check the GTFS hour options before anything is downloaded.
+
+    - ``hour_range``: ``None`` or ``(start, end)`` whole hours, the start
+      from 0 to 23 and the end from 0 to 24; it may cross midnight
+      (``(22, 2)``).
+    - ``hour_band_size``: hours per band of the hourly summary, one of
+      ``HOUR_BAND_SIZES`` so the bands split the day evenly.
+    - ``peak_periods``: ``None`` or ``{name: (start, end)}`` with the same
+      hours as ``hour_range`` (a period may cross midnight too), names that
+      are text and not ``rest_of_day``, and no hour in two periods.
+
+    Raises ``ValueError`` saying what is wrong.
+    """
+    if hour_range is not None:
+        _check_hours(hour_range, "gtfs_hour_range")
+    if (
+        isinstance(hour_band_size, bool)
+        or not isinstance(hour_band_size, numbers.Integral)
+        or hour_band_size not in HOUR_BAND_SIZES
+    ):
+        sizes = ", ".join(map(str, HOUR_BAND_SIZES))
+        raise ValueError(
+            "gtfs_hour_band_size must split the day into equal bands: one of "
+            f"{sizes} hours. Received: {hour_band_size!r}"
+        )
+    if peak_periods is None:
+        return
+    if not isinstance(peak_periods, Mapping) or not peak_periods:
+        raise ValueError(
+            "gtfs_peak_periods must be a dict {name: (start, end)}, e.g. "
+            f"{{'morning': (7, 9)}}. Received: {peak_periods!r}"
+        )
+    owner: dict[int, str] = {}
+    for name, hours in peak_periods.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                f"gtfs_peak_periods: names must be text. Received: {name!r}"
+            )
+        if name == "rest_of_day":
+            raise ValueError(
+                "gtfs_peak_periods: 'rest_of_day' is the name of the hours outside "
+                "every period; choose another name."
+            )
+        start, end = _check_hours(hours, f"gtfs_peak_periods[{name!r}]")
+        for hour in range(24):
+            if not hour_in_range(hour, start, end):
+                continue
+            if hour in owner:
+                raise ValueError(
+                    f"gtfs_peak_periods: {owner[hour]!r} and {name!r} both "
+                    f"include the hour {hour:02d}-{hour + 1:02d}; periods "
+                    "cannot overlap."
+                )
+            owner[hour] = name
+
+
 def seconds_to_hour_band(seconds, *, band_size_hours: int = 1) -> str | None:
     """Group seconds-since-midnight into an hour band like '08-09'."""
     import math
@@ -275,7 +381,7 @@ def classify_period(
     peak_periods = peak_periods or DEFAULT_PEAK_PERIODS
     hour = int((seconds // 3600) % 24)
     for name, (start, end) in peak_periods.items():
-        if start <= hour < end:
+        if hour_in_range(hour, start, end):
             return name
     return "rest_of_day"
 
@@ -906,7 +1012,7 @@ def _build_stop_to_stop_trip_records(
     if hour_range is not None:
         start_h, end_h = hour_range
         hour_of_day = (work["departure_seconds"] // 3600) % 24
-        work = work[(hour_of_day >= start_h) & (hour_of_day < end_h)].copy()
+        work = work[hour_in_range(hour_of_day, start_h, end_h)].copy()
 
     stop_lookup = stops[["stop_id", "stop_name", "stop_lat", "stop_lon"]].copy()
     stop_lookup["stop_lat"] = pd.to_numeric(stop_lookup["stop_lat"], errors="coerce")
@@ -1841,6 +1947,7 @@ def download_gtfs(
         value = boundary["prov_codes"].iloc[0]
         province_codes = list(value) if isinstance(value, (list, tuple)) else None
 
+    check_hour_options(hour_range, hour_band_size, peak_periods)
     sources = user_feed_sources(feeds)
     report_rows: list[dict[str, object]] = [] if report is None else report
     zips: list[Path] = []

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `gtfs_hour_range` and the periods of `gtfs_peak_periods` may cross midnight:
+  `(22, 2)` keeps the departures from 22:00 to 01:59.
+
+### Changed
+- The GTFS hour options are checked before anything is downloaded, with a
+  message saying what is wrong: `gtfs_hour_range` and each period need whole
+  hours (start 0–23, end 0–24, not the same hour), `gtfs_hour_band_size` must
+  split the day evenly (1, 2, 3, 4, 6, 8, 12 or 24) and periods cannot overlap.
+  Before, a range such as `(22, 2)` silently kept no trip (every feed was then
+  reported as `nothing_in_area`), a band size of 0 made every feed fail after
+  the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
+  periods went to the first one.
+
 ### Fixed
 - A refusal from the Overpass server (HTTP 406 Not Acceptable or 403
   Forbidden, which `overpass-api.de` answers since April 2026 to clients it has

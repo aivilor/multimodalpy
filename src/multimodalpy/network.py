@@ -226,11 +226,16 @@ def download_network(
     gtfs_hour_band_size : int
         Width in hours of the bands of the GTFS edges' hourly summary
         (``h_tts`` and ``h_trips``, e.g. ``"07-08:300;08-09:420"``).
-        Defaults to 1. It changes only that summary: the other columns and
-        the matrix weights are the same whatever the band size.
+        Defaults to 1; one of 1, 2, 3, 4, 6, 8, 12 or 24, so the bands
+        split the day evenly. It changes only that summary: the other
+        columns and the matrix weights are the same whatever the band size.
     gtfs_hour_range : (int, int), optional
         If set (e.g. (7, 9)), only GTFS trips whose departure falls in that
-        hour window are considered (useful for peak vs off-peak).
+        hour window are considered (useful for peak vs off-peak): from the
+        start hour (0 to 23) up to, not including, the end hour (0 to 24).
+        A range may cross midnight: ``(22, 2)`` keeps the departures from
+        22:00 to 01:59. Times past midnight in the feed (``25:10:00``)
+        count as that hour of the day (01).
     gtfs_peak_periods : dict, optional
         Peak periods for the per-column breakdown of the GTFS edges layer
         (option A). Defaults to: peak_am 07-09, peak_pm 17-20, rest_of_day
@@ -238,7 +243,9 @@ def download_network(
         ``{"morning": (6, 9), "evening": (18, 21)}``, get a three-letter
         code in the short column names (``tts_m_mor``, ``tm_eve_wd``; or
         ``p1``, ``p2``... if the first three letters clash), listed in the
-        manifest's ``gtfs_period_codes``.
+        manifest's ``gtfs_period_codes``. Hours as in ``gtfs_hour_range``
+        (a period may cross midnight, ``{"night": (22, 6)}``); periods
+        cannot overlap.
     gtfs_service_date : str | datetime.date, optional
         Count the GTFS trips of this day only (``"2026-11-25"``,
         ``"20261125"`` or a ``datetime.date``): the trips whose service runs
@@ -363,7 +370,9 @@ def download_network(
             output_formats.append(normalized)
 
     osm_modes, nap_modes = _split_modes(modes)
-    # A malformed date fails before anything is downloaded.
+    # Wrong hour options fail before anything is downloaded.
+    _gtfs.check_hour_options(gtfs_hour_range, gtfs_hour_band_size, gtfs_peak_periods)
+    # So does a malformed date.
     service_date = (
         None
         if gtfs_service_date is None

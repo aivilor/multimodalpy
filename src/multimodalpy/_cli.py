@@ -109,7 +109,10 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         nargs=2,
         metavar=("START", "END"),
-        help="Filter GTFS trips by hour window, e.g. --gtfs-hour-range 7 9",
+        help=(
+            "Keep only the GTFS trips leaving in this hour window, e.g. "
+            "--gtfs-hour-range 7 9; it may cross midnight (22 2)."
+        ),
     )
     parser.add_argument(
         "--gtfs-feed",

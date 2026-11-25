@@ -194,6 +194,99 @@ def test_period_columns_kept_when_a_stop_has_no_name(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Hour options: checks and ranges that cross midnight
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("hour", "start", "end", "inside"),
+    [
+        (7, 7, 9, True),
+        (9, 7, 9, False),
+        (23, 22, 2, True),
+        (1, 22, 2, True),
+        (2, 22, 2, False),
+        (12, 22, 2, False),
+        (23, 22, 24, True),
+        (23, 22, 0, True),
+        (0, 22, 0, False),
+    ],
+)
+def test_hour_in_range(hour, start, end, inside):
+    assert bool(_gtfs.hour_in_range(hour, start, end)) is inside
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"hour_range": (7, 9)},
+        {"hour_range": (22, 2)},
+        {"hour_range": (np.int64(6), np.int64(10))},
+        {"hour_band_size": 3},
+        {"hour_band_size": 24},
+        {"peak_periods": {"morning": (7, 10), "night": (22, 6)}},
+    ],
+)
+def test_good_hour_options_pass(options):
+    _gtfs.check_hour_options(**options)
+
+
+@pytest.mark.parametrize(
+    ("options", "match"),
+    [
+        ({"hour_range": 7}, "two hours"),
+        ({"hour_range": (7, 8, 9)}, "two hours"),
+        ({"hour_range": (7.5, 9)}, "whole numbers"),
+        ({"hour_range": (True, 9)}, "whole numbers"),
+        ({"hour_range": (-1, 9)}, "from 0 to 23"),
+        ({"hour_range": (24, 2)}, "from 0 to 23"),
+        ({"hour_range": (7, 25)}, "from 0 to 24"),
+        ({"hour_range": (0, 24)}, "same hour"),
+        ({"hour_band_size": 0}, "equal bands"),
+        ({"hour_band_size": 5}, "equal bands"),
+        ({"hour_band_size": "1"}, "equal bands"),
+        ({"peak_periods": {}}, "must be a dict"),
+        ({"peak_periods": [(7, 9)]}, "must be a dict"),
+        ({"peak_periods": {"rest_of_day": (7, 9)}}, "choose another name"),
+        ({"peak_periods": {"am": (9, 7)}}, None),  # crosses midnight: fine
+        ({"peak_periods": {"am": (7, 10), "pm": (9, 12)}}, "'am' and 'pm'"),
+        ({"peak_periods": {"night": (22, 6), "early": (5, 7)}}, "05-06"),
+    ],
+)
+def test_bad_hour_options_are_explained(options, match):
+    if match is None:
+        _gtfs.check_hour_options(**options)
+        return
+    with pytest.raises(ValueError, match=match):
+        _gtfs.check_hour_options(**options)
+
+
+def test_an_hour_range_may_cross_midnight(tmp_path):
+    path = _write_feed(
+        tmp_path / "night.zip",
+        [("N1", "N1", 3)],
+        [("N1", "WD", "late"), ("N1", "WD", "after"), ("N1", "WD", "day")],
+        [
+            ("late", "23:30:00", "23:30:00", "A", 1),
+            ("late", "23:35:00", "23:35:00", "B", 2),
+            ("after", "25:10:00", "25:10:00", "A", 1),  # 01:10 the next day
+            ("after", "25:15:00", "25:15:00", "B", 2),
+            ("day", "12:00:00", "12:00:00", "A", 1),
+            ("day", "12:05:00", "12:05:00", "B", 2),
+        ],
+    )
+    row = _edges(path, hour_range=(22, 2)).loc[("A", "B", "N1")]
+    assert row["trip_count"] == 2
+    assert row["hourly_trip_counts"] == "01-02:1|23-24:1"
+
+
+def test_a_peak_period_may_cross_midnight():
+    night = {"night": (22, 6)}
+    assert _gtfs.classify_period(23 * 3600, night) == "night"
+    assert _gtfs.classify_period(25 * 3600, night) == "night"  # 01:00
+    assert _gtfs.classify_period(12 * 3600, night) == "rest_of_day"
+
+
+# ---------------------------------------------------------------------------
 # Clipping to the study area before aggregating
 # ---------------------------------------------------------------------------
 def test_clip_keeps_segments_crossing_the_area_without_a_stop(feed):

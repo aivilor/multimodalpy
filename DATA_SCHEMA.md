@@ -326,7 +326,11 @@ names of your own get a three-letter code instead of `pam` / `ppm`: their first
 three letters (`{"morning": (6, 9)}` gives `tts_m_mor`, `tm_mor_wd`…), or `p1`,
 `p2`… in order when those clash. `pam`, `ppm` and `rod` always mean the default
 periods. The manifest's `gtfs_period_codes` gives each period's code, e.g.
-`{"morning": "mor", "rest_of_day": "rod"}`.
+`{"morning": "mor", "rest_of_day": "rod"}`. A period runs from its start hour up
+to, not including, its end hour, and may cross midnight (`{"night": (22, 6)}`);
+periods cannot overlap. A trip belongs to the period of its departure from the
+edge's first stop; times past midnight in the feed (`25:10:00`) count as that
+hour of the day.
 
 | Column | Former name | Meaning |
 |---|---|---|

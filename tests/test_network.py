@@ -548,6 +548,26 @@ def test_download_network_rejects_unknown_mode(tmp_path):
         network.download_network("Valencia", modes=["helicopter"], output_dir=tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("option", "match"),
+    [
+        ({"gtfs_hour_range": (9, 9)}, "same hour"),
+        ({"gtfs_hour_range": (7, 25)}, "from 0 to 24"),
+        ({"gtfs_hour_band_size": 0}, "equal bands"),
+        ({"gtfs_hour_band_size": 5}, "equal bands"),
+        ({"gtfs_peak_periods": {"a": (7, 10), "b": (9, 11)}}, "cannot overlap"),
+    ],
+)
+def test_download_network_checks_the_hour_options_first(
+    backends, tmp_path, option, match
+):
+    with pytest.raises(ValueError, match=match):
+        network.download_network(
+            "Valencia", modes=["walking", "bus"], output_dir=tmp_path, **option
+        )
+    assert backends["osm"] == [] and backends["gtfs"] == []
+
+
 # ---------------------------------------------------------------------------
 # main(): OSM only
 # ---------------------------------------------------------------------------
