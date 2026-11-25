@@ -18,13 +18,14 @@ def nap_api_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_overpass_probe(monkeypatch):
+def no_overpass_status(monkeypatch):
     """Never reach a real Overpass server from the tests.
 
-    Before each download attempt ``_overpass`` asks the server's ``/status``
-    (see ``_probe_server``); the downloads in the tests are fakes, so that
-    request is skipped. The probe's own tests put it back.
+    Before each query osmnx asks the server's ``/status`` how long to wait,
+    which ``_overpass`` answers with ``_overpass_pause`` while downloading;
+    the downloads in the tests are fakes, so that request is skipped (no
+    wait). The tests of the ``/status`` check put it back.
     """
     from multimodalpy import _overpass
 
-    monkeypatch.setattr(_overpass, "_probe_server", lambda: None)
+    monkeypatch.setattr(_overpass, "_overpass_pause", lambda *args, **kwargs: 0.0)

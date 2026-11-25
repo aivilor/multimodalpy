@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A refusal from the Overpass server (HTTP 406 Not Acceptable or 403
+  Forbidden, which `overpass-api.de` answers since April 2026 to clients it has
+  blocked for heavy use) is no longer reported as a bare "HTTP 406": the
+  `OSMDownloadError` explains the block, that it usually lifts by itself after
+  some hours, and how to use another server. It is not retried, since every
+  retry counts against the client.
+- OSM downloads no longer stop for 60 s without saying so. osmnx reads the
+  Overpass server's `/status` page before each query and waited a fixed 60 s
+  whenever it could not read it (a refusal, a server without that page, no
+  answer), and on a server with no rate limit it could keep asking every 5 s
+  without end. multimodalpy now reads that page itself while downloading: it
+  waits only for a slot the server announces (logged), queries a server with
+  no slot information straight away, and lets a failed request reach the
+  retries. This also halves the requests: one `/status` per query instead of
+  two, and none for an answer already in the cache.
+
 ## [0.6.0] - 2026-11-20
 
 ### Added

@@ -178,6 +178,15 @@ often at capacity: it then answers with an error page instead of data.
   are one request to the server instead of three.
 - A temporary failure (server busy, timeout, lost connection) is **retried four
   times**, waiting 10, 20, 40 and 80 seconds, and each retry is logged.
+- A **refusal** (HTTP 406 or 403) is not retried. Since April 2026
+  `overpass-api.de` blocks heavy or automated use for a while and answers
+  those clients this way; the block usually lifts by itself after some hours
+  without requests, and every retry would count against you. The error says
+  so: wait, or use another server (below).
+- Before each query the server's `/status` page is read, and multimodalpy
+  waits only when it announces that no slot is free yet (the wait is logged).
+  A server without that page, or without a rate limit, is queried straight
+  away; an answer already in the cache makes no request at all.
 - If the streets still can't be downloaded, the bus and train networks are
   written anyway; the street modes are listed in the manifest's `failed_modes`
   and reported with a warning. Since they share one query, they fail together. Only if nothing at all could be downloaded does
