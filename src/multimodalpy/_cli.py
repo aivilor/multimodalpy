@@ -181,9 +181,9 @@ def main(argv: list[str] | None = None) -> None:
         action="append",
         metavar="[NAME=]SOURCE",
         help=(
-            "A GTFS feed from outside the NAP: an http(s) address or a local zip "
-            "or folder, optionally named (my_operator=https://.../gtfs.zip). "
-            "Repeat it for several feeds."
+            "A GTFS feed from outside the NAP: an http(s) address, optionally "
+            "named (my_operator=https://.../gtfs.zip). Repeat it for several "
+            "feeds. Local files: multimodalpy build --gtfs-feed."
         ),
     )
     parser.add_argument(

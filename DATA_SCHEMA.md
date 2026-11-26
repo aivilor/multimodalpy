@@ -109,7 +109,7 @@ each province: an operator missing from the report is not on the NAP.
 | `crs` | `"EPSG:4326"` | CRS of every output layer. |
 | `connect_parts` | `True` | Add the roads joining the parts of a multi-part municipality (see "Municipalities in several parts"). |
 | `gtfs_service_date` | `None` | Count only the GTFS trips that run on this day (see [Which trips count](#which-trips-count)). |
-| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: source}` or a list of sources (an http(s) address or a local zip or folder). Processed like the NAP's, and listed in the manifest's `gtfs_feeds`. Without a NAP key, only these are used. |
+| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: source}` or a list of sources (http(s) addresses; local files go to `build_network()`). Processed like the NAP's, and listed in the manifest's `gtfs_feeds`. Without a NAP key, only these are used. |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
 | `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`. Off by default: they are only the raw input and can be downloaded again. Local feeds are never deleted. |
 

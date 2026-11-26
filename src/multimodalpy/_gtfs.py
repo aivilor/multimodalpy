@@ -1936,6 +1936,21 @@ def edge_network_key(edges: pd.DataFrame) -> frozenset[tuple[str, str, str]]:
     return frozenset(rows.itertuples(index=False, name=None))
 
 
+def refuse_local_feeds(sources: list[tuple[str | None, str]]) -> None:
+    """Raise ``ValueError`` for the local files among ``gtfs_feeds`` sources.
+
+    A download only takes addresses since 0.7.0: local feeds go to
+    :func:`multimodalpy.build_network`, which never downloads.
+    """
+    local = [source for _, source in sources if not _is_url(source)]
+    if local:
+        raise ValueError(
+            "download_network only takes addresses in gtfs_feeds; for local GTFS "
+            "files use build_network(gtfs_feeds=...) (it can also take this "
+            f"download's folder as source_dir): {', '.join(local)}"
+        )
+
+
 def _fetch_user_feeds(
     sources: list[tuple[str | None, str]],
     zip_dir: Path,
@@ -2047,7 +2062,8 @@ def download_gtfs(
 
     ``feeds`` adds GTFS feeds from outside the NAP: ``{name: source}``, or a
     list of sources or ``(name, source)`` pairs, a source being an http(s)
-    address (downloaded into ``zip_dir``) or a local zip or folder. They are
+    address (downloaded into ``zip_dir``); a local zip or folder raises a
+    ``ValueError`` (see :func:`multimodalpy.build_network`). They are
     processed like the NAP's, after them; a feed's ``dataset`` is its name
     (or its file name), numbered if another feed already has it, and its
     report row has ``source`` ``"user"`` (``"nap"`` for the NAP's). With
@@ -2061,6 +2077,7 @@ def download_gtfs(
 
     check_hour_options(hour_range, hour_band_size, peak_periods)
     sources = user_feed_sources(feeds)
+    refuse_local_feeds(sources)
     report_rows: list[dict[str, object]] = [] if report is None else report
     zips: list[Path] = []
     if use_nap:

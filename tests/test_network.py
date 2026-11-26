@@ -1985,19 +1985,22 @@ def test_a_missing_local_feed_fails_before_downloading(tmp_path, backends):
     assert backends["boundary"] == [] and backends["osm"] == []
 
 
-def test_an_own_feed_kept_in_gtfs_zips_is_not_deleted(tmp_path, backends):
-    kept = tmp_path / "gtfs_zips" / "emt.zip"
-    kept.parent.mkdir()
-    kept.write_bytes(b"zip kept from an earlier run")
-    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
-    network.download_network(
-        "Valencia",
-        modes=["bus"],
-        output_dir=tmp_path,
-        api_key="key",
-        gtfs_feeds=[kept],
-    )
-    assert kept.is_file()
+def test_download_network_refuses_local_feeds(tmp_path, backends):
+    """Local GTFS files go to build_network; refused before any download."""
+    local = tmp_path / "emt.zip"
+    local.write_bytes(b"a local feed")
+    with pytest.raises(ValueError, match=r"build_network\(gtfs_feeds=") as info:
+        network.download_network(
+            "Valencia",
+            modes=["walking", "bus"],
+            output_dir=tmp_path / "out",
+            api_key="key",
+            gtfs_feeds={"emt": local, "web": "https://example.org/gtfs.zip"},
+        )
+    assert str(local) in str(info.value)
+    assert "example.org" not in str(info.value)
+    assert backends["osm"] == [] and backends["gtfs"] == []
+    assert local.read_bytes() == b"a local feed"
 
 
 def test_a_user_feed_that_fails_raises_a_warning(tmp_path, backends):

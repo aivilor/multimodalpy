@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
+- **`gtfs_feeds` of `download_network()` (and `feeds` of `download_gtfs()`)
+  only take addresses now**: a local GTFS zip or folder raises a `ValueError`
+  that points to `build_network(gtfs_feeds=...)`, before anything is
+  downloaded. `download_network()` only downloads; `build_network()` reads.
 - The OSM layers are written in a fixed order (by nodes and edge id), so the
   same streets always give the same files and matrix rows.
 - When no GTFS feed could be written although some were found, `gtfs_status`

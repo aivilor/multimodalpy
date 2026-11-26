@@ -291,9 +291,10 @@ def download_network(
         "bus"/"train" modes asked for: ``{name: source}`` (the name is the
         output folder, ``bus/<name>/``), or a list of sources, named after
         their files. A source is an http(s) address, downloaded into
-        ``gtfs_zips/``, or a local GTFS zip or folder, e.g.
-        ``{"my_operator": "https://example.org/gtfs.zip"}``. Check that a
-        feed is not on the NAP already, or its routes appear twice.
+        ``gtfs_zips/``, e.g. ``{"my_operator": "https://example.org/gtfs.zip"}``;
+        a local GTFS zip or folder raises a ``ValueError``: use
+        :func:`build_network` for those. A feed with the same routes and
+        stops in the area as one already written is not written again.
         Without a NAP API key, the NAP is skipped with a ``UserWarning`` and
         only these feeds are used. Each one has a row in ``gtfs_report``
         with ``source="user"``.
@@ -394,6 +395,7 @@ def download_network(
     )
     # So do a missing local feed and gtfs_feeds without bus or train.
     feed_sources = _gtfs.user_feed_sources(gtfs_feeds)
+    _gtfs.refuse_local_feeds(feed_sources)
     if feed_sources and not nap_modes:
         raise ValueError(
             "gtfs_feeds needs 'bus' or 'train' in modes: only the feeds of the "
@@ -497,14 +499,7 @@ def download_network(
     if osm_failures and not osm_results and not gtfs_results:
         raise next(iter(osm_failures.values()))
 
-    # Never delete a feed of the user's own: gtfs_feeds may point at a zip
-    # kept from an earlier run (keep_gtfs_zips=True) in this same folder.
-    own_feed_inside = any(
-        Path(source).resolve().is_relative_to(gtfs_zips_dir.resolve())
-        for _, source in feed_sources
-        if not _gtfs._is_url(source)
-    )
-    if nap_modes and not keep_gtfs_zips and not own_feed_inside:
+    if nap_modes and not keep_gtfs_zips:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
     # The name of each feed's zip in gtfs_zips/, for build_network(source_dir=).
     for row in gtfs_report:
