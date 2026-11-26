@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-25
+## [0.7.0] - 2026-11-26
 
 A review of the code before the multimodal network (1.0.0), and
 `build_network()`, which builds the networks from local files. Two changes
