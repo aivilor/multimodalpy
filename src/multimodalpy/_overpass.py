@@ -8,21 +8,30 @@ or a ``ResponseStatusCodeError`` carrying the whole page. Here:
 - a temporary failure (server busy, timeout, lost connection, a query the
   server cut short) is retried a few times, waiting longer each time
   (``RETRY_WAITS``), as the server itself asks;
+- a refusal (HTTP 403 or 406: since April 2026 overpass-api.de blocks
+  heavy or automated use for a while) is not retried, since every retry
+  counts against the client;
 - what still fails becomes an :class:`OSMDownloadError` that says which
   network, which server and what to do;
 - :func:`overpass_settings` chooses the server and timeout, identifies the
   requests as multimodalpy's and keeps osmnx's cache in a fixed folder.
 
 osmnx handles some busy answers itself, but not well for this server: it
-retries 429 and 504 forever (55 s each time), waits a fixed 60 s whenever
-its ``/status`` check gets a page it can't read or no answer at all, and
-returns the partial data of a query the server cut short, only logging the
-server's remark. A requests *response hook* (added to
-``osmnx.settings.requests_kwargs`` while downloading, see
-:func:`_response_check`) stops osmnx at those answers, and a quick look at
-the server's ``/status`` before each attempt (:func:`_probe_server`) catches
-a server that can't be reached, so the retries here handle them all the same
-way.
+retries 429 and 504 forever (55 s each time) and returns the partial data
+of a query the server cut short, only logging the server's remark. A
+requests *response hook* (added to ``osmnx.settings.requests_kwargs`` while
+downloading, see :func:`_download_patches`) stops osmnx at those answers,
+so the retries here handle them all the same way.
+
+Before each query osmnx also asks the server's ``/status`` how long to
+wait, and reads it badly: it waits a fixed 60 s, without saying so,
+whenever it gets a page it can't read (a refusal, a server without
+``/status``) or no answer at all, and on a server with no rate limit it
+can keep asking every 5 s without end. While downloading,
+:func:`_overpass_pause` takes the place of that check: it reads the slots
+the page announces, waits only what the server asks, and lets a request
+failure reach the retries here. It runs only for queries osmnx actually
+sends, so an answer already in the cache makes no request at all.
 """
 
 from __future__ import annotations
@@ -52,6 +61,16 @@ _sleep = time.sleep
 # Answers that mean "busy, come back later" (429 too many requests, 502/503
 # at capacity or down, 504 gateway timeout).
 _BUSY_STATUSES = frozenset({429, 502, 503, 504})
+
+# Answers that mean "not from you": overpass-api.de answers 406 Not
+# Acceptable (or 403 Forbidden) to a client it has blocked, usually
+# automatically after heavy use; the block lifts by itself some hours later.
+_REFUSED_STATUSES = frozenset({403, 406})
+
+#: Where to find another Overpass server.
+PUBLIC_INSTANCES_URL = (
+    "https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances"
+)
 
 
 class OSMDownloadError(RuntimeError):
@@ -105,6 +124,15 @@ class _ServerBusy(Exception):
         self.text = text
 
 
+class _ServerRefused(Exception):
+    """The server refused the request, 403 or 406 (raised by the response hook)."""
+
+    def __init__(self, status_code: int, text: str) -> None:
+        super().__init__(f"Overpass answered HTTP {status_code}")
+        self.status_code = status_code
+        self.text = text
+
+
 class _QueryCut(Exception):
     """The server stopped the query and sent partial data (response hook)."""
 
@@ -114,13 +142,15 @@ class _QueryCut(Exception):
 
 
 def _check_response(response: Any, *args: Any, **kwargs: Any) -> Any:
-    """Response hook: stop osmnx at a busy answer or a query cut short.
+    """Response hook: stop osmnx at a busy or refused answer, or a query cut short.
 
     Overpass writes its ``remark`` at the end of the JSON, so only the last
     bytes are searched; the JSON is parsed only when there is one.
     """
     if response.status_code in _BUSY_STATUSES:
         raise _ServerBusy(response.status_code, response.text[:2000])
+    if response.status_code in _REFUSED_STATUSES:
+        raise _ServerRefused(response.status_code, response.text[:2000])
     tail = response.content[-2048:]
     if b'"remark"' in tail and b"runtime error" in tail:
         try:
@@ -131,33 +161,87 @@ def _check_response(response: Any, *args: Any, **kwargs: Any) -> Any:
     return response
 
 
-#: Seconds to wait for the ``/status`` answer before each attempt.
-_PROBE_TIMEOUT = 30
+#: Seconds to wait for the ``/status`` answer before each query.
+_STATUS_TIMEOUT = 30
+
+#: A wait for a slot at least this long is logged as a warning (shorter
+#: ones only as information).
+_LONG_PAUSE = 30
+
+# Lines of the ``/status`` page: "2 slots available now." and
+# "Slot available after: 2026-11-25T12:00:05Z, in 12 seconds."
+_SLOTS_FREE = re.compile(r"^\s*(\d+) slots? available now", re.MULTILINE)
+_SLOT_AFTER = re.compile(
+    r"^\s*Slot available after:.*?in (-?\d+) seconds?", re.MULTILINE
+)
 
 
-def _probe_server() -> None:
-    """Check the Overpass server answers before letting osmnx query it.
+def _status_pause(text: str) -> float:
+    """Seconds to wait for a free slot, as a ``/status`` page announces.
 
-    osmnx asks the server's ``/status`` first, and when it gets no answer
-    (connection refused, DNS failure, timeout) it waits a fixed 60 s and
-    tries anyway. Asking here first turns that into a failure the retries
-    handle. A busy answer is stopped by :func:`_check_response`; any other
-    answer (e.g. a server without ``/status``) lets osmnx go ahead.
+    0 when a slot is free now, or when the page says nothing about slots
+    (a server with no rate limit, or a page that isn't Overpass's).
+    Otherwise the wait until the first slot frees up, at least 1 s.
+    """
+    free = _SLOTS_FREE.search(text)
+    if free and int(free.group(1)) > 0:
+        return 0.0
+    waits = [int(seconds) for seconds in _SLOT_AFTER.findall(text)]
+    if waits:
+        return float(max(min(waits), 1))
+    return 0.0
+
+
+def _overpass_pause(base_endpoint: str, *args: Any, **kwargs: Any) -> float:
+    """How long osmnx must wait before its next query, from the server's ``/status``.
+
+    Takes the place of osmnx's ``_overpass._get_overpass_pause`` while
+    downloading (see :func:`_download_patches`), with its arguments. A
+    request that fails (connection refused, DNS failure, timeout) raises,
+    and a busy or refused answer is stopped by :func:`_check_response`, so
+    the retries of :func:`call_overpass` handle them. Any other answer
+    without slots (a server without ``/status``, or with no rate limit)
+    means no wait. With ``osmnx.settings.overpass_rate_limit = False``
+    the page is not asked for at all, as in osmnx.
     """
     import requests
     from osmnx import settings
 
-    requests.get(
-        settings.overpass_url.rstrip("/") + "/status",
+    if not settings.overpass_rate_limit:
+        return 0.0
+    response = requests.get(
+        base_endpoint.rstrip("/") + "/status",
         headers={"User-Agent": settings.http_user_agent},
-        timeout=min(_PROBE_TIMEOUT, settings.requests_timeout),
+        timeout=min(_STATUS_TIMEOUT, settings.requests_timeout),
         **settings.requests_kwargs,
     )
+    if not response.ok:
+        return 0.0
+    pause = _status_pause(response.text)
+    if pause:
+        logger.log(
+            logging.WARNING if pause >= _LONG_PAUSE else logging.INFO,
+            "Overpass server %s: waiting %g s for a free slot, as it asks.",
+            overpass_server(),
+            pause,
+        )
+    return pause
+
+
+def _pause_hook(*args: Any, **kwargs: Any) -> float:
+    """Call :func:`_overpass_pause` (looked up each time, so tests can replace it)."""
+    return _overpass_pause(*args, **kwargs)
 
 
 @contextlib.contextmanager
-def _response_check() -> Iterator[None]:
-    """Add :func:`_check_response` to osmnx's requests while downloading."""
+def _download_patches() -> Iterator[None]:
+    """Change osmnx's requests while downloading, and restore them afterwards.
+
+    Adds :func:`_check_response` to its requests' response hooks, and puts
+    :func:`_overpass_pause` in place of its ``/status`` check (if this
+    osmnx has one by that name; 2.0 to 2.2 do).
+    """
+    from osmnx import _overpass as ox_overpass
     from osmnx import settings
 
     original = settings.requests_kwargs
@@ -169,10 +253,15 @@ def _response_check() -> Iterator[None]:
     hooks["response"] = [*existing, _check_response]
     kwargs["hooks"] = hooks
     settings.requests_kwargs = kwargs
+    original_pause = getattr(ox_overpass, "_get_overpass_pause", None)
+    if original_pause is not None:
+        ox_overpass._get_overpass_pause = _pause_hook
     try:
         yield
     finally:
         settings.requests_kwargs = original
+        if original_pause is not None:
+            ox_overpass._get_overpass_pause = original_pause
 
 
 # osmnx keeps its exceptions in a private module (osmnx._errors), so they
@@ -181,6 +270,20 @@ _STATUS_IN_MESSAGE = re.compile(r"responded:?\s+(\d{3})")
 
 
 def _http_failure(status: int, text: str) -> _Failure:
+    if status in _REFUSED_STATUSES:
+        return _Failure(
+            f"the server refused the request (HTTP {status})",
+            transient=False,
+            status_code=status,
+            hint=(
+                " The server is refusing requests from this connection: public "
+                "Overpass servers block heavy or automated use for a while, and "
+                "the block usually lifts by itself after some hours without "
+                "requests. Retrying now would not help (each attempt counts "
+                "against you): try again later, or use another Overpass server "
+                f"with overpass_url=... (public instances: {PUBLIC_INSTANCES_URL})."
+            ),
+        )
     reason = f"the server answered HTTP {status}"
     if "at capacity" in text:
         reason += " (it is at capacity)"
@@ -195,7 +298,7 @@ def _classify(exc: BaseException) -> _Failure | None:
     """Describe a failed Overpass request, or ``None`` if it isn't one."""
     import requests
 
-    if isinstance(exc, _ServerBusy):
+    if isinstance(exc, (_ServerBusy, _ServerRefused)):
         return _http_failure(exc.status_code, exc.text)
     if isinstance(exc, _QueryCut):
         return _Failure(
@@ -285,11 +388,10 @@ def call_overpass(
     """
     waits = RETRY_WAITS if waits is None else tuple(waits)
     attempt = 0
-    with _response_check():
+    with _download_patches():
         while True:
             attempt += 1
             try:
-                _probe_server()
                 return download()
             except Exception as exc:
                 failure = _classify(exc)

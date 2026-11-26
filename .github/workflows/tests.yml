@@ -53,6 +53,29 @@ jobs:
           file: ./coverage.xml
           fail_ci_if_error: false
 
+  lowest:
+    # The oldest versions pyproject.toml allows (numpy 1.26, pandas 2.0,
+    # geopandas 1.0, osmnx 2.0...), on the oldest Python, so a lower bound
+    # that no longer works is caught.
+    name: Tests (lowest supported versions, Python 3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install the lowest versions allowed
+        run: |
+          uv venv --python 3.11
+          uv pip install --resolution lowest-direct -e . "pytest>=8"
+
+      - name: Run tests
+        # No coverage here (pytest-cov is not installed): the main job has it.
+        run: .venv/bin/python -m pytest -o addopts=""
+
   lint:
     name: Lint (ruff, mypy)
     runs-on: ubuntu-latest

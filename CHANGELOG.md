@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.7.0] - 2026-11-26
+
+A review of the code before the multimodal network (1.0.0), and
+`build_network()`, which builds the networks from local files. Two changes
+need attention when upgrading: `download_network()` no longer takes local
+files in `gtfs_feeds` (use `build_network()`), and it keeps the GTFS zips by
+default.
+
+### Added
+- `build_network()`: the networks of a study area from files you already have,
+  without downloading anything. It takes a folder written by
+  `download_network()` (`source_dir`: its street networks and the GTFS zips it
+  kept), street networks of your own (`osm_networks`: a multimodalpy folder or
+  GeoPackage, the edges and nodes of another tool, or an osmnx GraphML; missing
+  `length`, `tts` and `edge_id` are computed) and local GTFS feeds
+  (`gtfs_feeds`), clips them to the study area and writes them exactly as a
+  download, so the same files always give the same output. Use it to try another
+  date, other periods, formats or a smaller area without downloading again, or
+  to combine a download with your own networks. On the command line:
+  `multimodalpy build`. The manifest says `built_with: build_network` and lists
+  the sources.
+- `gtfs_report` has a `zip_file` column: the name of each feed's zip in
+  `gtfs_zips/`.
+- `gtfs_hour_range` and the periods of `gtfs_peak_periods` may cross midnight:
+  `(22, 2)` keeps the departures from 22:00 to 01:59.
+- The manifest is saved as `manifest.json` in the output folder, with the
+  `multimodalpy_version` that wrote it, so what a download did (failed modes,
+  GTFS report, period codes...) is kept with the data. The command line now
+  prints a short summary of what was written and what was not.
+- A feed of `gtfs_feeds` with the same routes between the same stops in the
+  area as a feed already written (usually a NAP dataset served elsewhere too)
+  is not written twice: `gtfs_report` gives it the status `duplicate`, with the
+  feed it repeats in `error`, and a `UserWarning` names it. NAP datasets are
+  never skipped this way.
+- What the multimodal network will need from the GTFS layers: the edges keep
+  their `route_type` (a feed can mix modes, e.g. metro and tram), the stops
+  their station as `station_id` (`parent_station`), and the matrix records the
+  `gtfs_service_date` its trip counts are of in `meta`.
+- `--gtfs-peak-period NAME=START-END` on the command line (repeatable), the
+  `gtfs_peak_periods` of `download_network()`.
+
+### Changed
+- **`keep_gtfs_zips` is `True` by default**: the GTFS zips stay in
+  `gtfs_zips/`, so `build_network(source_dir=...)` can process them again
+  (another date or periods) without downloading. `keep_gtfs_zips=False`, or
+  `--no-keep-gtfs-zips` on the command line, deletes them as before.
+- **`gtfs_feeds` of `download_network()` (and `feeds` of `download_gtfs()`)
+  only take addresses now**: a local GTFS zip or folder raises a `ValueError`
+  that points to `build_network(gtfs_feeds=...)`, before anything is
+  downloaded. `download_network()` only downloads; `build_network()` reads.
+- The OSM layers are written in a fixed order (by nodes and edge id), so the
+  same streets always give the same files and matrix rows.
+- When no GTFS feed could be written although some were found, `gtfs_status`
+  says so instead of "no published datasets".
+- `pandas>=2.0` and `requests>=2.27` are now declared (they had no lower bound),
+  and CI also runs the tests with the lowest versions `pyproject.toml` allows,
+  on Python 3.11. mypy checks the code for Python 3.11, the oldest supported.
+- The GTFS hour options are checked before anything is downloaded, with a
+  message saying what is wrong: `gtfs_hour_range` and each period need whole
+  hours (start 0–23, end 0–24, not the same hour), `gtfs_hour_band_size` must
+  split the day evenly (1, 2, 3, 4, 6, 8, 12 or 24) and periods cannot overlap.
+  Before, a range such as `(22, 2)` silently kept no trip (every feed was then
+  reported as `nothing_in_area`), a band size of 0 made every feed fail after
+  the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
+  periods went to the first one.
+
+### Fixed
+- The trip counts of the GTFS edges (`trips` and its per-period and
+  weekday/weekend versions) are always whole numbers, empty where no trip runs;
+  a period without service used to make a column float (`1.0`) or text.
+- `stops` in `gtfs_report` counts the stops in the study area, as documented;
+  it also counted the stops just outside that end an edge crossing the boundary.
+- `isochrones()` and `shortest_path()` with thousands of points given as node
+  ids and coordinates mixed no longer slow down with the square of their number.
+- Files downloaded from the NAP are saved under a safe name: only the last part
+  of the server's file name (so nothing is written outside `gtfs_zips/`), with
+  unusual characters replaced and `.zip` at the end. Two files of one download
+  with the same name no longer overwrite each other (the second gets
+  `_<file id>`), and a feed of `gtfs_feeds` no longer overwrites a NAP zip of
+  the same name: both used to leave one file processed twice.
+- `days_active` in the GTFS schedule is now the number of dates the service
+  runs on. It used to add the days of the week marked in `calendar.txt` to the
+  dates `calendar_dates.txt` adds and removes over the whole calendar, so a
+  Monday-to-Friday service with three holidays and one extra Saturday gave 3.
+- A refusal from the Overpass server (HTTP 406 Not Acceptable or 403
+  Forbidden, which `overpass-api.de` answers since April 2026 to clients it has
+  blocked for heavy use) is no longer reported as a bare "HTTP 406": the
+  `OSMDownloadError` explains the block, that it usually lifts by itself after
+  some hours, and how to use another server. It is not retried, since every
+  retry counts against the client.
+- OSM downloads no longer stop for 60 s without saying so. osmnx reads the
+  Overpass server's `/status` page before each query and waited a fixed 60 s
+  whenever it could not read it (a refusal, a server without that page, no
+  answer), and on a server with no rate limit it could keep asking every 5 s
+  without end. multimodalpy now reads that page itself while downloading: it
+  waits only for a slot the server announces (logged), queries a server with
+  no slot information straight away, and lets a failed request reach the
+  retries. This also halves the requests: one `/status` per query instead of
+  two, and none for an answer already in the cache.
+- GTFS edges of a route without `route_short_name` (GTFS asks only for a short
+  or a long name), or that start or end at a stop without a name, had every
+  per-period column empty (`tts_m_<period>`, `tts_md_<period>`,
+  `trips_<period>` and their weekday/weekend versions), so the matrix had
+  `inf` for those weights. The other columns were right.
+- The `gtfs_feeds` example in the README and the docstrings presented
+  `gvinterbus.gva.es/estatico/gtfs.zip` as València's MetroBus. It is the
+  Generalitat Valenciana's interurban bus feed, the same as the NAP's dataset
+  1325, so adding it gave every route twice. The example is now generic, with
+  a note to check a feed is not on the NAP already. Outdated docstrings were
+  corrected too: `download_gtfs()` returns `nodes`, `edges`, `schedule` and
+  `mode` (there was never an `edges_shapes_reference` layer), and
+  `gtfs_hour_band_size` only sets the bands of `h_tts` and `h_trips`.
+
+[0.7.0]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...v0.7.0
+
 ## [0.6.0] - 2026-11-20
 
 ### Added
@@ -24,10 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside the NAP, as `{name: source}` or a list of sources, a source being an
   http(s) address or a local zip or folder. They are processed like the NAP's
   feeds, written to `bus/<name>/` or `train/<name>/`, and listed in the
-  manifest's `gtfs_feeds`. The first use is València's MetroBus, published on
-  the Generalitat's open data portal and not on the NAP. Without a NAP API key,
-  the NAP is skipped with a warning and only these feeds are used
-  (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
+  manifest's `gtfs_feeds`. Without a NAP API key, the NAP is skipped with a
+  warning and only these feeds are used (`use_nap=False` in `download_gtfs()`). A wrong local path, an address that is
   not http(s), or `gtfs_feeds` without `bus` or `train` in `modes` fail before
   anything is downloaded.
 - `gtfs_report` has a `source` column, `nap` or `user`, and lists the feeds of
@@ -483,7 +598,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.7.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0

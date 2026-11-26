@@ -16,8 +16,8 @@ from shapely.geometry import box
 from multimodalpy import _osm, _overpass
 from multimodalpy.network import OSMDownloadError
 
-# The real probe, before conftest's no_overpass_probe replaces it.
-REAL_PROBE = _overpass._probe_server
+# The real /status check, before conftest's no_overpass_status replaces it.
+REAL_PAUSE = _overpass._overpass_pause
 
 # What overpass-api.de answers when it is overloaded (October-November 2026).
 AT_CAPACITY = (
@@ -107,6 +107,24 @@ def test_request_failures_are_explained(exc, reason, transient):
     assert ("try again" in str(info.value)) is transient
 
 
+@pytest.mark.parametrize("status", [403, 406])
+def test_refused_request_is_explained_and_not_retried(sleeps, status):
+    exc = ResponseStatusCodeError(f"'overpass-api.de' responded: {status} Refused")
+    with pytest.raises(OSMDownloadError) as info:
+        _overpass.call_overpass(failing(exc), mode="walking")
+    error = info.value
+    message = str(error)
+    assert f"refused the request (HTTP {status})" in message
+    assert "block" in message
+    assert "overpass_url=" in message
+    assert _overpass.PUBLIC_INSTANCES_URL in message
+    assert "attempts" not in message
+    assert "try again in a few minutes" not in message
+    assert error.status_code == status
+    assert not error.transient
+    assert sleeps == []  # a retry would count against the client
+
+
 def test_other_errors_propagate_unchanged():
     with pytest.raises(ZeroDivisionError):
         _overpass.call_overpass(failing(ZeroDivisionError()), mode="bike")
@@ -175,6 +193,13 @@ def test_hook_stops_at_a_busy_answer(status):
     assert info.value.status_code == status
 
 
+@pytest.mark.parametrize("status", [403, 406])
+def test_hook_stops_at_a_refused_answer(status):
+    with pytest.raises(_overpass._ServerRefused) as info:
+        _overpass._check_response(response(status, b"<html>Not Acceptable</html>"))
+    assert info.value.status_code == status
+
+
 def test_hook_stops_at_a_query_cut_short():
     body = (
         b'{"version": 0.6, "elements": [{"type": "node", "id": 1}], '
@@ -239,7 +264,7 @@ def test_osmnx_requests_are_stopped_by_the_hook(monkeypatch, sleeps):
         resp.request = request
         return resp
 
-    # Only osmnx's own requests here (the probe has its own tests).
+    # Only osmnx's queries here (the /status check has its own tests).
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
     monkeypatch.setattr(ox.settings, "use_cache", False)
@@ -254,6 +279,33 @@ def test_osmnx_requests_are_stopped_by_the_hook(monkeypatch, sleeps):
         )
     assert len(posts) == 5  # one per attempt: osmnx did not loop on its own
     assert sleeps == [10, 20, 40, 80]
+
+
+def test_osmnx_query_refused_is_not_retried(monkeypatch, sleeps):
+    """Through osmnx and requests: a 406 to the query stops after one request."""
+    posts = []
+
+    def send(self, request, **kwargs):
+        posts.append(request.url)
+        resp = response(406, b"<html><body>406 Not Acceptable</body></html>")
+        resp.url = request.url
+        resp.request = request
+        resp.reason = "Not Acceptable"
+        return resp
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    monkeypatch.setattr(ox.settings, "use_cache", False)
+    monkeypatch.setattr(ox.settings, "overpass_rate_limit", False)
+    monkeypatch.setattr(_overpass_dns(), "_config_dns", lambda url: None)
+    polygon = box(-0.38, 39.46, -0.37, 39.47)
+
+    with pytest.raises(OSMDownloadError, match=r"refused the request \(HTTP 406\)"):
+        _overpass.call_overpass(
+            lambda: ox.graph_from_polygon(polygon, network_type="walk"),
+            mode="walking",
+        )
+    assert len(posts) == 1
+    assert sleeps == []
 
 
 def _overpass_dns():
@@ -379,66 +431,182 @@ def test_download_osm_uses_the_settings(osmnx_defaults, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Probe: is the server there at all?
+# The /status check that replaces osmnx's
 # ---------------------------------------------------------------------------
+STATUS_HEAD = (
+    "Connected as: 1\nCurrent time: 2026-11-25T12:00:00Z\nAnnounced endpoint: none\n"
+)
+RUNNING = "Currently running queries (pid, space limit, time limit, start time):\n"
+FREE = STATUS_HEAD + "Rate limit: 2\n2 slots available now.\n" + RUNNING
+WAIT = (
+    STATUS_HEAD
+    + "Rate limit: 2\n"
+    + "Slot available after: 2026-11-25T12:00:30Z, in 30 seconds.\n"
+    + "Slot available after: 2026-11-25T12:00:07Z, in 7 seconds.\n"
+    + RUNNING
+)
+# A server without a rate limit lists no slots: osmnx read its fifth line,
+# "Currently running queries", as "busy" and asked again every 5 s.
+NO_LIMIT = STATUS_HEAD + "Rate limit: 0\n" + RUNNING
+
+
+@pytest.mark.parametrize(
+    ("text", "pause"),
+    [
+        (FREE, 0),
+        (WAIT, 7),
+        (NO_LIMIT, 0),
+        (
+            "Slot available after: 2026-11-25T11:59:59Z, in -1 seconds.\n",
+            1,
+        ),
+        (
+            "0 slots available now.\nSlot available after: x, in 4 seconds.\n",
+            4,
+        ),
+        ("<html><body>Not an Overpass status page</body></html>", 0),
+        ("", 0),
+    ],
+)
+def test_status_page_is_read(text, pause):
+    assert _overpass._status_pause(text) == pause
+
+
 @pytest.fixture
 def server(monkeypatch):
-    """Fake the Overpass server's answers; records the requests made."""
-    monkeypatch.setattr(_overpass, "_probe_server", REAL_PROBE)
-    state = {"answer": 200, "requests": []}
+    """Fake an Overpass server behind osmnx; records the requests made.
+
+    ``status`` and ``query`` are what ``/status`` and ``/interpreter``
+    answer: ``(http_status, body)`` or an exception to raise.
+    """
+    import osmnx._overpass as ox_overpass
+
+    monkeypatch.setattr(_overpass, "_overpass_pause", REAL_PAUSE)
+    state = {
+        "status": (200, FREE),
+        "query": (200, '{"elements": []}'),
+        "requests": [],
+        "osmnx_sleeps": [],
+    }
 
     def send(self, request, **kwargs):
-        state["requests"].append((request.method, request.url))
-        answer = state["answer"]
+        state["requests"].append((request.method, request.url.split("?")[0]))
+        answer = state["status" if request.url.endswith("/status") else "query"]
         if isinstance(answer, BaseException):
             raise answer
-        resp = response(answer, b"Connected as: 1\n")
+        status, body = answer
+        resp = response(status, body.encode())
         resp.url = request.url
         resp.request = request
         return resp
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    monkeypatch.setattr(ox.settings, "use_cache", False)
+    monkeypatch.setattr(ox.settings, "overpass_rate_limit", True)
+    monkeypatch.setattr(_overpass_dns(), "_config_dns", lambda url: None)
+    monkeypatch.setattr(ox_overpass.time, "sleep", state["osmnx_sleeps"].append)
     return state
 
 
-def counting_download(calls):
-    def download():
-        calls.append(1)
-        return "graph"
+def query():
+    """One Overpass query through osmnx, as the network downloads make it."""
+    from collections import OrderedDict
 
-    return download
+    import osmnx._overpass as ox_overpass
 
-
-def test_unreachable_server_is_retried_without_osmnx_pausing(server, sleeps):
-    server["answer"] = requests.exceptions.ConnectionError("Connection refused")
-    calls: list[int] = []
-    with pytest.raises(OSMDownloadError, match="connection to the server failed"):
-        _overpass.call_overpass(counting_download(calls), mode="walking")
-    assert calls == []  # osmnx was never let in to wait its 60 s
-    assert sleeps == [10, 20, 40, 80]
-    assert [url for _, url in server["requests"]] == [
-        "https://overpass-api.de/api/status"
-    ] * 5
+    return ox_overpass._overpass_request(OrderedDict(data="[out:json];way(1);out;"))
 
 
-def test_busy_status_page_is_retried(server, sleeps):
-    server["answer"] = 502
-    calls: list[int] = []
-    with pytest.raises(OSMDownloadError, match="HTTP 502"):
-        _overpass.call_overpass(counting_download(calls), mode="walking")
-    assert calls == []
+def run(mode="walking"):
+    return _overpass.call_overpass(query, mode=mode)
 
 
-@pytest.mark.parametrize("status", [200, 404])
-def test_answering_server_lets_osmnx_go_ahead(server, sleeps, status):
-    server["answer"] = status  # 404: a server without /status
-    calls: list[int] = []
-    assert _overpass.call_overpass(counting_download(calls), mode="bike") == "graph"
-    assert calls == [1]
+def test_free_slot_means_no_wait(server, sleeps):
+    assert run() == {"elements": []}
+    assert server["requests"] == [
+        ("GET", "https://overpass-api.de/api/status"),
+        ("POST", "https://overpass-api.de/api/interpreter"),
+    ]
+    assert server["osmnx_sleeps"] == [0]
     assert sleeps == []
 
 
-def test_probe_uses_the_settings(server, monkeypatch):
+def test_waits_only_what_the_server_asks(server, caplog):
+    server["status"] = (200, WAIT)
+    with caplog.at_level("INFO", logger="multimodalpy"):
+        run()
+    assert server["osmnx_sleeps"] == [7]
+    assert "waiting 7 s for a free slot" in caplog.text
+
+
+def test_server_without_rate_limit_is_not_polled(server):
+    server["status"] = (200, NO_LIMIT)
+    run()
+    assert [method for method, _ in server["requests"]] == ["GET", "POST"]
+    assert server["osmnx_sleeps"] == [0]
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_unreadable_status_page_means_no_wait(server, status):
+    server["status"] = (status, "<html>no status here</html>")
+    run()
+    assert server["osmnx_sleeps"] == [0]  # osmnx would wait 60 s here
+
+
+def test_refused_status_page_stops_at_once(server, sleeps):
+    server["status"] = (406, "<html>Not Acceptable</html>")
+    with pytest.raises(OSMDownloadError, match="refused the request") as info:
+        run()
+    assert server["requests"] == [("GET", "https://overpass-api.de/api/status")]
+    assert server["osmnx_sleeps"] == []
+    assert sleeps == []
+    assert info.value.status_code == 406
+
+
+def test_busy_status_page_is_retried(server, sleeps):
+    server["status"] = (502, AT_CAPACITY)
+    with pytest.raises(OSMDownloadError, match="HTTP 502"):
+        run()
+    assert sleeps == [10, 20, 40, 80]
+    assert all(method == "GET" for method, _ in server["requests"])
+
+
+def test_unreachable_server_is_retried_without_osmnx_pausing(server, sleeps):
+    server["status"] = requests.exceptions.ConnectionError("Connection refused")
+    with pytest.raises(OSMDownloadError, match="connection to the server failed"):
+        run()
+    assert server["requests"] == [("GET", "https://overpass-api.de/api/status")] * 5
+    assert server["osmnx_sleeps"] == []  # osmnx never waited its 60 s
+    assert sleeps == [10, 20, 40, 80]
+
+
+def test_cached_answer_makes_no_request(server, monkeypatch):
+    monkeypatch.setattr(
+        _overpass_dns(), "_retrieve_from_cache", lambda url: {"elements": ["cached"]}
+    )
+    assert run() == {"elements": ["cached"]}
+    assert server["requests"] == []
+
+
+def test_rate_limit_off_skips_the_status_page(server, monkeypatch):
+    monkeypatch.setattr(ox.settings, "overpass_rate_limit", False)
+    run()
+    assert [method for method, _ in server["requests"]] == ["POST"]
+
+
+def test_status_check_uses_the_settings(server, monkeypatch):
     monkeypatch.setattr(ox.settings, "overpass_url", "https://overpass.example/api")
-    _overpass.call_overpass(lambda: None, mode="bike")
-    assert server["requests"] == [("GET", "https://overpass.example/api/status")]
+    run()
+    assert server["requests"][0] == ("GET", "https://overpass.example/api/status")
+
+
+def test_osmnx_status_check_is_replaced_only_while_downloading():
+    import osmnx._overpass as ox_overpass
+
+    original = ox_overpass._get_overpass_pause
+    seen = []
+    _overpass.call_overpass(
+        lambda: seen.append(ox_overpass._get_overpass_pause), mode="bike"
+    )
+    assert seen == [_overpass._pause_hook]
+    assert ox_overpass._get_overpass_pause is original

@@ -115,18 +115,19 @@ def test_geopackage_is_a_single_file_at_the_root(tmp_path, run_main):
 # ---------------------------------------------------------------------------
 # main() parameters
 # ---------------------------------------------------------------------------
-def test_schedule_and_gtfs_zips_are_off_by_default(tmp_path, run_main):
+def test_by_default_no_schedule_and_the_gtfs_zips_are_kept(tmp_path, run_main):
+    """The zips stay so build_network can process them again (since 0.7.0)."""
     run_main(formats="geojson")
 
     assert not list(tmp_path.rglob("schedule.csv"))
-    assert not (tmp_path / "gtfs_zips").exists()
+    assert (tmp_path / "gtfs_zips" / "feed.zip").exists()
 
 
-def test_schedule_and_gtfs_zips_can_be_kept(tmp_path, run_main):
-    run_main(formats="geojson", write_schedule=True, keep_gtfs_zips=True)
+def test_the_schedule_can_be_written_and_the_zips_deleted(tmp_path, run_main):
+    run_main(formats="geojson", write_schedule=True, keep_gtfs_zips=False)
 
     assert (tmp_path / "bus" / "alsa" / "schedule.csv").exists()
-    assert (tmp_path / "gtfs_zips" / "feed.zip").exists()
+    assert not (tmp_path / "gtfs_zips").exists()
 
 
 def test_download_network_does_not_print_to_the_terminal(capsys, run_main):

@@ -14,6 +14,7 @@ import multimodalpy
 
 PUBLIC_MODULES = {"analysis", "area", "io", "network"}
 SHORTCUTS = {
+    "build_network": "network",
     "download_network": "network",
     "find_area": "area",
     "read_matrix": "io",

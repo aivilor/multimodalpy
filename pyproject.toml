@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multimodalpy"
-version = "0.6.0"
+version = "0.7.0"
 description = "Easy creation of multimodal transport networks"
 readme = "README.md"
 
@@ -36,8 +36,8 @@ dependencies = [
   "networkx>=3.4",
   "geopandas>=1.0",
   "osmnx>=2.0",
-  "pandas",
-  "requests",
+  "pandas>=2.0",
+  "requests>=2.27",
   "shapely>=2.0",
   "pooch>=1.8",
   "scipy>=1.11",
@@ -106,6 +106,7 @@ convention = "numpy"
 "tests/**" = ["D"]
 
 [tool.mypy]
-python_version = "3.13"
+# The oldest Python supported, so newer syntax is caught.
+python_version = "3.11"
 files = ["src"]
 ignore_missing_imports = true

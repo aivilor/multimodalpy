@@ -13,8 +13,9 @@ output_dir/
 ├── bike/                    nodes  edges
 ├── bus/<dataset>/           nodes  edges  schedule.csv
 ├── train/<dataset>/         nodes  edges  schedule.csv
+├── manifest.json            what download_network() did (the returned manifest)
 ├── gtfs_report.csv          with bus or train: what happened to each GTFS dataset
-├── gtfs_zips/               only with keep_gtfs_zips=True
+├── gtfs_zips/               the GTFS zips downloaded (keep_gtfs_zips=True, the default)
 └── <area>.gpkg              only with formats="geopackage"
 ```
 
@@ -59,7 +60,7 @@ Shapefile.
 file downloaded from the NAP, normalised and without the timestamp the NAP puts
 in front of it (`20261119_050013_RENFE_CERCA.zip` gives `renfe_cerca`), so it is
 the same on every download. A feed of `gtfs_feeds` takes the name given to it
-(`{"metrobus": ...}` gives `metrobus`), or its file name. Two feeds that end up
+(`{"my_operator": ...}` gives `my_operator`), or its file name. Two feeds that end up
 with the same name get `_2`, `_3`… in the order they were processed: the NAP's
 first, then those of `gtfs_feeds` in the order given.
 
@@ -89,10 +90,11 @@ from it):
 | `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP); for a feed of `gtfs_feeds`, only `dataset_name`: the name given, or the file name |
 | `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
 | `file_id`, `file_name` | NAP file; for a feed of `gtfs_feeds`, its file name |
-| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `failed` (download) or `failed_processing` |
+| `zip_file` | Name of the feed's zip in `gtfs_zips/`, which `build_network(source_dir=...)` reads |
+| `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `duplicate` (a feed of `gtfs_feeds` with the same routes between the same stops in the area as a feed already written, usually a NAP dataset: not written, and `error` names it); `failed` (download) or `failed_processing` |
 | `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
 | `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
-| `error` | Why it failed |
+| `error` | Why it failed, or which feed it repeats |
 
 A dataset that could not be used at all (every file failed, or processing did)
 raises a `UserWarning` naming it. One that got a file is fine even if the NAP
@@ -107,11 +109,13 @@ each province: an operator missing from the report is not on the NAP.
 | `crs` | `"EPSG:4326"` | CRS of every output layer. |
 | `connect_parts` | `True` | Add the roads joining the parts of a multi-part municipality (see "Municipalities in several parts"). |
 | `gtfs_service_date` | `None` | Count only the GTFS trips that run on this day (see [Which trips count](#which-trips-count)). |
-| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: source}` or a list of sources (an http(s) address or a local zip or folder). Processed like the NAP's, and listed in the manifest's `gtfs_feeds`. Without a NAP key, only these are used. |
+| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: source}` or a list of sources (http(s) addresses; local files go to `build_network()`). Processed like the NAP's, and listed in the manifest's `gtfs_feeds`. Without a NAP key, only these are used. |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
-| `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`. Off by default: they are only the raw input and can be downloaded again. Local feeds are never deleted. |
+| `keep_gtfs_zips` | `True` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`, so `build_network(source_dir=...)` can process them again without downloading. `False` deletes them once the layers are written. Local feeds are never deleted. |
 
-`download_network()` prints nothing. It returns a manifest with the area
+`download_network()` prints nothing (the command line prints a short summary).
+It returns a manifest, also saved as `manifest.json` in the output folder
+(`manifest_file`), with the `multimodalpy_version` that wrote it, the area
 (`area_name`, `boundaries_path`, and its `provinces` and `municipalities` as
 `{"code", "name"}` lists), the files written
 (`files`, and `files_by_format` when several formats were asked for) and, when a
@@ -125,6 +129,11 @@ the other networks are written as usual. The street modes are downloaded with a
 single Overpass query, so when the server fails it they are all listed; a mode
 can also fail alone when the area has no street of its kind. Diagnostic messages go through `logging` and are silent unless the
 application enables them, e.g. `logging.basicConfig(level=logging.INFO)`.
+
+`build_network()` returns the same manifest, with `built_with` set to
+`"build_network"` and the sources it used: `source_dir` (or `null`),
+`osm_networks` (the file each street network came from) and `gtfs_feeds`.
+`connect_parts` is not there, since it only applies to downloads.
 
 ## Column names
 
@@ -253,6 +262,7 @@ the node has no known tag but is an `intersection`, the generic penalty applies.
 |---|---|---|
 | `node_id` | text | `stop_id` in the GTFS feed |
 | `stop_name` | text | Stop name |
+| `station_id` | text | `stop_id` of the station the stop belongs to (`parent_station`, e.g. the station of a platform), empty if none. Stops with the same `station_id` are the platforms of one station |
 | `in_area` | boolean | Whether the stop is inside the study area |
 | `geometry` | Point | Stop position |
 
@@ -306,6 +316,7 @@ says how many there were in the study area.
 | `route_id` | — | Route identifier |
 | `route_sh` | `route_short_name` | Short route name (e.g. `"L1"`) |
 | `route_ln` | `route_long_name` | Long route name |
+| `route_type` | — | GTFS `route_type` of the route, a number: 3 bus, 1 metro, 0 tram, 2 rail, or an extended code (e.g. 109 suburban railway). A feed can mix modes; each edge keeps its own |
 | `geometry` | — | Edge geometry |
 
 ### Whole day
@@ -326,7 +337,11 @@ names of your own get a three-letter code instead of `pam` / `ppm`: their first
 three letters (`{"morning": (6, 9)}` gives `tts_m_mor`, `tm_mor_wd`…), or `p1`,
 `p2`… in order when those clash. `pam`, `ppm` and `rod` always mean the default
 periods. The manifest's `gtfs_period_codes` gives each period's code, e.g.
-`{"morning": "mor", "rest_of_day": "rod"}`.
+`{"morning": "mor", "rest_of_day": "rod"}`. A period runs from its start hour up
+to, not including, its end hour, and may cross midnight (`{"night": (22, 6)}`);
+periods cannot overlap. A trip belongs to the period of its departure from the
+edge's first stop; times past midnight in the feed (`25:10:00`) count as that
+hour of the day.
 
 | Column | Former name | Meaning |
 |---|---|---|
@@ -389,6 +404,12 @@ that touch the study area, so every row has its edge. Join it to the edges by
 `edge_id`: each row matches exactly one edge, the one of its route. Each
 departure of a trip defined in `frequencies.txt` is a row of its own, with
 `trip_id` `<trip_id>@<departure time>` (`L1_template@07:20:00`).
+
+`days_active` is the number of dates the trip's service runs on, as the GTFS
+reference defines them: the days of the week `calendar.txt` marks between its
+start and end dates, plus the dates `calendar_dates.txt` adds, minus the ones it
+removes. `active_days_of_week`, `runs_weekday`, `runs_weekend` and `day_type`
+describe which days of the week those are.
 
 ## NetworkX graphs (`graph.json`)
 
@@ -537,6 +558,7 @@ A GTFS matrix only has the weights present in its edge layer.
 | `gtfs_periods` | GTFS only: start and end hour of each peak period behind `pam` / `ppm`, e.g. `{"peak_am": [7, 9], "peak_pm": [17, 20]}`. `rod` is every other hour. |
 | `gtfs_period_codes` | GTFS only: code of each period in the weight names, e.g. `{"peak_am": "pam", "peak_pm": "ppm", "rest_of_day": "rod"}`. |
 | `gtfs_hour_range` | GTFS only: the `gtfs_hour_range` passed to `download_network()`, or `null`. |
+| `gtfs_service_date` | GTFS only: the `gtfs_service_date` the trip counts are of (`"2026-11-25"`), or `null` when they cover the feed's whole calendar. |
 | `multimodalpy_version` | Version that wrote the file. |
 
 A newer `format_version` is rejected when reading instead of being misread.
@@ -652,6 +674,13 @@ downloaded once.
 - In the **matrix** export, the routes between the same two stops are merged
   into one GTFS edge with the fastest time, and waiting times, frequencies and
   transfers are not modelled: a GTFS matrix gives in-vehicle travel times only.
+- With `gtfs_service_date`, the trips counted are those of that day's services,
+  including their times past midnight (`25:10:00` is 01:10 the next morning).
+  The trips of the previous day's services that run after midnight are not
+  counted on the date, as most GTFS tools do.
+- The OSM edges are one row per OSM way (see [OSM edges](#osm-edges)): an edge
+  merged from several ways is written once per way, so adding up `length`
+  counts it more than once.
 
 ## Abbreviations
 

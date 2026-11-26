@@ -314,6 +314,7 @@ def _write_matrices(
     area_name: str,
     gtfs_peak_periods: dict[str, tuple[int, int]] | None,
     gtfs_hour_range: tuple[int, int] | None,
+    gtfs_service_date: Any = None,
 ) -> list[str]:
     """Write one ``matrix.npz`` per OSM mode and per GTFS dataset.
 
@@ -360,9 +361,62 @@ def _write_matrices(
                 "gtfs_hour_range": (
                     list(gtfs_hour_range) if gtfs_hour_range is not None else None
                 ),
+                # The day the trip counts are of, or None (the whole
+                # calendar): waiting times can only come from a day's.
+                "gtfs_service_date": (
+                    None if gtfs_service_date is None else gtfs_service_date.isoformat()
+                ),
             },
         )
         relative = f"{mode}/{dataset}/matrix.npz"
         _matrix.write_matrix(matrix, output_dir / relative)
         written.append(relative)
     return written
+
+
+# ---------------------------------------------------------------------------
+# Manifest
+# ---------------------------------------------------------------------------
+#: File name of the manifest in the output folder.
+MANIFEST_FILE = "manifest.json"
+
+
+def _json_ready(value: Any) -> Any:
+    """Return ``value`` with only what JSON can hold.
+
+    numpy numbers become numbers, ``NaN`` and pandas' missing values
+    ``null``, dates ISO text and anything else (paths) its text.
+    """
+    import datetime
+    import math
+
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_ready(item) for item in value]
+    if hasattr(value, "item") and getattr(value, "ndim", 1) == 0:  # numpy scalar
+        value = value.item()
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    try:
+        import pandas as pd
+
+        if value is pd.NA or value is pd.NaT:
+            return None
+    except ImportError:  # pragma: no cover - pandas is a dependency
+        pass
+    return str(value)
+
+
+def write_manifest(manifest: dict[str, Any], output_dir: Path) -> str:
+    """Write ``manifest`` as ``manifest.json`` in ``output_dir``; return its name."""
+    path = Path(output_dir) / MANIFEST_FILE
+    path.write_text(
+        json.dumps(_json_ready(manifest), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return MANIFEST_FILE
