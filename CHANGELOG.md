@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `build_network()`: the networks of a study area from files you already have,
+  without downloading anything. It takes a folder written by
+  `download_network()` (`source_dir`: its street networks and the GTFS zips it
+  kept), street networks of your own (`osm_networks`: a multimodalpy folder or
+  GeoPackage, the edges and nodes of another tool, or an osmnx GraphML; missing
+  `length`, `tts` and `edge_id` are computed) and local GTFS feeds
+  (`gtfs_feeds`), clips them to the study area and writes them exactly as a
+  download, so the same files always give the same output. Use it to try another
+  date, other periods, formats or a smaller area without downloading again, or
+  to combine a download with your own networks. On the command line:
+  `multimodalpy build`. The manifest says `built_with: build_network` and lists
+  the sources.
+- `gtfs_report` has a `zip_file` column: the name of each feed's zip in
+  `gtfs_zips/`.
 - `gtfs_hour_range` and the periods of `gtfs_peak_periods` may cross midnight:
   `(22, 2)` keeps the departures from 22:00 to 01:59.
 - The manifest is saved as `manifest.json` in the output folder, with the
@@ -27,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
+- The OSM layers are written in a fixed order (by nodes and edge id), so the
+  same streets always give the same files and matrix rows.
+- When no GTFS feed could be written although some were found, `gtfs_status`
+  says so instead of "no published datasets".
 - `pandas>=2.0` and `requests>=2.27` are now declared (they had no lower bound),
   and CI also runs the tests with the lowest versions `pyproject.toml` allows,
   on Python 3.11. mypy checks the code for Python 3.11, the oldest supported.

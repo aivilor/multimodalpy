@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 from . import _gtfs
 from ._boundaries import boundary_for_export, find_area
 from ._gtfs import download_gtfs
+from ._local_osm import OSMNetworkFileError, OSMSource, load_osm_network
 from ._nap import NAPAuthenticationError, missing_nap_key_message, resolve_nap_api_key
 from ._osm import OSM_NETWORK_TYPES, download_osm
 from ._overpass import OSMDownloadError
@@ -58,6 +59,8 @@ __all__ = [
     "FORMATS",
     "NAPAuthenticationError",
     "OSMDownloadError",
+    "OSMNetworkFileError",
+    "build_network",
     "download_gtfs",
     "download_network",
     "download_osm",
@@ -85,6 +88,29 @@ FORMATS = ("geojson", "shapefile", "geopackage", "networkx", "matrix")
 # ---------------------------------------------------------------------------
 # Mode classification
 # ---------------------------------------------------------------------------
+def _output_formats(formats: str | Sequence[str]) -> tuple[list[str], bool]:
+    """Check the formats asked for; return them without repeats, and if one string.
+
+    ``formats`` accepts a single string ("geojson") or several (["geojson",
+    "shapefile"]). With several, the networks are built once and only the
+    writing step is repeated.
+    """
+    single_output_type = isinstance(formats, str)
+    requested_types = [formats] if single_output_type else list(formats)
+    if not requested_types:
+        raise ValueError("formats cannot be empty.")
+    output_formats: list[str] = []
+    for file_type in requested_types:
+        normalized = str(file_type).strip().lower()
+        if normalized not in FORMATS:
+            raise ValueError(
+                f"Format '{file_type}' is not valid. Options: {', '.join(FORMATS)}"
+            )
+        if normalized not in output_formats:  # ignore duplicates
+            output_formats.append(normalized)
+    return output_formats, single_output_type
+
+
 def _split_modes(modes: Sequence[str]) -> tuple[list[str], set[int]]:
     osm_modes: list[str] = []
     nap_modes: set[int] = set()
@@ -112,6 +138,7 @@ _GTFS_REPORT_COLUMNS = (
     "transport_types",
     "file_id",
     "file_name",
+    "zip_file",
     "status",
     "dataset",
     "mode",
@@ -354,24 +381,7 @@ def download_network(
     """
     if isinstance(modes, str):
         modes = [modes]
-
-    # ``formats`` accepts a single string ("geojson") or several
-    # (["geojson", "shapefile"]). With several, steps 1-3 run only once and
-    # only the writing step is repeated.
-    single_output_type = isinstance(formats, str)
-    requested_types = [formats] if single_output_type else list(formats)
-    if not requested_types:
-        raise ValueError("formats cannot be empty.")
-
-    output_formats: list[str] = []
-    for file_type in requested_types:
-        normalized = str(file_type).strip().lower()
-        if normalized not in FORMATS:
-            raise ValueError(
-                f"Format '{file_type}' is not valid. Options: {', '.join(FORMATS)}"
-            )
-        if normalized not in output_formats:  # ignore duplicates
-            output_formats.append(normalized)
+    output_formats, single_output_type = _output_formats(formats)
 
     osm_modes, nap_modes = _split_modes(modes)
     # Wrong hour options fail before anything is downloaded.
@@ -496,6 +506,11 @@ def download_network(
     )
     if nap_modes and not keep_gtfs_zips and not own_feed_inside:
         shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
+    # The name of each feed's zip in gtfs_zips/, for build_network(source_dir=).
+    for row in gtfs_report:
+        path = row.get("path")
+        if path and Path(str(path)).parent.resolve() == gtfs_zips_dir.resolve():
+            row["zip_file"] = Path(str(path)).name
 
     return _write_networks(
         boundary,
@@ -523,6 +538,312 @@ def download_network(
         gtfs_requested=bool(nap_modes),
         gtfs_error=gtfs_error,
         warn_no_gtfs=api_key is not None,
+        feed_sources=feed_sources,
+        skipped_datasets=skipped_datasets,
+    )
+
+
+# Statuses of a feed in a source_dir's gtfs_report that build_network takes
+# up again: those processed before (a date with no service may have some
+# now; a repeated feed is found to repeat again). Failed downloads and feeds
+# of other modes stay out.
+_REUSED_GTFS_STATUSES = frozenset(
+    {"written", "nothing_in_area", "no_service_on_date", "duplicate"}
+)
+
+
+def _source_dir_gtfs(
+    source_dir: Path, report: list[dict[str, object]]
+) -> list[tuple[Path, str | None, dict[str, object] | None]]:
+    """List the GTFS zips a download kept in ``source_dir``, ready to process.
+
+    With the folder's ``manifest.json`` (multimodalpy 0.7.0 or later), each
+    feed keeps its name and its ``source`` (``"nap"`` or ``"user"``), and
+    only the feeds the download used come back. Without it, every zip in
+    ``gtfs_zips/`` is taken, named after its file.
+    """
+    import json
+
+    zips_dir = source_dir / "gtfs_zips"
+    manifest_path = source_dir / MANIFEST_FILE
+    rows: list[dict[str, object]] = []
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        rows = [
+            row
+            for row in manifest.get("gtfs_report") or []
+            if row.get("zip_file") and row.get("status") in _REUSED_GTFS_STATUSES
+        ]
+    feeds: list[tuple[Path, str | None, dict[str, object] | None]] = []
+    if rows:
+        for old in rows:
+            path = zips_dir / str(old["zip_file"])
+            if not path.exists():
+                continue
+            row: dict[str, object] = {
+                key: old.get(key)
+                for key in (
+                    "source",
+                    "province_code",
+                    "dataset_id",
+                    "dataset_name",
+                    "transport_types",
+                    "file_id",
+                    "file_name",
+                    "zip_file",
+                )
+                if old.get(key) is not None
+            }
+            row["path"] = str(path)
+            report.append(row)
+            feeds.append((path, str(old.get("dataset") or "") or None, row))
+    elif zips_dir.is_dir():
+        for path in sorted(zips_dir.glob("*.zip")):
+            row = {"source": "source_dir", "file_name": path.name, "path": str(path)}
+            report.append(row)
+            feeds.append((path, None, row))
+    return feeds
+
+
+def _source_dir_osm_modes(source_dir: Path) -> list[str]:
+    """List the OSM networks written as layers in ``source_dir`` (walking...)."""
+    import pyogrio
+
+    from ._osm import NETWORK_TYPE_TO_LAYER_LABEL
+
+    found = []
+    gpkgs = sorted(source_dir.glob("*.gpkg"))
+    gpkg_layers = {str(row[0]) for path in gpkgs for row in pyogrio.list_layers(path)}
+    for label in NETWORK_TYPE_TO_LAYER_LABEL.values():
+        folder = source_dir / label
+        in_folder = folder.is_dir() and any(
+            (folder / f"edges{suffix}").exists() for suffix in (".geojson", ".shp")
+        )
+        if in_folder or f"osm_{label}_edges" in gpkg_layers:
+            found.append(label)
+    return found
+
+
+def build_network(
+    osm_networks: dict[str, OSMSource] | None = None,
+    gtfs_feeds: _gtfs.GTFSFeeds | None = None,
+    *,
+    source_dir: str | Path | None = None,
+    area_name: str | None = None,
+    boundaries_path: str | Path | None = None,
+    area_code: str | None = None,
+    province: int | str | None = None,
+    output_dir: str | Path = "output",
+    crs: str = "EPSG:4326",
+    formats: str | Sequence[str] = "geojson",
+    buffer_m: float = 0.0,
+    gtfs_hour_band_size: int = 1,
+    gtfs_hour_range: tuple[int, int] | None = None,
+    gtfs_peak_periods: dict[str, tuple[int, int]] | None = None,
+    gtfs_service_date: str | datetime.date | None = None,
+    write_schedule: bool = False,
+) -> dict:
+    """Build a study area's networks from files you already have.
+
+    Like :func:`download_network`, but nothing is downloaded: the street
+    networks and GTFS feeds come from local files, and are clipped to the
+    study area, standardized and written exactly as a download is, so
+    :func:`read_matrix`, :func:`read_graph`, :func:`isochrones` and
+    :func:`shortest_path` work the same on the result. The same files and
+    options always give the same output. Use it to reprocess a download
+    (another service date, other periods or formats, a smaller area)
+    without downloading again, and to combine a download with networks of
+    your own.
+
+    Parameters
+    ----------
+    osm_networks : dict, optional
+        Street networks of your own, ``{mode: source}`` with ``mode``
+        ``"walking"``, ``"bike"`` or ``"driving"`` (or a synonym). A source
+        is a folder or GeoPackage written by multimodalpy; a GeoPackage,
+        GeoJSON or Shapefile of edges (lines) from another tool, alone or
+        as ``{"edges": path, "nodes": path}``; or an osmnx GraphML file.
+        The edges need the nodes they join (``from_node``/``to_node``, or
+        ``u``/``v``, ``source``/``target``) and a geometry; ``length``,
+        ``tts`` and ``edge_id`` are computed when missing, as for a
+        download. A mode given here wins over the same mode in
+        ``source_dir``.
+    gtfs_feeds : dict | list, optional
+        GTFS feeds of your own, as in :func:`download_network` but only
+        local zips or folders: ``{name: path}`` or a list of paths. An
+        address is refused (download it with :func:`download_network`).
+    source_dir : str | Path, optional
+        A folder written by :func:`download_network`: its street networks
+        (written as GeoJSON, Shapefile or GeoPackage) and the GTFS zips it
+        kept in ``gtfs_zips/`` (``keep_gtfs_zips=True``, the default) are
+        used, each feed with its name. Without those zips its bus and train
+        networks are not used, with a ``UserWarning``.
+    area_name, boundaries_path, area_code, province
+        The study area, as in :func:`download_network`. Required: everything
+        is clipped to it.
+    output_dir : str | Path
+        Folder to write to (not ``source_dir``). Created if it does not exist.
+    crs, formats, buffer_m, gtfs_hour_band_size, gtfs_hour_range, \
+gtfs_peak_periods, gtfs_service_date, write_schedule
+        As in :func:`download_network`.
+
+    Returns
+    -------
+    dict
+        The manifest, as :func:`download_network`'s, also saved as
+        ``manifest.json``, with ``built_with`` ``"build_network"`` and the
+        sources used (``source_dir``, ``osm_networks``, ``gtfs_feeds``).
+
+    Raises
+    ------
+    ValueError
+        If no study area or no source is given, a mode is unknown or a GTFS
+        feed is an address; before anything is read.
+    FileNotFoundError
+        If a GTFS feed of ``gtfs_feeds`` does not exist; also before.
+    OSMNetworkFileError
+        If a street network can't be read, lacks the nodes its edges join or
+        a geometry, or has no street in the study area.
+    """
+    from ._osm import _network_type
+
+    output_formats, single_output_type = _output_formats(formats)
+    _gtfs.check_hour_options(gtfs_hour_range, gtfs_hour_band_size, gtfs_peak_periods)
+    service_date = (
+        None
+        if gtfs_service_date is None
+        else _gtfs.parse_service_date(gtfs_service_date)
+    )
+    if area_name is None and boundaries_path is None and area_code is None:
+        raise ValueError(
+            "build_network needs the study area: area_name, area_code or "
+            "boundaries_path. Everything is clipped to it."
+        )
+    if not osm_networks and not gtfs_feeds and source_dir is None:
+        raise ValueError(
+            "Nothing to build from: give osm_networks, gtfs_feeds or source_dir."
+        )
+    # Street networks: the user's, by canonical mode name.
+    own_osm: dict[str, OSMSource] = {}
+    for mode, own_source in (osm_networks or {}).items():
+        own_osm[_network_type(mode)[1]] = own_source
+    # GTFS feeds: local paths only (and they must exist).
+    feed_sources = _gtfs.user_feed_sources(gtfs_feeds)
+    addresses = [path for _, path in feed_sources if _gtfs._is_url(path)]
+    if addresses:
+        raise ValueError(
+            "build_network only reads local files; download these with "
+            f"download_network(gtfs_feeds=...): {', '.join(addresses)}"
+        )
+    output_dir = Path(output_dir)
+    source = None if source_dir is None else Path(source_dir)
+    if source is not None:
+        if not source.is_dir():
+            raise ValueError(f"source_dir is not a folder: {source}")
+        if source.resolve() == output_dir.resolve():
+            raise ValueError(
+                "output_dir must be another folder than source_dir: building "
+                "into it would overwrite the files it reads."
+            )
+
+    boundary = find_area(
+        area_name,
+        boundaries_path,
+        area_code=area_code,
+        province=province,
+        target_crs="EPSG:4326",
+    )
+
+    # The street networks: source_dir's, then the user's (which win).
+    osm_sources: dict[str, OSMSource] = {}
+    if source is not None:
+        for label in _source_dir_osm_modes(source):
+            osm_sources[label] = source
+    osm_sources.update(own_osm)
+    osm_results: dict[str, dict[str, Any]] = {}
+    for label, osm_source in osm_sources.items():
+        osm_results.update(
+            load_osm_network(
+                osm_source, label, boundary, buffer_m=buffer_m, output_crs=crs
+            )
+        )
+
+    # The GTFS feeds: source_dir's, then the user's.
+    gtfs_report: list[dict[str, object]] = []
+    feed_files: list[tuple[Path, str | None, dict[str, object] | None]] = []
+    if source is not None:
+        feed_files += _source_dir_gtfs(source, gtfs_report)
+        if not feed_files and any(
+            (source / mode).is_dir() for mode in GTFS_MODE_TO_NAP
+        ):
+            warnings.warn(
+                f"{source} has bus/train networks but not the GTFS zips they "
+                "were built from (gtfs_zips/, kept with keep_gtfs_zips=True), "
+                "so they are not used.",
+                UserWarning,
+                stacklevel=2,
+            )
+    feed_files += _gtfs._fetch_user_feeds(
+        feed_sources,
+        output_dir / "gtfs_zips",
+        gtfs_report,
+        taken={path.stem for path, _, _ in feed_files},
+    )
+    gtfs_results: dict[str, dict[str, Any]] = {}
+    skipped_datasets: dict[str, str] = {}
+    if feed_files:
+        gtfs_results = _gtfs.process_gtfs_feeds(
+            feed_files,
+            boundary,
+            modes=GTFS_MODE_TO_NAP.values(),
+            report=gtfs_report,
+            output_crs=crs,
+            hour_band_size=gtfs_hour_band_size,
+            hour_range=gtfs_hour_range,
+            peak_periods=gtfs_peak_periods,
+            include_schedule_table=write_schedule,
+            buffer_m=buffer_m,
+            skipped=skipped_datasets,
+            service_date=service_date,
+        )
+    if not osm_results and not gtfs_results and not gtfs_report:
+        raise ValueError(
+            f"No network to build: {source} has no street network or GTFS zip."
+        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    gtfs_modes = sorted(
+        {str(out.get("mode") or "bus") for out in gtfs_results.values()}
+    )
+    return _write_networks(
+        boundary,
+        output_dir,
+        output_formats=output_formats,
+        single_output_type=single_output_type,
+        crs=crs,
+        osm_results=osm_results,
+        gtfs_results=gtfs_results,
+        gtfs_report=gtfs_report,
+        gtfs_peak_periods=gtfs_peak_periods,
+        gtfs_hour_range=gtfs_hour_range,
+        service_date=service_date,
+        write_schedule=write_schedule,
+        manifest_head={
+            "built_with": "build_network",
+            "source_dir": None if source is None else str(source),
+            "osm_networks": {
+                label: str(osm_source) for label, osm_source in osm_sources.items()
+            },
+            "boundaries_path": None
+            if boundaries_path is None
+            else str(boundaries_path),
+            "modes": list(osm_results) + gtfs_modes,
+            "buffer_m": buffer_m,
+        },
+        osm_modes=list(osm_results),
+        osm_failures={},
+        gtfs_requested=bool(feed_files),
+        gtfs_error=None,
+        warn_no_gtfs=True,
         feed_sources=feed_sources,
         skipped_datasets=skipped_datasets,
     )
@@ -817,7 +1138,11 @@ def _write_networks(
         )
     if gtfs_requested and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
-        manifest["gtfs_status"] = gtfs_error or "no published datasets"
+        manifest["gtfs_status"] = gtfs_error or (
+            "none of the GTFS feeds could be written (see gtfs_report)"
+            if gtfs_report_rows
+            else "no published datasets"
+        )
         # The failure is also logged, but the package logger is silent
         # unless the application configures logging, so without a warning
         # the user just gets a network with no bus/train and no reason.

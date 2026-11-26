@@ -159,6 +159,25 @@ def read_osm_layers(
     return None, _read_layer(path)
 
 
+def _identifier(value: Any) -> Any:
+    """Return an id as osmnx has it: whole numbers written as text as numbers.
+
+    A file column that mixes OSM ids (numbers) with generated ones
+    (``walking_topology_node_0000003``) is read back as text; ``"1001"``
+    is turned back into ``1001``, while ``"007"`` or ``"a1"`` stay text.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lstrip("-").isdigit() and str(int(text)) == text:
+            return int(text)
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if hasattr(value, "item"):  # numpy number
+        return _identifier(value.item())
+    return value
+
+
 def _edge_value(value: Any) -> Any:
     """``value`` as osmnx keeps edge attributes (``None`` for empty)."""
     try:
@@ -245,7 +264,7 @@ def graph_from_layers(
     )
     id_col = _find_column(edges.columns, EDGE_ID_COLUMNS)
     edge_ids = (
-        edges[id_col].tolist()
+        [_identifier(value) for value in edges[id_col]]
         if id_col is not None
         else [f"{label}_{number}" for number in range(1, len(edges) + 1)]
     )
@@ -263,6 +282,7 @@ def graph_from_layers(
             raise OSMNetworkFileError(
                 f"The {label} edges{where}: an edge has no {from_col} or {to_col}."
             )
+        u, v = _identifier(u), _identifier(v)
         key = (u, v, geom.wkb)
         entry = merged.get(key)
         if entry is not None:
@@ -301,7 +321,7 @@ def graph_from_layers(
             )
         located = nodes[nodes.geometry.notna()].to_crs("EPSG:4326")
         for node_id, geom in zip(located[node_col], located.geometry, strict=True):
-            points.setdefault(node_id, (geom.x, geom.y))
+            points.setdefault(_identifier(node_id), (geom.x, geom.y))
     for entry in merged.values():
         coords = entry["geometry"].coords
         points.setdefault(entry["u"], coords[0])

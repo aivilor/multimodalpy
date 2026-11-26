@@ -229,6 +229,43 @@ Please be gentle with these public servers: their usage policies, listed with
 the instances, ask for moderate use. For many areas or frequent downloads, run your own
 Overpass instance and point `overpass_url` to it.
 
+### Networks from files you already have
+
+`build_network()` writes the networks of a study area, exactly as
+`download_network()` does, from files you already have, and downloads nothing:
+
+- a folder written by `download_network()` (`source_dir`): its street networks
+  and the GTFS zips it kept in `gtfs_zips/` (kept by default);
+- street networks of your own (`osm_networks`): a multimodalpy folder or
+  GeoPackage, the edges (and nodes) of another tool as GeoPackage, GeoJSON or
+  Shapefile, or an osmnx GraphML;
+- local GTFS zips or folders (`gtfs_feeds`).
+
+Everything is clipped to the study area (required) and standardized as in a
+download, so the output folder looks the same and the same files always give
+the same result. Download once what you don't have, then build:
+
+```python
+mmp.download_network("Valencia", modes=["driving", "bus"], output_dir="raw/valencia")
+
+mmp.build_network(
+    source_dir="raw/valencia",                           # driving and the NAP's feeds
+    osm_networks={"walking": "data/footpaths.gpkg"},     # your own network
+    gtfs_feeds={"metrobus": "data/metrobus_gtfs.zip"},   # a feed of your own
+    area_name="Valencia",
+    gtfs_service_date="2026-12-02",
+    formats=["geopackage", "matrix"],
+    output_dir="networks/valencia_2026-12-02",
+)
+```
+
+Running only the second step again is how you try another date, other periods,
+other formats or a smaller area. A network of yours needs edges (lines) that say
+which nodes they join (`from_node`/`to_node`, or `u`/`v`, `source`/`target`):
+`length`, `tts` and `edge_id` are computed if missing. A mode in `osm_networks`
+replaces the same mode in `source_dir`. In the command line:
+`multimodalpy build --source-dir raw/valencia --osm-network walking=data/footpaths.gpkg --area Valencia`.
+
 ## What you get
 
 ```
@@ -355,13 +392,13 @@ listing them and what happened to every network), also saved as
 
 | Module | What it is for |
 |---|---|
-| `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
+| `multimodalpy.network` | `download_network()`; `build_network()`, the same from local files; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
 | `multimodalpy.area` | `find_area()`: the study area's polygon, provinces and municipalities. |
 | `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
 | `multimodalpy.analysis` | `isochrones()`, `shortest_path()` and the other network analyses. |
 
-`download_network`, `find_area`, `read_matrix`, `read_graph`, `isochrones` and
-`shortest_path` are also available from the package itself (`multimodalpy.find_area`). See the
+`download_network`, `build_network`, `find_area`, `read_matrix`, `read_graph`,
+`isochrones` and `shortest_path` are also available from the package itself (`multimodalpy.find_area`). See the
 [API reference](https://multimodalpy.readthedocs.io/en/latest/api.html).
 
 ## How it works

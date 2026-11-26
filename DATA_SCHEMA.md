@@ -90,6 +90,7 @@ from it):
 | `province_code`, `dataset_id`, `dataset_name` | Province and NAP dataset (its name in the NAP); for a feed of `gtfs_feeds`, only `dataset_name`: the name given, or the file name |
 | `transport_types` | Transport types the NAP declares for the dataset, e.g. `Autobús / Ferroviario` |
 | `file_id`, `file_name` | NAP file; for a feed of `gtfs_feeds`, its file name |
+| `zip_file` | Name of the feed's zip in `gtfs_zips/`, which `build_network(source_dir=...)` reads |
 | `status` | `written`; `nothing_in_area` (written, but no edge touches the area); `skipped_mode` (its routes are of a mode not asked for); `not_requested_type` (its declared types are not among the modes asked for, so it was not downloaded); `no_service_on_date` (no trip on `gtfs_service_date`: not written, and `error` gives the dates its calendar covers); `duplicate` (a feed of `gtfs_feeds` with the same routes between the same stops in the area as a feed already written, usually a NAP dataset: not written, and `error` names it); `failed` (download) or `failed_processing` |
 | `dataset`, `mode` | Output name (`bus/<dataset>/`) and mode |
 | `routes`, `stops`, `edges` | Routes, stops and edges in the study area |
@@ -128,6 +129,11 @@ the other networks are written as usual. The street modes are downloaded with a
 single Overpass query, so when the server fails it they are all listed; a mode
 can also fail alone when the area has no street of its kind. Diagnostic messages go through `logging` and are silent unless the
 application enables them, e.g. `logging.basicConfig(level=logging.INFO)`.
+
+`build_network()` returns the same manifest, with `built_with` set to
+`"build_network"` and the sources it used: `source_dir` (or `null`),
+`osm_networks` (the file each street network came from) and `gtfs_feeds`.
+`connect_parts` is not there, since it only applies to downloads.
 
 ## Column names
 
