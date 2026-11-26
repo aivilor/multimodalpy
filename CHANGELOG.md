@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+A review of the code before the multimodal network (1.0.0), and
+`build_network()`, which builds the networks from local files. Two changes
+need attention when upgrading: `download_network()` no longer takes local
+files in `gtfs_feeds` (use `build_network()`), and it keeps the GTFS zips by
+default.
+
 ### Added
 - `build_network()`: the networks of a study area from files you already have,
   without downloading anything. It takes a folder written by
@@ -64,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as `nothing_in_area`), a band size of 0 made every feed fail after
   the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
   periods went to the first one.
+
+### Fixed
 - The trip counts of the GTFS edges (`trips` and its per-period and
   weekday/weekend versions) are always whole numbers, empty where no trip runs;
   a period without service used to make a column float (`1.0`) or text.
@@ -81,8 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs on. It used to add the days of the week marked in `calendar.txt` to the
   dates `calendar_dates.txt` adds and removes over the whole calendar, so a
   Monday-to-Friday service with three holidays and one extra Saturday gave 3.
-
-### Fixed
 - A refusal from the Overpass server (HTTP 406 Not Acceptable or 403
   Forbidden, which `overpass-api.de` answers since April 2026 to clients it has
   blocked for heavy use) is no longer reported as a bare "HTTP 406": the
@@ -111,6 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corrected too: `download_gtfs()` returns `nodes`, `edges`, `schedule` and
   `mode` (there was never an `edges_shapes_reference` layer), and
   `gtfs_hour_band_size` only sets the bands of `h_tts` and `h_trips`.
+
+[0.7.0]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...v0.7.0
 
 ## [0.6.0] - 2026-11-20
 
@@ -588,7 +598,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.7.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0
