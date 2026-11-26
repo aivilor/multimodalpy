@@ -420,22 +420,11 @@ def download_network(
     # The label find_area settled on: the name given, the municipality's
     # name (with area_code alone) or the boundaries file's name.
     area_name = str(boundary["area_name"].iloc[0])
-    area_slug = slugify(area_name)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # The study area as written: its list columns (provinces and
-    # municipalities) joined as text, which every format can store.
-    boundary_layer = boundary_for_export(boundary).to_crs(crs)
-    layers: dict[str, gpd.GeoDataFrame | None] = {"study_area_boundary": boundary_layer}
-    # Relative path, without extension, of each layer inside the output folder.
-    layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
-    osm_results: dict[str, dict[str, object]] = {}
+    osm_results: dict[str, dict[str, Any]] = {}
     gtfs_results: dict[str, dict[str, Any]] = {}
-    # Edge columns kept in each GTFS dataset's layers, reused by the
-    # networkx export so the graph carries the same attributes.
-    gtfs_edge_columns: dict[str, list[str]] = {}
 
     # 2) OSM, every mode with a single Overpass query. A network that can't
     #    be downloaded (after the retries) is recorded instead of raised: the
@@ -457,15 +446,8 @@ def download_network(
         )
         for exc in dict.fromkeys(osm_failures.values()):
             logger.warning("%s The other networks are still downloaded.", exc)
-    if osm_modes:
-        for mode, out in osm_results.items():
-            layers[f"osm_{mode}_nodes"] = out["nodes"]
-            layers[f"osm_{mode}_edges"] = out["edges"]
-            layer_paths[f"osm_{mode}_nodes"] = f"{mode}/nodes"
-            layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
 
     # 3) GTFS (bus / train) via NAP.
-    schedule_tables: dict[str, pd.DataFrame | None] = {}
     gtfs_zips_dir = output_dir / "gtfs_zips"
     skipped_datasets: dict[str, str] = {}
     gtfs_report: list[dict[str, object]] = []
@@ -505,6 +487,101 @@ def download_network(
     if osm_failures and not osm_results and not gtfs_results:
         raise next(iter(osm_failures.values()))
 
+    # Never delete a feed of the user's own: gtfs_feeds may point at a zip
+    # kept from an earlier run (keep_gtfs_zips=True) in this same folder.
+    own_feed_inside = any(
+        Path(source).resolve().is_relative_to(gtfs_zips_dir.resolve())
+        for _, source in feed_sources
+        if not _gtfs._is_url(source)
+    )
+    if nap_modes and not keep_gtfs_zips and not own_feed_inside:
+        shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
+
+    return _write_networks(
+        boundary,
+        output_dir,
+        output_formats=output_formats,
+        single_output_type=single_output_type,
+        crs=crs,
+        osm_results=osm_results,
+        gtfs_results=gtfs_results,
+        gtfs_report=gtfs_report,
+        gtfs_peak_periods=gtfs_peak_periods,
+        gtfs_hour_range=gtfs_hour_range,
+        service_date=service_date,
+        write_schedule=write_schedule,
+        manifest_head={
+            "boundaries_path": None
+            if boundaries_path is None
+            else str(boundaries_path),
+            "modes": list(modes),
+            "buffer_m": buffer_m,
+            "connect_parts": connect_parts,
+        },
+        osm_modes=osm_modes,
+        osm_failures=osm_failures,
+        gtfs_requested=bool(nap_modes),
+        gtfs_error=gtfs_error,
+        warn_no_gtfs=api_key is not None,
+        feed_sources=feed_sources,
+        skipped_datasets=skipped_datasets,
+    )
+
+
+def _write_networks(
+    boundary: gpd.GeoDataFrame,
+    output_dir: Path,
+    *,
+    output_formats: list[str],
+    single_output_type: bool,
+    crs: str,
+    osm_results: dict[str, dict[str, Any]],
+    gtfs_results: dict[str, dict[str, Any]],
+    gtfs_report: list[dict[str, object]],
+    gtfs_peak_periods: dict[str, tuple[int, int]] | None,
+    gtfs_hour_range: tuple[int, int] | None,
+    service_date: datetime.date | None,
+    write_schedule: bool,
+    manifest_head: dict[str, Any],
+    osm_modes: list[str],
+    osm_failures: dict[str, OSMDownloadError],
+    gtfs_requested: bool,
+    gtfs_error: str | None,
+    warn_no_gtfs: bool,
+    feed_sources: list[tuple[str | None, str]],
+    skipped_datasets: dict[str, str],
+) -> dict:
+    """Write the networks in every format, with the report and the manifest.
+
+    The part of :func:`download_network` that comes after getting the
+    data, shared by every way of getting it. ``osm_results`` and
+    ``gtfs_results`` are the standardized layers (``{"nodes", "edges"}``
+    per OSM mode; ``{"nodes", "edges", "schedule", "mode"}`` per GTFS
+    dataset), ``boundary`` the study area as :func:`find_area` returns it
+    and ``manifest_head`` the manifest entries that depend on how the data
+    was obtained. Returns the manifest, also saved as ``manifest.json``.
+    The warnings point at the caller of the public function.
+    """
+    import pandas as pd
+
+    area_name = str(boundary["area_name"].iloc[0])
+    area_slug = slugify(area_name)
+    # The study area as written: its list columns (provinces and
+    # municipalities) joined as text, which every format can store.
+    boundary_layer = boundary_for_export(boundary).to_crs(crs)
+    layers: dict[str, gpd.GeoDataFrame | None] = {"study_area_boundary": boundary_layer}
+    # Relative path, without extension, of each layer inside the output folder.
+    layer_paths: dict[str, str] = {"study_area_boundary": "study_area_boundary"}
+    # Edge columns kept in each GTFS dataset's layers, reused by the
+    # networkx export so the graph carries the same attributes.
+    gtfs_edge_columns: dict[str, list[str]] = {}
+    schedule_tables: dict[str, pd.DataFrame | None] = {}
+    for mode, out in osm_results.items():
+        layers[f"osm_{mode}_nodes"] = out["nodes"]
+        layers[f"osm_{mode}_edges"] = out["edges"]
+        layer_paths[f"osm_{mode}_nodes"] = f"{mode}/nodes"
+        layer_paths[f"osm_{mode}_edges"] = f"{mode}/edges"
+
     if gtfs_results:
         # Every column written, including the per-period ones of the
         # periods actually used (``gtfs_peak_periods`` or the defaults).
@@ -541,22 +618,10 @@ def download_network(
                     f"{gtfs_mode}/{dataset}/schedule"
                 )
 
-    # Never delete a feed of the user's own: gtfs_feeds may point at a zip
-    # kept from an earlier run (keep_gtfs_zips=True) in this same folder.
-    own_feed_inside = any(
-        Path(source).resolve().is_relative_to(gtfs_zips_dir.resolve())
-        for _, source in feed_sources
-        if not _gtfs._is_url(source)
-    )
-    if nap_modes and not keep_gtfs_zips and not own_feed_inside:
-        shutil.rmtree(gtfs_zips_dir, ignore_errors=True)
-
     # What happened to every NAP dataset, next to the layers: the copy the
     # NAP client writes in gtfs_zips/ is gone unless keep_gtfs_zips=True.
     gtfs_report_rows = _gtfs_report_rows(gtfs_report)
     if gtfs_report_rows:
-        import pandas as pd
-
         pd.DataFrame(gtfs_report_rows, columns=list(_GTFS_REPORT_COLUMNS)).to_csv(
             output_dir / "gtfs_report.csv", index=False
         )
@@ -653,7 +718,7 @@ def download_network(
     manifest: dict[str, Any] = {
         "multimodalpy_version": __version__,
         "area_name": area_name,
-        "boundaries_path": None if boundaries_path is None else str(boundaries_path),
+        "boundaries_path": manifest_head.pop("boundaries_path", None),
         "provinces": [
             {"code": int(code), "name": name}
             for code, name in zip(
@@ -670,10 +735,9 @@ def download_network(
                 strict=True,
             )
         ],
-        "modes": list(modes),
+        "modes": manifest_head.pop("modes"),
         "crs": crs,
-        "buffer_m": buffer_m,
-        "connect_parts": connect_parts,
+        **manifest_head,
         # Returned as it was requested: str if a single format string was
         # passed, list if several were requested.
         "formats": output_formats[0] if single_output_type else output_formats,
@@ -690,7 +754,7 @@ def download_network(
     }
     if unconnected_parts:
         manifest["unconnected_parts"] = unconnected_parts
-    if service_date is not None and nap_modes:
+    if service_date is not None and gtfs_requested:
         manifest["gtfs_service_date"] = service_date.isoformat()
     if feed_sources:
         manifest["gtfs_feeds"] = [
@@ -708,7 +772,7 @@ def download_network(
                 + "; ".join(unusable)
                 + ". See manifest['gtfs_report'] or gtfs_report.csv.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         duplicates = [
             f"{row['dataset']} ({row['error']})"
@@ -720,7 +784,7 @@ def download_network(
                 f"{len(duplicates)} GTFS feed(s) repeat another one and were not "
                 "written: " + "; ".join(duplicates) + ".",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         no_service = [
             f"{row['dataset']} ({row['error']})"
@@ -734,7 +798,7 @@ def download_network(
                 + "; ".join(no_service)
                 + ".",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
     if skipped_datasets:
         # Feeds the NAP returned for a requested mode whose routes turned
@@ -749,21 +813,21 @@ def download_network(
             f"The {', '.join(osm_failures)} network(s) could not be downloaded "
             f"and were not written: {first} See manifest['failed_modes'].",
             UserWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
-    if nap_modes and not gtfs_results:
+    if gtfs_requested and not gtfs_results:
         # Distinguish "no published datasets" from "the download failed".
         manifest["gtfs_status"] = gtfs_error or "no published datasets"
         # The failure is also logged, but the package logger is silent
         # unless the application configures logging, so without a warning
         # the user just gets a network with no bus/train and no reason.
         # A missing key was already warned about at the start.
-        if api_key is not None:
+        if warn_no_gtfs:
             warnings.warn(
                 "No bus/train layers were written: "
                 f"{manifest['gtfs_status']}. See manifest['gtfs_status'].",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
     # Saved next to the data, so what the call did is still there after it
     # (from the command line there is no returned dict to look at).

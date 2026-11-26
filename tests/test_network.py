@@ -2203,3 +2203,22 @@ def test_gtfs_layers_keep_route_type_station_and_service_date(tmp_path, backends
         assert edges["route_type"].tolist() == [3]
     matrix = multimodalpy.read_matrix(tmp_path / "bus" / "emt")
     assert matrix.meta["gtfs_service_date"] == "2026-11-25"
+
+
+def test_warnings_point_at_the_callers_code(tmp_path, backends):
+    """A UserWarning names the line that called download_network, not ours."""
+    import warnings
+
+    backends["gtfs_result"] = {"emt": make_gtfs_result("bus")}
+    backends["gtfs_report"] = [
+        _row(965, "written", dataset="emt", mode="bus"),
+        _row(964, "failed", error="404"),
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        network.download_network(
+            "Valencia", modes=["bus"], output_dir=tmp_path, api_key="k"
+        )
+    ours = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert ours
+    assert {w.filename for w in ours} == {__file__}
