@@ -1518,3 +1518,23 @@ def test_the_report_counts_the_stops_in_the_area(tmp_path, feed):
     nodes = results["ds"]["nodes"]
     assert not nodes["in_area"].all()  # an edge ends at a stop outside the area
     assert report[0]["stops"] == int(nodes["in_area"].sum())
+
+
+def test_process_gtfs_feeds_works_offline(tmp_path, feed, monkeypatch):
+    import geopandas as gpd
+    import requests
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("process_gtfs_feeds must not touch the network")
+
+    monkeypatch.setattr(requests, "get", no_network)
+    monkeypatch.setattr(requests, "post", no_network)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.process_gtfs_feeds(
+        [(feed, "metro", None)], boundary, modes=[1], report=report
+    )
+    assert list(results) == ["metro"]
+    assert report[0]["dataset"] == "metro"
+    assert report[0]["status"] == "written"
+    assert report[0]["file_name"] == feed.name

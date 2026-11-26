@@ -2085,6 +2085,52 @@ def download_gtfs(
         sources, Path(zip_dir), report_rows, taken={path.stem for path in zips}
     )
 
+    return process_gtfs_feeds(
+        feed_files,
+        boundary,
+        modes=modes,
+        report=report_rows,
+        output_crs=output_crs,
+        clip_to_boundary=clip_to_boundary,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
+        include_schedule_table=include_schedule_table,
+        buffer_m=buffer_m,
+        skipped=skipped,
+        service_date=day,
+    )
+
+
+def process_gtfs_feeds(
+    feed_files: list[tuple[Path, str | None, dict[str, object] | None]],
+    boundary: gpd.GeoDataFrame,
+    *,
+    modes: Iterable[int],
+    report: list[dict[str, object]],
+    output_crs: str = "EPSG:4326",
+    clip_to_boundary: bool = True,
+    hour_band_size: int = 1,
+    hour_range: tuple[int, int] | None = None,
+    peak_periods: dict[str, tuple[int, int]] | None = None,
+    include_schedule_table: bool = True,
+    buffer_m: float = 0.0,
+    skipped: dict[str, str] | None = None,
+    service_date: datetime.date | None = None,
+) -> dict[str, dict[str, object]]:
+    """Standardize GTFS feeds already on disk; the step after downloading them.
+
+    ``feed_files`` holds ``(path, name, report row)`` per feed, in the order
+    they are processed: the name the user gave it (``None``: from the file,
+    see :func:`dataset_name_from_file`) and its row in ``report`` (``None``:
+    one is added), completed with what happened to the feed. A feed whose
+    row has ``source`` ``"user"`` and repeats a feed already written is
+    skipped as a ``duplicate``. The other arguments are those of
+    :func:`download_gtfs`. Nothing here touches the network.
+    """
+    report_rows = report
+    day = service_date
+
     def outcome(
         zip_path: Path, row: dict[str, object] | None, **fields: object
     ) -> None:
