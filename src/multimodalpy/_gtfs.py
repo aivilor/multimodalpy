@@ -1936,6 +1936,21 @@ def edge_network_key(edges: pd.DataFrame) -> frozenset[tuple[str, str, str]]:
     return frozenset(rows.itertuples(index=False, name=None))
 
 
+def refuse_local_feeds(sources: list[tuple[str | None, str]]) -> None:
+    """Raise ``ValueError`` for the local files among ``gtfs_feeds`` sources.
+
+    A download only takes addresses since 0.7.0: local feeds go to
+    :func:`multimodalpy.build_network`, which never downloads.
+    """
+    local = [source for _, source in sources if not _is_url(source)]
+    if local:
+        raise ValueError(
+            "download_network only takes addresses in gtfs_feeds; for local GTFS "
+            "files use build_network(gtfs_feeds=...) (it can also take this "
+            f"download's folder as source_dir): {', '.join(local)}"
+        )
+
+
 def _fetch_user_feeds(
     sources: list[tuple[str | None, str]],
     zip_dir: Path,
@@ -2047,7 +2062,8 @@ def download_gtfs(
 
     ``feeds`` adds GTFS feeds from outside the NAP: ``{name: source}``, or a
     list of sources or ``(name, source)`` pairs, a source being an http(s)
-    address (downloaded into ``zip_dir``) or a local zip or folder. They are
+    address (downloaded into ``zip_dir``); a local zip or folder raises a
+    ``ValueError`` (see :func:`multimodalpy.build_network`). They are
     processed like the NAP's, after them; a feed's ``dataset`` is its name
     (or its file name), numbered if another feed already has it, and its
     report row has ``source`` ``"user"`` (``"nap"`` for the NAP's). With
@@ -2061,6 +2077,7 @@ def download_gtfs(
 
     check_hour_options(hour_range, hour_band_size, peak_periods)
     sources = user_feed_sources(feeds)
+    refuse_local_feeds(sources)
     report_rows: list[dict[str, object]] = [] if report is None else report
     zips: list[Path] = []
     if use_nap:
@@ -2084,6 +2101,52 @@ def download_gtfs(
     feed_files += _fetch_user_feeds(
         sources, Path(zip_dir), report_rows, taken={path.stem for path in zips}
     )
+
+    return process_gtfs_feeds(
+        feed_files,
+        boundary,
+        modes=modes,
+        report=report_rows,
+        output_crs=output_crs,
+        clip_to_boundary=clip_to_boundary,
+        hour_band_size=hour_band_size,
+        hour_range=hour_range,
+        peak_periods=peak_periods,
+        include_schedule_table=include_schedule_table,
+        buffer_m=buffer_m,
+        skipped=skipped,
+        service_date=day,
+    )
+
+
+def process_gtfs_feeds(
+    feed_files: list[tuple[Path, str | None, dict[str, object] | None]],
+    boundary: gpd.GeoDataFrame,
+    *,
+    modes: Iterable[int],
+    report: list[dict[str, object]],
+    output_crs: str = "EPSG:4326",
+    clip_to_boundary: bool = True,
+    hour_band_size: int = 1,
+    hour_range: tuple[int, int] | None = None,
+    peak_periods: dict[str, tuple[int, int]] | None = None,
+    include_schedule_table: bool = True,
+    buffer_m: float = 0.0,
+    skipped: dict[str, str] | None = None,
+    service_date: datetime.date | None = None,
+) -> dict[str, dict[str, object]]:
+    """Standardize GTFS feeds already on disk; the step after downloading them.
+
+    ``feed_files`` holds ``(path, name, report row)`` per feed, in the order
+    they are processed: the name the user gave it (``None``: from the file,
+    see :func:`dataset_name_from_file`) and its row in ``report`` (``None``:
+    one is added), completed with what happened to the feed. A feed whose
+    row has ``source`` ``"user"`` and repeats a feed already written is
+    skipped as a ``duplicate``. The other arguments are those of
+    :func:`download_gtfs`. Nothing here touches the network.
+    """
+    report_rows = report
+    day = service_date
 
     def outcome(
         zip_path: Path, row: dict[str, object] | None, **fields: object

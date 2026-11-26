@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
+A review of the code before the multimodal network (1.0.0), and
+`build_network()`, which builds the networks from local files. Two changes
+need attention when upgrading: `download_network()` no longer takes local
+files in `gtfs_feeds` (use `build_network()`), and it keeps the GTFS zips by
+default.
+
 ### Added
+- `build_network()`: the networks of a study area from files you already have,
+  without downloading anything. It takes a folder written by
+  `download_network()` (`source_dir`: its street networks and the GTFS zips it
+  kept), street networks of your own (`osm_networks`: a multimodalpy folder or
+  GeoPackage, the edges and nodes of another tool, or an osmnx GraphML; missing
+  `length`, `tts` and `edge_id` are computed) and local GTFS feeds
+  (`gtfs_feeds`), clips them to the study area and writes them exactly as a
+  download, so the same files always give the same output. Use it to try another
+  date, other periods, formats or a smaller area without downloading again, or
+  to combine a download with your own networks. On the command line:
+  `multimodalpy build`. The manifest says `built_with: build_network` and lists
+  the sources.
+- `gtfs_report` has a `zip_file` column: the name of each feed's zip in
+  `gtfs_zips/`.
 - `gtfs_hour_range` and the periods of `gtfs_peak_periods` may cross midnight:
   `(22, 2)` keeps the departures from 22:00 to 01:59.
 - The manifest is saved as `manifest.json` in the output folder, with the
@@ -27,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
+- **`keep_gtfs_zips` is `True` by default**: the GTFS zips stay in
+  `gtfs_zips/`, so `build_network(source_dir=...)` can process them again
+  (another date or periods) without downloading. `keep_gtfs_zips=False`, or
+  `--no-keep-gtfs-zips` on the command line, deletes them as before.
+- **`gtfs_feeds` of `download_network()` (and `feeds` of `download_gtfs()`)
+  only take addresses now**: a local GTFS zip or folder raises a `ValueError`
+  that points to `build_network(gtfs_feeds=...)`, before anything is
+  downloaded. `download_network()` only downloads; `build_network()` reads.
+- The OSM layers are written in a fixed order (by nodes and edge id), so the
+  same streets always give the same files and matrix rows.
+- When no GTFS feed could be written although some were found, `gtfs_status`
+  says so instead of "no published datasets".
 - `pandas>=2.0` and `requests>=2.27` are now declared (they had no lower bound),
   and CI also runs the tests with the lowest versions `pyproject.toml` allows,
   on Python 3.11. mypy checks the code for Python 3.11, the oldest supported.
@@ -38,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as `nothing_in_area`), a band size of 0 made every feed fail after
   the OSM download, one of 5 gave bands such as `20-25`, and an hour in two
   periods went to the first one.
+
+### Fixed
 - The trip counts of the GTFS edges (`trips` and its per-period and
   weekday/weekend versions) are always whole numbers, empty where no trip runs;
   a period without service used to make a column float (`1.0`) or text.
@@ -55,8 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs on. It used to add the days of the week marked in `calendar.txt` to the
   dates `calendar_dates.txt` adds and removes over the whole calendar, so a
   Monday-to-Friday service with three holidays and one extra Saturday gave 3.
-
-### Fixed
 - A refusal from the Overpass server (HTTP 406 Not Acceptable or 403
   Forbidden, which `overpass-api.de` answers since April 2026 to clients it has
   blocked for heavy use) is no longer reported as a bare "HTTP 406": the
@@ -85,6 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corrected too: `download_gtfs()` returns `nodes`, `edges`, `schedule` and
   `mode` (there was never an `edges_shapes_reference` layer), and
   `gtfs_hour_band_size` only sets the bands of `h_tts` and `h_trips`.
+
+[0.7.0]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...v0.7.0
 
 ## [0.6.0] - 2026-11-20
 
@@ -562,7 +598,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GeoPackage, and NetworkX graph output formats.
 - Published to TestPyPI for pre-release testing.
 
-[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aivilor/multimodalpy/compare/v0.7.0...HEAD
 [0.1.3]: https://github.com/aivilor/multimodalpy/compare/v0.1.2...v0.1.3
 [0.1.1]: https://github.com/aivilor/multimodalpy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aivilor/multimodalpy/releases/tag/v0.1.0

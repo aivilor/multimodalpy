@@ -897,6 +897,15 @@ def build_final_osm_layers(
             edges[col] = edges[col].map(_first_if_list)
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
+    if "_tts_file" in edges.columns:
+        # A local network that already had travel times (see _local_osm):
+        # kept, shared out by length if the edge was split.
+        import pandas as pd
+
+        given = pd.to_numeric(edges["_tts_file"], errors="coerce")
+        whole = pd.to_numeric(edges["_len_file"], errors="coerce")
+        share = (edges["length"] / whole).where(whole > 0, 1.0)
+        edges["tts"] = (given * share).where(given.notna(), edges["tts"])
 
     # Done after computing travel time, so that calculation still sees
     # the original values.
@@ -926,7 +935,26 @@ def build_final_osm_layers(
     node_cols = [c for c in FINAL_NODE_COLUMNS if c in nodes.columns]
     nodes_final = _clean_for_file(nodes[node_cols])
 
+    # A fixed order, from the network itself: the same streets give the same
+    # files (and matrix rows) whether they were downloaded or read from a
+    # file, where the graph's own order differs.
+    nodes_final = nodes_final.iloc[
+        sorted(range(len(nodes_final)), key=_ordered(nodes_final, ["node_id"]))
+    ].reset_index(drop=True)
+    edges_final = edges_final.iloc[
+        sorted(
+            range(len(edges_final)),
+            key=_ordered(edges_final, ["from_node", "to_node", "edge_id"]),
+        )
+    ].reset_index(drop=True)
     return nodes_final.to_crs(output_crs), edges_final.to_crs(output_crs)
+
+
+def _ordered(layer: gpd.GeoDataFrame, columns: list[str]) -> Callable[[int], tuple]:
+    """Sort key of a layer's rows: ``columns`` as text, then the geometry."""
+    values = [layer[column].astype(str).tolist() for column in columns]
+    shapes = [geom.wkb if geom is not None else b"" for geom in layer.geometry]
+    return lambda row: (*(column[row] for column in values), shapes[row])
 
 
 # ---------------------------------------------------------------------------

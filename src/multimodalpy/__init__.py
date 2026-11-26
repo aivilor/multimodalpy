@@ -11,7 +11,8 @@ written to disk, and analyse them::
                            mode="walking")
 
 Public modules:
-    - network  : download_network() and the in-memory downloads.
+    - network  : download_network(), build_network() (from local files) and
+                 the in-memory downloads.
     - area     : find_area(), the municipality's boundary.
     - io       : read_matrix() and read_graph(), to read the files written.
     - analysis : isochrones(), shortest_path() and the other network analyses.
@@ -28,7 +29,7 @@ from . import analysis, area, io, network
 from .analysis import isochrones, shortest_path
 from .area import find_area
 from .io import read_graph, read_matrix
-from .network import download_network
+from .network import build_network, download_network
 
 # A library shouldn't write to the terminal on its own: without this
 # handler, Python would print WARNING-level alerts to stderr even if the
@@ -45,6 +46,7 @@ __all__ = [
     "__version__",
     "analysis",
     "area",
+    "build_network",
     "download_network",
     "find_area",
     "io",

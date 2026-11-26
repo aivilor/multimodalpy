@@ -110,8 +110,8 @@ also written and a warning explains why there is no bus or train data
 
 Some operators publish their GTFS somewhere other than the NAP, e.g. on their
 own website or on a regional open data portal. Add such feeds with
-`gtfs_feeds`, as addresses or local zips (or folders), named after their output
-folder:
+`gtfs_feeds`, as addresses named after their output folder (for local GTFS
+files, see `build_network()` below):
 
 ```python
 manifest = mmp.download_network(
@@ -229,6 +229,43 @@ Please be gentle with these public servers: their usage policies, listed with
 the instances, ask for moderate use. For many areas or frequent downloads, run your own
 Overpass instance and point `overpass_url` to it.
 
+### Networks from files you already have
+
+`build_network()` writes the networks of a study area, exactly as
+`download_network()` does, from files you already have, and downloads nothing:
+
+- a folder written by `download_network()` (`source_dir`): its street networks
+  and the GTFS zips it kept in `gtfs_zips/` (kept by default);
+- street networks of your own (`osm_networks`): a multimodalpy folder or
+  GeoPackage, the edges (and nodes) of another tool as GeoPackage, GeoJSON or
+  Shapefile, or an osmnx GraphML;
+- local GTFS zips or folders (`gtfs_feeds`).
+
+Everything is clipped to the study area (required) and standardized as in a
+download, so the output folder looks the same and the same files always give
+the same result. Download once what you don't have, then build:
+
+```python
+mmp.download_network("Valencia", modes=["driving", "bus"], output_dir="raw/valencia")
+
+mmp.build_network(
+    source_dir="raw/valencia",                           # driving and the NAP's feeds
+    osm_networks={"walking": "data/footpaths.gpkg"},     # your own network
+    gtfs_feeds={"metrobus": "data/metrobus_gtfs.zip"},   # a feed of your own
+    area_name="Valencia",
+    gtfs_service_date="2026-12-02",
+    formats=["geopackage", "matrix"],
+    output_dir="networks/valencia_2026-12-02",
+)
+```
+
+Running only the second step again is how you try another date, other periods,
+other formats or a smaller area. A network of yours needs edges (lines) that say
+which nodes they join (`from_node`/`to_node`, or `u`/`v`, `source`/`target`):
+`length`, `tts` and `edge_id` are computed if missing. A mode in `osm_networks`
+replaces the same mode in `source_dir`. In the command line:
+`multimodalpy build --source-dir raw/valencia --osm-network walking=data/footpaths.gpkg --area Valencia`.
+
 ## What you get
 
 ```
@@ -342,9 +379,9 @@ paths and is much faster.
 | `overpass_url` | `None` | Overpass server for the OpenStreetMap networks; by default the public `overpass-api.de` (see "Streets: the Overpass server"). |
 | `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
-| `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
+| `keep_gtfs_zips` | `True` | Keep the GTFS zips downloaded, for `build_network(source_dir=...)`; `False` deletes them. |
 | `gtfs_hour_range` | `None` | Only keep trips leaving in an hour window, e.g. `(7, 9)`; it may cross midnight, `(22, 2)`. |
-| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: address or local zip}` (see "Bus and train feeds from outside the NAP"). |
+| `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: address}` (see "Bus and train feeds from outside the NAP"; local files go to `build_network()`). |
 | `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
 
 `download_network()` writes the files and returns a manifest (a dictionary
@@ -355,13 +392,13 @@ listing them and what happened to every network), also saved as
 
 | Module | What it is for |
 |---|---|
-| `multimodalpy.network` | `download_network()`; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
+| `multimodalpy.network` | `download_network()`; `build_network()`, the same from local files; `download_osm()` and `download_gtfs()` return the layers in memory (GeoDataFrames) instead of writing them. |
 | `multimodalpy.area` | `find_area()`: the study area's polygon, provinces and municipalities. |
 | `multimodalpy.io` | `read_matrix()` and `read_graph()`, to read the files written. |
 | `multimodalpy.analysis` | `isochrones()`, `shortest_path()` and the other network analyses. |
 
-`download_network`, `find_area`, `read_matrix`, `read_graph`, `isochrones` and
-`shortest_path` are also available from the package itself (`multimodalpy.find_area`). See the
+`download_network`, `build_network`, `find_area`, `read_matrix`, `read_graph`,
+`isochrones` and `shortest_path` are also available from the package itself (`multimodalpy.find_area`). See the
 [API reference](https://multimodalpy.readthedocs.io/en/latest/api.html).
 
 ## How it works
@@ -415,7 +452,7 @@ sidebar gives a ready-made citation (APA, BibTeX) from
   title     = {multimodalpy: Easy creation of multimodal transport networks
                from OpenStreetMap and GTFS data},
   year      = {2026},
-  version   = {0.6.0},
+  version   = {0.7.0},
   doi       = {10.5281/zenodo.NNNNNNN},
   url       = {https://github.com/aivilor/multimodalpy},
   license   = {MIT}

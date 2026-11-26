@@ -1246,16 +1246,20 @@ class _Response:
 
 @pytest.fixture
 def user_feeds(tmp_path, monkeypatch):
-    """A local feed, one served at an address, and an address that fails."""
+    """Two feeds served at addresses, an address that fails and a local feed."""
     import requests
 
-    served = _simple_feed(tmp_path / "served.zip", route="R9").read_bytes()
+    served = {
+        "/gtfs.zip": _simple_feed(tmp_path / "served.zip", route="R9").read_bytes(),
+        "/emt.zip": _simple_feed(tmp_path / "emt_served.zip").read_bytes(),
+    }
     asked: list[str] = []
 
     def fake_get(url, **kwargs):
         asked.append(url)
-        if url.endswith("/gtfs.zip"):
-            return _Response(served)
+        for ending, content in served.items():
+            if url.endswith(ending):
+                return _Response(content)
         return _Response(status=404)
 
     monkeypatch.setattr(requests, "get", fake_get)
@@ -1263,6 +1267,7 @@ def user_feeds(tmp_path, monkeypatch):
     return {
         "local": _simple_feed(tmp_path / "local" / "emt.zip"),
         "url": "https://gvinterbus.gva.es/estatico/gtfs.zip",
+        "emt": "https://example.org/emt.zip",
         "broken": "https://example.org/gone.zip",
         "asked": asked,
     }
@@ -1286,14 +1291,13 @@ def test_download_gtfs_with_user_feeds_only(tmp_path, monkeypatch, user_feeds):
         use_nap=False,
         feeds=[
             ("MetroBus", user_feeds["url"]),
-            user_feeds["local"],
+            user_feeds["emt"],
             user_feeds["broken"],
         ],
     )
     assert set(results) == {"metrobus", "emt"}
     assert results["metrobus"]["edges"]["edge_id"].tolist() == ["metrobus_R9_A_B"]
     assert (tmp_path / "zips" / "metrobus.zip").is_file()
-    assert user_feeds["local"].is_file()  # used where it is, not copied
     rows = {row["dataset_name"]: row for row in report}
     assert {row["source"] for row in report} == {"user"}
     assert rows["MetroBus"]["status"] == "written"
@@ -1326,7 +1330,7 @@ def test_user_feeds_come_after_the_nap_and_never_take_its_names(
         modes=[1],
         api_key="k",
         report=report,
-        feeds=[user_feeds["local"], user_feeds["url"]],
+        feeds=[user_feeds["emt"], user_feeds["url"]],
     )
     assert list(results) == ["emt", "emt_2", "gtfs"]
     assert [(row["source"], row["dataset"]) for row in report] == [
@@ -1380,7 +1384,12 @@ def test_a_user_feed_that_repeats_a_nap_dataset_is_skipped(tmp_path, monkeypatch
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr(requests, "get", lambda url, **kw: Answer(copy.read_bytes()))
+    served = {"gtfs.zip": copy, "mine.zip": different}
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kw: Answer(served[url.rsplit("/", 1)[1]].read_bytes()),
+    )
 
     def fake_zips(area_name, output_dir, *, report=None, **kwargs):
         report.append(
@@ -1398,7 +1407,10 @@ def test_a_user_feed_that_repeats_a_nap_dataset_is_skipped(tmp_path, monkeypatch
         modes=[1],
         api_key="k",
         report=report,
-        feeds={"interurbano": "https://example.org/gtfs.zip", "mine": different},
+        feeds={
+            "interurbano": "https://example.org/gtfs.zip",
+            "mine": "https://example.org/mine.zip",
+        },
     )
     assert list(results) == ["genvalenciana", "mine"]
     rows = {row["dataset"]: row for row in report}
@@ -1501,9 +1513,11 @@ def test_trip_counts_are_whole_numbers(feed):
     assert pd.isna(edges.loc[("B", "C", "R2"), "trip_count_peak_am"])
 
 
-def test_the_report_counts_the_stops_in_the_area(tmp_path, feed):
+def test_the_report_counts_the_stops_in_the_area(tmp_path, feed, monkeypatch):
     import geopandas as gpd
+    import requests
 
+    monkeypatch.setattr(requests, "get", lambda url, **kw: _Response(feed.read_bytes()))
     boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
     report: list[dict] = []
     results = _gtfs.download_gtfs(
@@ -1513,8 +1527,44 @@ def test_the_report_counts_the_stops_in_the_area(tmp_path, feed):
         modes=[1],
         report=report,
         use_nap=False,
-        feeds={"ds": feed},
+        feeds={"ds": "https://example.org/feed.zip"},
     )
     nodes = results["ds"]["nodes"]
     assert not nodes["in_area"].all()  # an edge ends at a stop outside the area
     assert report[0]["stops"] == int(nodes["in_area"].sum())
+
+
+def test_process_gtfs_feeds_works_offline(tmp_path, feed, monkeypatch):
+    import geopandas as gpd
+    import requests
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("process_gtfs_feeds must not touch the network")
+
+    monkeypatch.setattr(requests, "get", no_network)
+    monkeypatch.setattr(requests, "post", no_network)
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    report: list[dict] = []
+    results = _gtfs.process_gtfs_feeds(
+        [(feed, "metro", None)], boundary, modes=[1], report=report
+    )
+    assert list(results) == ["metro"]
+    assert report[0]["dataset"] == "metro"
+    assert report[0]["status"] == "written"
+    assert report[0]["file_name"] == feed.name
+
+
+def test_download_gtfs_refuses_local_feeds(tmp_path, user_feeds):
+    import geopandas as gpd
+
+    boundary = gpd.GeoDataFrame(geometry=[AREA], crs="EPSG:4326")
+    with pytest.raises(ValueError, match="build_network"):
+        _gtfs.download_gtfs(
+            "Valencia",
+            boundary,
+            tmp_path / "zips",
+            modes=[1],
+            use_nap=False,
+            feeds=[user_feeds["url"], user_feeds["local"]],
+        )
+    assert user_feeds["asked"] == []  # refused before downloading anything
