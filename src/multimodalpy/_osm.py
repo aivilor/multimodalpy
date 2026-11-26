@@ -897,6 +897,15 @@ def build_final_osm_layers(
             edges[col] = edges[col].map(_first_if_list)
 
     edges = add_mode_travel_time(edges, nodes, mode=mode)
+    if "_tts_file" in edges.columns:
+        # A local network that already had travel times (see _local_osm):
+        # kept, shared out by length if the edge was split.
+        import pandas as pd
+
+        given = pd.to_numeric(edges["_tts_file"], errors="coerce")
+        whole = pd.to_numeric(edges["_len_file"], errors="coerce")
+        share = (edges["length"] / whole).where(whole > 0, 1.0)
+        edges["tts"] = (given * share).where(given.notna(), edges["tts"])
 
     # Done after computing travel time, so that calculation still sees
     # the original values.
