@@ -1270,7 +1270,7 @@ def test_cli_defaults(monkeypatch):
     assert captured["boundaries_path"] is None
     assert captured["gtfs_hour_range"] is None
     assert captured["write_schedule"] is False
-    assert captured["keep_gtfs_zips"] is False
+    assert captured["keep_gtfs_zips"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -2225,3 +2225,14 @@ def test_warnings_point_at_the_callers_code(tmp_path, backends):
     ours = [w for w in caught if issubclass(w.category, UserWarning)]
     assert ours
     assert {w.filename for w in ours} == {__file__}
+
+
+def test_cli_can_delete_the_gtfs_zips(monkeypatch):
+    received: dict = {}
+    monkeypatch.setattr(
+        network, "download_network", lambda **kwargs: received.update(kwargs) or {}
+    )
+    _cli.main(["--area", "Valencia", "--no-keep-gtfs-zips"])
+    assert received["keep_gtfs_zips"] is False
+    _cli.main(["--area", "Valencia", "--keep-gtfs-zips"])
+    assert received["keep_gtfs_zips"] is True

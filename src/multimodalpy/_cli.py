@@ -188,9 +188,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--keep-gtfs-zips",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Keep the GTFS zip files downloaded from the NAP instead of deleting them."
+            "Keep the GTFS zip files downloaded in gtfs_zips/ (the default), so "
+            "'multimodalpy build --source-dir' can process them again; "
+            "--no-keep-gtfs-zips deletes them."
         ),
     )
     args = parser.parse_args(arguments)

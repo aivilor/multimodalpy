@@ -202,7 +202,7 @@ def download_network(
     gtfs_service_date: str | datetime.date | None = None,
     gtfs_feeds: _gtfs.GTFSFeeds | None = None,
     write_schedule: bool = False,
-    keep_gtfs_zips: bool = False,
+    keep_gtfs_zips: bool = True,
     province: int | str | None = None,
     buffer_m: float = 0.0,
     connect_parts: bool = True,
@@ -309,9 +309,12 @@ def download_network(
         before anything is downloaded: without a key, bus/train are
         skipped with a ``UserWarning`` and the other layers are written.
     keep_gtfs_zips : bool
-        Keep the zip files downloaded from the NAP in ``gtfs_zips/``.
-        Disabled by default: they're just the raw material for the layers
-        and can be downloaded again.
+        Keep the GTFS zip files downloaded (from the NAP and ``gtfs_feeds``)
+        in ``gtfs_zips/``. On by default, since :func:`build_network` needs
+        them to process the feeds again (another ``gtfs_service_date``,
+        other periods) without downloading; the NAP's files also change
+        over time. ``False`` deletes them once the layers are written, to
+        save disk space.
     area_code : str, optional
         The municipality's 5-digit INE code or INSPIRE NATCODE, to pick it
         exactly (then ``area_name`` is not needed).

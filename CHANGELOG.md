@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gtfs_peak_periods` of `download_network()`.
 
 ### Changed
+- **`keep_gtfs_zips` is `True` by default**: the GTFS zips stay in
+  `gtfs_zips/`, so `build_network(source_dir=...)` can process them again
+  (another date or periods) without downloading. `keep_gtfs_zips=False`, or
+  `--no-keep-gtfs-zips` on the command line, deletes them as before.
 - **`gtfs_feeds` of `download_network()` (and `feeds` of `download_gtfs()`)
   only take addresses now**: a local GTFS zip or folder raises a `ValueError`
   that points to `build_network(gtfs_feeds=...)`, before anything is

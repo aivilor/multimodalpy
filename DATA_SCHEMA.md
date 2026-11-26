@@ -15,7 +15,7 @@ output_dir/
 ├── train/<dataset>/         nodes  edges  schedule.csv
 ├── manifest.json            what download_network() did (the returned manifest)
 ├── gtfs_report.csv          with bus or train: what happened to each GTFS dataset
-├── gtfs_zips/               only with keep_gtfs_zips=True
+├── gtfs_zips/               the GTFS zips downloaded (keep_gtfs_zips=True, the default)
 └── <area>.gpkg              only with formats="geopackage"
 ```
 
@@ -111,7 +111,7 @@ each province: an operator missing from the report is not on the NAP.
 | `gtfs_service_date` | `None` | Count only the GTFS trips that run on this day (see [Which trips count](#which-trips-count)). |
 | `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: source}` or a list of sources (http(s) addresses; local files go to `build_network()`). Processed like the NAP's, and listed in the manifest's `gtfs_feeds`. Without a NAP key, only these are used. |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. Off by default because it is by far the largest part of a download. |
-| `keep_gtfs_zips` | `False` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`. Off by default: they are only the raw input and can be downloaded again. Local feeds are never deleted. |
+| `keep_gtfs_zips` | `True` | Keep the zips downloaded from the NAP and from the addresses in `gtfs_feeds`, so `build_network(source_dir=...)` can process them again without downloading. `False` deletes them once the layers are written. Local feeds are never deleted. |
 
 `download_network()` prints nothing (the command line prints a short summary).
 It returns a manifest, also saved as `manifest.json` in the output folder

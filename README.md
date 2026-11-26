@@ -379,7 +379,7 @@ paths and is much faster.
 | `overpass_url` | `None` | Overpass server for the OpenStreetMap networks; by default the public `overpass-api.de` (see "Streets: the Overpass server"). |
 | `osm_timeout` | `None` | Seconds to wait for each Overpass answer (osmnx's 180 by default). |
 | `write_schedule` | `False` | Also write the trip-by-trip timetable of each GTFS feed. |
-| `keep_gtfs_zips` | `False` | Keep the GTFS zips downloaded from the NAP. |
+| `keep_gtfs_zips` | `True` | Keep the GTFS zips downloaded, for `build_network(source_dir=...)`; `False` deletes them. |
 | `gtfs_hour_range` | `None` | Only keep trips leaving in an hour window, e.g. `(7, 9)`; it may cross midnight, `(22, 2)`. |
 | `gtfs_feeds` | `None` | GTFS feeds from outside the NAP, `{name: address}` (see "Bus and train feeds from outside the NAP"; local files go to `build_network()`). |
 | `gtfs_service_date` | `None` | Count only the trips that run on this day, e.g. `"2026-11-25"`, so trip counts are that day's frequencies. By default every trip of the feed counts once, whatever days it runs. |
